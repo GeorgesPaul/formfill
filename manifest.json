@@ -1,0 +1,27 @@
+{
+    "manifest_version": 2,
+    "name": "GeorgesPaul Form Filler",
+    "version": "1.0",
+    "description": "Intelligently fills forms based on user profiles",
+    "permissions": [
+      "activeTab",
+      "storage"
+    ],
+    "browser_action": {
+      "default_popup": "popup.html"
+    },
+    "background": {
+      "scripts": ["background.js"],
+      "persistent": false
+    },
+    "content_scripts": [
+      {
+        "matches": ["<all_urls>"],
+        "js": ["content.js"]
+      }
+    ],
+    "web_accessible_resources": [
+      "profileFields.yaml",
+      "jslibs/js-yaml.min.js"
+    ]
+  }

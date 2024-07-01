@@ -1,0 +1,156 @@
+# Profile fields configuration
+# Each field should have an 'id' (used in code) and a 'label' (displayed to users)
+
+# !! Note: the code cannot currently handle modifying (adding/removing field entries) this file as it will cause profiles that have previously been stored in browser data to be out of sync with the 
+# new/removed/editted fields in the newer file. To work around this you can delete all profiles and re-add them after modifying the file below. 
+# editting exiting entries (for example adding/removing aliases or common_labels) is fine
+
+fields:
+  - id: given_names
+    label: Given Name(s)
+    description: One or more names given to a person, not including family names
+    aliases:
+      - first names
+      - forenames
+      - personal names
+    common_labels:
+      - Given Name(s)
+      - First Name(s)
+    possible_placeholders:
+      - Enter your given name(s)
+      - e.g., Jean-Claude, María José, John Paul
+    notes:
+      - Some cultures may have multiple given names
+      - Order may be significant in some cultures
+
+  - id: family_names
+    label: Family Name(s)
+    description: One or more hereditary names shared by members of a family
+    aliases:
+      - last names
+      - surnames
+    common_labels:
+      - Family Name(s)
+      - Last Name(s)
+      - Surname(s)
+    possible_placeholders:
+      - Enter your family name(s)
+      - e.g., García Márquez, van der Waals
+    notes:
+      - May include multiple names in some cultures (e.g., Spanish, Portuguese)
+      - May include particles or prefixes (e.g., de, van, von)
+
+  - id: name_order
+    label: Name Order
+    description: The cultural convention for ordering given names and family names
+    common_labels:
+      - Name Order
+    possible_values:
+      - Given-Family (e.g., John Smith)
+      - Family-Given (e.g., Zhang Wei)
+    notes:
+      - Important for correctly formatting full names
+      - Varies by culture and sometimes by context (formal vs. informal)
+
+  - id: name_prefix
+    label: Name Prefix
+    description: A prefix or article that may appear before the family name
+    aliases:
+      - particle
+      - nobiliary particle
+    common_labels:
+      - Name Prefix
+      - Prefix
+    possible_placeholders:
+      - Enter name prefix (if applicable)
+      - e.g., van, de, von, di
+    notes:
+      - May be considered part of the family name in some cultures
+      - Capitalization rules may vary
+
+  - id: title
+    label: Title
+    description: An honorific prefix or suffix added to one's name
+    aliases:
+      - honorific
+      - prefix
+      - suffix
+    common_labels:
+      - Title
+      - Prefix
+      - Suffix
+      - Honorific
+    possible_placeholders:
+      - Select your title
+      - e.g., Dr., Prof., Ing.
+
+  - id: salutation
+    label: Salutation
+    description: The greeting or form of address used before a person's name
+    aliases:
+      - form of address
+      - greeting
+    common_labels:
+      - Salutation
+      - Form of Address
+    possible_placeholders:
+      - Select your salutation
+      - e.g., Mr., Ms., Mx.
+
+  - id: name_suffix
+    label: Name Suffix
+    description: An additional name component that follows the family name
+    aliases:
+      - generational title
+      - professional suffix
+    common_labels:
+      - Suffix
+      - Name Suffix
+      - Generation
+    possible_placeholders:
+      - Enter name suffix (if applicable)
+      - e.g., Jr., Sr., III, Esq.
+
+  - id: preferred_name
+    label: Preferred Name
+    description: The name a person prefers to be called, which may differ from their legal name
+    aliases:
+      - nickname
+      - chosen name
+    common_labels:
+      - Preferred Name
+      - Nickname
+      - Goes By
+    possible_placeholders:
+      - Enter your preferred name
+      - e.g., Bob (for Robert), Liz (for Elizabeth)
+
+  - id: full_name
+    label: Full Name
+    description: Complete name as it would appear on official documents
+    aliases:
+      - legal name
+      - official name
+    common_labels:
+      - Full Name
+      - Complete Name
+      - Legal Name
+    possible_placeholders:
+      - Enter your full name as it appears on official documents
+      - e.g., María José García Márquez, Jean-Claude van der Waals
+    notes:
+      - May include multiple given names and family names
+      - Order may vary based on cultural conventions
+
+  - id: email
+    label: Email
+    # Example of additional properties:
+    # type: email
+    # required: true
+
+  - id: phone
+    label: Phone
+    # type: tel
+    # pattern: [\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}
+
+# Add more fields as needed

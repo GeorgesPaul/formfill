@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Smart Form Filler</title>
+  <style>
+    body { width: 300px; padding: 10px; }
+  </style>
+</head>
+<body>
+    <h2>Smart Form Filler</h2>
+    <select id="profileSelect">
+      <option value="">Select a profile</option>
+    </select>
+    <button id="fillForm">Fill Form</button>
+    <button id="showAddProfileForm">Add Profile</button>
+    <br><br>
+    <p id="logMsg"></p>
+  
+    <div id="profileForm" style="display: none;">
+      <h3 id="formTitle">Add Profile</h3>
+      <form id="dynamicProfileForm"></form>
+      <button id="submitProfile">Submit</button>
+    </div>
+
+  <script src="jslibs/js-yaml.min.js"></script> <!-- For using the profileFields yaml file -->
+  <script src="popup.js"></script>
+</body>
+</html>
