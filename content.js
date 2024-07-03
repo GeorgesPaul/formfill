@@ -7,8 +7,8 @@ async function loadYaml(src) {
 function simpleSimilarity(str1, str2) {
   str1 = str1.toLowerCase();
   str2 = str2.toLowerCase();
-  const set1 = new Set(str1.split(/\W+/));
-  const set2 = new Set(str2.split(/\W+/));
+  const set1 = new Set(str1.split(/\W+/).filter(word => word.length > 1));
+  const set2 = new Set(str2.split(/\W+/).filter(word => word.length > 1));
   const intersection = new Set([...set1].filter(x => set2.has(x)));
   const union = new Set([...set1, ...set2]);
   return intersection.size / union.size;
@@ -16,7 +16,7 @@ function simpleSimilarity(str1, str2) {
 
 function findBestMatch(fieldInfo, profileFields) {
   let bestMatch = null;
-  let highestSimilarity = -1;
+  let highestSimilarity = 0;
 
   const fieldString = Object.values(fieldInfo).filter(Boolean).join(' ').toLowerCase();
 
@@ -38,7 +38,7 @@ function findBestMatch(fieldInfo, profileFields) {
       }
   }
 
-  return bestMatch;
+  return { bestMatch, similarity: highestSimilarity };
 }
 
 function getNearbyText(element, maxDistance = 50) {
@@ -86,11 +86,13 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 
               if (Object.values(fieldInfo).some(value => value)) {
                   console.log("Processing field:", fieldInfo);
-                  const bestMatch = findBestMatch(fieldInfo, profileFields);
-                  console.log("Best match for", fieldInfo, ":", bestMatch);
-                  if (bestMatch && profile[bestMatch.id]) {
+                  const { bestMatch, similarity } = findBestMatch(fieldInfo, profileFields);
+                  console.log("Best match for", fieldInfo, ":", bestMatch, "with similarity:", similarity);
+                  if (bestMatch && profile[bestMatch.id] && similarity > 0.1) {
                       input.value = profile[bestMatch.id];
                       console.log("Filled", fieldInfo.name || fieldInfo.id, "with", profile[bestMatch.id]);
+                  } else {
+                      console.log("No suitable match found for", fieldInfo);
                   }
               }
           }
