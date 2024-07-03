@@ -1,15 +1,14 @@
 let profileFields = [];
 
 document.addEventListener('DOMContentLoaded', function() {
-  loadProfileFields().then(() => {
-    loadProfiles();
-    document.getElementById('fillForm').addEventListener('click', fillForm);
-    document.getElementById('showAddProfileForm').addEventListener('click', () => showProfileForm('add'));
-    //document.getElementById('editProfile').addEventListener('click', () => showProfileForm('edit'));
-    document.getElementById('submitProfile').addEventListener('click', submitProfile);
-    document.getElementById('profileSelect').addEventListener('change', handleProfileSelect);
+    loadProfileFields().then(() => {
+      loadProfiles();
+      document.getElementById('fillForm').addEventListener('click', fillForm);
+      document.getElementById('showAddProfileForm').addEventListener('click', () => showProfileForm('add'));
+      document.getElementById('submitProfile').addEventListener('click', submitProfile);
+      document.getElementById('profileSelect').addEventListener('change', handleProfileSelect);
+    });
   });
-});
 
 function handleProfileSelect() {
     const profileName = document.getElementById('profileSelect').value;
@@ -43,16 +42,29 @@ function loadProfiles() {
   });
 }
 
-function fillForm() {
-  const profileName = document.getElementById('profileSelect').value;
-  if (profileName) {
-    browser.tabs.query({active: true, currentWindow: true}, function(tabs) {
-      browser.tabs.sendMessage(tabs[0].id, {action: "fillForm", profile: profileName});
-    });
-  } else {
-    document.getElementById('logMsg').textContent = "Please select a profile to fill the form.";
+async function fillForm() {
+    const profileName = document.getElementById('profileSelect').value;
+    if (profileName) {
+      const profiles = await browser.storage.local.get('profiles');
+      console.log("All profiles:", profiles);
+      const profile = profiles.profiles[profileName];
+      console.log("Selected profile:", profile);
+      
+      console.log("Sending fillForm message with profile:", profile);
+      
+      browser.tabs.query({active: true, currentWindow: true}, function(tabs) {
+        try {
+            browser.tabs.sendMessage(tabs[0].id, {action: "fillForm", profile: profile}, function(response) {
+              console.log("Response from content script:", response);
+            });
+          } catch (error) {
+            console.error("Error sending message to content script:", error);
+          }
+      });
+    } else {
+      document.getElementById('logMsg').textContent = "Please select a profile to fill the form.";
+    }
   }
-}
 
 function showProfileForm(mode, profileName = null) {
     const formDiv = document.getElementById('profileForm');

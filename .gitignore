@@ -3,6 +3,41 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+
+# Dependency directories
+node_modules/
+models/
+package-lock.json
+tree.txt
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional: MacOS system files
+.DS_Store
+
+# Optional: Windows system files
+Thumbs.db
+
+# Optional: Editor directories and files
+.vscode/
+*.swp
+*.swo
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Optional: Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Optional: Environment variables file
+.env
+
 # User-specific files
 *.rsuser
 *.suo
