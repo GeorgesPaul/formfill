@@ -88,7 +88,7 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
                   console.log("Processing field:", fieldInfo);
                   const { bestMatch, similarity } = findBestMatch(fieldInfo, profileFields);
                   console.log("Best match for", fieldInfo, ":", bestMatch, "with similarity:", similarity);
-                  if (bestMatch && profile[bestMatch.id] && similarity > 0.1) {
+                  if (bestMatch && profile[bestMatch.id] && similarity > 0.005) {
                       input.value = profile[bestMatch.id];
                       console.log("Filled", fieldInfo.name || fieldInfo.id, "with", profile[bestMatch.id]);
                   } else {
