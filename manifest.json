@@ -23,7 +23,6 @@
         "node_modules/onnxruntime-web/dist/ort-wasm.wasm",
         "node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm",
         "node_modules/onnxruntime-web/dist/ort-wasm-threaded.wasm",
-        "node_modules/@xenova/transformers/dist/transformers.min.js",
         "models/xlm-roberta-base/model.onnx",
         "models/*"
     ],
