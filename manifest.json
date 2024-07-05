@@ -1,43 +1,31 @@
 {
-    "manifest_version": 2,
-    "name": "GeorgesPaul Form Filler",
-    "version": "1.0",
-    "description": "Intelligently fills forms based on user profiles",
-    "permissions": [
-      "activeTab",
-      "storage",
-      "scripting",
-      "unlimitedStorage",
-      "tabs",
-      "<all_urls>",
-      "https://api.anthropic.com/*"
-    ],
-    "content_security_policy": "script-src 'self' 'unsafe-eval'; object-src 'self';",
-    "browser_action": {
-      "default_popup": "popup.html"
-    },
-    "background": {
-      "scripts": ["background.js"],
-      "persistent": false
-    },
-    "web_accessible_resources": [
-        "profileFields.yaml",
-        "node_modules/onnxruntime-web/dist/*",
-        "node_modules/onnxruntime-web/dist/ort.min.js",
-        "node_modules/onnxruntime-web/dist/ort-wasm.wasm",
-        "node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm",
-        "profileFields.yaml",
-        "onnx-worker.js",
-        "models/xlm-roberta-base/model.onnx",
-        "models/*"
-    ],
-    "content_scripts": [
-      {
-        "matches": ["<all_urls>"],
-        "js": [
-          "content.js", 
-          "node_modules/js-yaml/dist/js-yaml.min.js"
-        ]
-      }
-    ]
-  }
+  "manifest_version": 2,
+  "name": "GeorgesPaul Form Filler",
+  "version": "1.0",
+  "description": "Intelligently fills forms based on user profiles",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "<all_urls>"
+  ],
+  "browser_action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "web_accessible_resources": [
+    "profileFields.yaml",
+    "node_modules/js-yaml/dist/js-yaml.min.js"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "content.js", 
+        "node_modules/js-yaml/dist/js-yaml.min.js"
+      ]
+    }
+  ]
+}

@@ -20,14 +20,18 @@ function handleProfileSelect() {
     }
   }
 
-function loadProfileFields() {
-  return fetch(browser.runtime.getURL('profileFields.yaml'))
-    .then(response => response.text())
-    .then(yamlText => {
-      const data = jsyaml.load(yamlText);
-      profileFields = data.fields;
-    });
-}
+  function loadProfileFields() {
+    return fetch(browser.runtime.getURL('profileFields.yaml'))
+      .then(response => response.text())
+      .then(yamlText => {
+        const data = jsyaml.load(yamlText);
+        profileFields = data.fields;
+        console.log("Profile fields loaded:", profileFields);
+      })
+      .catch(error => {
+        console.error("Error loading profile fields:", error);
+      });
+  }
 
 function loadProfiles() {
   browser.storage.local.get('profiles', function(data) {
