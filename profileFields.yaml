@@ -58,12 +58,13 @@ fields:
     aliases:
       - particle
       - nobiliary particle
+      - tussenvoegsel
     common_labels:
       - Name Prefix
       - Prefix
     possible_placeholders:
       - Enter name prefix (if applicable)
-      - e.g., van, de, von, di
+      - e.g., van, de, von, di, van der, den, van den, der
     notes:
       - May be considered part of the family name in some cultures
       - Capitalization rules may vary
@@ -149,8 +150,180 @@ fields:
     # required: true
 
   - id: phone
-    label: Phone
-    # type: tel
-    # pattern: [\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}
+    label: Phone Number
+    description: A complete phone number including country code and area code
+    aliases:
+      - telephone
+      - contact number
+    common_labels:
+      - Phone Number
+      - Contact Number
+    possible_placeholders:
+      - Enter your full phone number
+      - e.g., +1 (555) 123-4567
+    notes:
+      - Should include country code for international use
+
+  - id: phone_country_code
+    label: Country Code
+    description: The country code part of a phone number
+    common_labels:
+      - Country Code
+      - Dial Code
+    possible_placeholders:
+      - Enter country code
+      - e.g., +1, +44, +81
+
+  - id: phone_area_code
+    label: Area Code
+    description: The area or city code part of a phone number
+    common_labels:
+      - Area Code
+      - City Code
+    possible_placeholders:
+      - Enter area code
+      - e.g., 555, 020, 03
+
+  - id: phone_local_number
+    label: Local Number
+    description: The main part of the phone number without country or area code
+    common_labels:
+      - Local Number
+      - Subscriber Number
+    possible_placeholders:
+      - Enter local phone number
+      - e.g., 123-4567, 12345678
+
+  - id: address_line1
+    label: Address Line 1
+    description: The first line of a street address, typically including house number and street name
+    common_labels:
+      - Address Line 1
+      - Street Address
+    possible_placeholders:
+      - Enter your street address
+      - e.g., 123 Main Street, Flat 4B
+
+  - id: address_line2
+    label: Address Line 2
+    description: Additional address information such as apartment number or building name
+    common_labels:
+      - Address Line 2
+      - Apartment/Suite
+    possible_placeholders:
+      - Additional address information (optional)
+      - e.g., Apartment 3, Building B
+
+  - id: address_street
+    label: Street Name
+    description: The name of the street without the house number
+    common_labels:
+      - Street Name
+      - Road
+    possible_placeholders:
+      - Enter street name
+      - e.g., Main Street, Avenue des Champs-Élysées
+
+  - id: address_house_number
+    label: House Number
+    description: The number or identifier of a specific building on a street
+    common_labels:
+      - House Number
+      - Building Number
+    possible_placeholders:
+      - Enter house number
+      - e.g., 123, 4B, 15-A
+
+  - id: address_city
+    label: City
+    description: The name of the city or town
+    aliases:
+      - town
+      - locality
+    common_labels:
+      - City
+      - Town
+    possible_placeholders:
+      - Enter city name
+      - e.g., New York, London, Tokyo
+
+  - id: address_state
+    label: State/Province
+    description: The name of the state, province, region, or prefecture
+    aliases:
+      - region
+      - prefecture
+      - county
+    common_labels:
+      - State
+      - Province
+      - Region
+    possible_placeholders:
+      - Enter state or province
+      - e.g., California, Ontario, Île-de-France
+
+  - id: address_postal_code
+    label: Postal Code
+    description: The postal code or ZIP code
+    aliases:
+      - zip code
+      - postcode
+    common_labels:
+      - Postal Code
+      - ZIP Code
+    possible_placeholders:
+      - Enter postal code
+      - e.g., 90210, SW1A 1AA, 100-0001
+
+  - id: address_country
+    label: Country
+    description: The name of the country
+    common_labels:
+      - Country
+      - Nation
+    possible_placeholders:
+      - Select your country
+      - e.g., United States, France, Japan
+
+  - id: date_of_birth
+    label: Date of Birth
+    description: The person's date of birth
+    common_labels:
+      - Date of Birth
+      - DOB
+    possible_placeholders:
+      - Enter your date of birth
+      - e.g., YYYY-MM-DD, DD/MM/YYYY
+
+  - id: gender
+    label: Gender
+    description: The person's gender identity
+    common_labels:
+      - Gender
+      - Sex
+    possible_placeholders:
+      - Select your gender
+      - e.g., Male, Female, Non-binary, Prefer not to say
+
+  - id: nationality
+    label: Nationality
+    description: The person's nationality or citizenship
+    common_labels:
+      - Nationality
+      - Citizenship
+    possible_placeholders:
+      - Select your nationality
+      - e.g., American, British, Japanese
+
+  - id: occupation
+    label: Occupation
+    description: The person's job or profession
+    common_labels:
+      - Occupation
+      - Profession
+      - Job Title
+    possible_placeholders:
+      - Enter your occupation
+      - e.g., Teacher, Engineer, Artist
 
 # Add more fields as needed

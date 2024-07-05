@@ -1,64 +1,92 @@
-let worker;
-const modelURL = 'models/xlm-roberta-base/model.onnx'; 
+const apiUrl = 'http://localhost:11434/api/generate';
+const response_Timeout_ms = 15000; 
+// Example using ollama running locally
 
-async function matchFieldWithClaude(fieldInfo, profileFields) {
-  const apiKey = config.CLAUDE_API_KEY;
-  const apiUrl = 'https://api.anthropic.com/v1/messages';
+const LLM_model = "llama3"; 
 
-  console.log('Preparing to call Claude API for field:', fieldInfo);
-
-  const prompt = `Given the following form field information:
-${JSON.stringify(fieldInfo, null, 2)}
-
-And the following list of profile fields:
-${JSON.stringify(profileFields, null, 2)}
-
-Which profile field is the best match for the form field? Return only the ID of the best matching profile field.`;
-
-  console.log('Sending prompt to Claude:', prompt);
+async function promptLLM(prompt) {
+  console.log('Sending prompt to LLM:', prompt);
 
   const requestBody = {
-      model: "claude-3-sonnet-20240229",
-      messages: [
-          {
-              role: "user",
-              content: prompt
-          }
-      ],
-      max_tokens: 100
+    model: LLM_model,
+    prompt: prompt,
+    stream: true
   };
 
   const requestOptions = {
-      method: 'POST',
-      headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify(requestBody)
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestBody)
   };
 
   try {
-      const response = await fetch(apiUrl, requestOptions);
-
-      console.log('Received response from Claude API. Status:', response.status);
+    const response = await fetch(apiUrl, requestOptions);
+    console.log('Received response from LLM API. Status:', response.status);
 
     if (!response.ok) {
-        const errorBody = await response.text();
-        console.error('Error response body:', errorBody);
-        throw new Error(`HTTP error! status: ${response.status}, body: ${errorBody}`);
+      const errorBody = await response.text();
+      console.error('Error response body:', errorBody);
+      throw new Error(`HTTP error! status: ${response.status}, body: ${errorBody}`);
     }
 
-      const data = await response.json();
-      console.log('Parsed response data:', data);
+    const reader = response.body.getReader();
+    let accumulatedResponse = '';
+    const startTime = Date.now();
 
-      const bestMatchId = data.content[0].text.trim();
-      console.log('Best match ID from Claude:', bestMatchId);
+    while (true) {
+      const { done, value } = await reader.read();
 
-      return bestMatchId;
+      if (done) {
+        break;
+      }
+
+      const chunk = new TextDecoder().decode(value);
+      const lines = chunk.split('\n');
+
+      for (const line of lines) {
+        if (line.trim() !== '') {
+          const parsedLine = JSON.parse(line);
+          accumulatedResponse += parsedLine.response;
+
+          if (parsedLine.done) {
+            console.log('Full response:', accumulatedResponse);
+            return accumulatedResponse.trim();
+          }
+        }
+      }
+
+      // Check for timeout
+      const time_elapsed_ms = Date.now() - startTime;
+      if (time_elapsed_ms > response_Timeout_ms) {
+        throw new Error(`LLM API request timed out after ${time_elapsed_ms} milliseconds.`);
+      }
+    }
+
+    throw new Error('LLM API response ended unexpectedly');
   } catch (error) {
-      console.error("Error calling Claude API:", error);
-      throw error; // Re-throw the error instead of using a fallback
+    console.error("Error interacting with LLM API:", error);
+    throw error;
+  }
+}
+
+// Main function to match field with LLM
+async function matchFieldWithllama(fieldInfo, profileFields) {
+  console.log('Preparing to call LLM API for field:', fieldInfo);
+  const prompt = `Given the following form field information:
+${JSON.stringify(fieldInfo, null, 2)}
+And the following list of profile fields:
+${JSON.stringify(profileFields, null, 2)}
+Which profile field is the best match for the form field? Return only the ID of the best matching profile field. No other text.`;
+
+  try {
+    const bestMatchId = await promptLLM(prompt);
+    console.log('Best match ID from LLM:', bestMatchId);
+    return bestMatchId;
+  } catch (error) {
+    console.error("Error in matchFieldWithllama:", error);
+    throw error;
   }
 }
 
@@ -80,33 +108,37 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
      
       try {
           const { fields: profileFields } = await loadYaml('profileFields.yaml');
-          console.log("Loaded profile fields:", profileFields);
+          console.log("Loaded profile field meta data:", profileFields);
 
           const formInputs = document.querySelectorAll('input, select, textarea');
-          console.log("Found form inputs:", formInputs.length);
+          console.log("Found form text boxes:", formInputs.length);
 
           for (const input of formInputs) {
-              const fieldInfo = {
-                  name: input.name,
-                  id: input.id,
-                  placeholder: input.placeholder,
-                  type: input.type,
-                  nearbyText: getNearbyText(input)
-              };
-
-              if (Object.values(fieldInfo).some(value => value)) {
-                  console.log("Processing field:", fieldInfo);
-                  const bestMatchId = await matchFieldWithClaude(fieldInfo, profileFields);
-                  console.log("Best match for", fieldInfo, ":", bestMatchId);
-                  if (bestMatchId && profile[bestMatchId]) {
-                      input.value = profile[bestMatchId];
-                      console.log("Filled", fieldInfo.name || fieldInfo.id, "with", profile[bestMatchId]);
-                  } else {
-                      console.log("No suitable match found for", fieldInfo);
-                  }
-              }
+            (async () => {  // Start of immediately invoked async function
+                const fieldInfo = {
+                    name: input.name,
+                    id: input.id,
+                    placeholder: input.placeholder,
+                    type: input.type,
+                    nearbyText: getNearbyText(input)
+                };
+        
+                if (Object.values(fieldInfo).some(value => value)) {
+                    const bestMatchId = await matchFieldWithllama(fieldInfo, profileFields);
+                    console.log("Best match for", fieldInfo, ":", bestMatchId);
+                    // Remove any surrounding quotes from bestMatchId
+                    const cleanBestMatchId = bestMatchId.replace(/^["']|["']$/g, '');
+                    console.log("Cleaned Best match ID:", cleanBestMatchId);
+                            
+                    if (profile[cleanBestMatchId] !== undefined) {
+                        input.value = profile[cleanBestMatchId];
+                        console.log("Filled", fieldInfo.name || fieldInfo.id, "with", profile[cleanBestMatchId]);
+                    } else {
+                        console.log("No matching profile field found for textbox with name ", fieldInfo.name || fieldInfo.id);
+                    }
+                }
+            })();  // End and immediate invocation of async function
           }
-     
           sendResponse({status: "success"});
       } catch (error) {
           console.error("Error filling form:", error);
