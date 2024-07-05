@@ -17,12 +17,30 @@ async function initializeOnnxRuntime(wasmPaths, modelData) {
         ort.env.logLevel = 'verbose';
 
         console.log("Creating InferenceSession...");
-        session = await ort.InferenceSession.create(modelData, { executionProviders: ['wasm'] });
+        const options = {
+            executionProviders: ['wasm'],
+            graphOptimizationLevel: 'all'
+        };
+        console.log("Session options:", options);
+        console.log("Model data size:", modelData.byteLength);
+
+        // Try creating the session with more detailed error logging
+        try {
+            session = await ort.InferenceSession.create(modelData, options);
+        } catch (sessionError) {
+            console.error("Error creating InferenceSession:", sessionError);
+            console.error("Error details:", JSON.stringify(sessionError, Object.getOwnPropertyNames(sessionError)));
+            throw sessionError;
+        }
+
         console.log("ONNX Runtime initialized successfully");
         self.postMessage("ready");
     } catch (e) {
         console.error("Error initializing ONNX Runtime:", e);
-        self.postMessage({error: e.message});
+        console.error("Error name:", e.name);
+        console.error("Error message:", e.message);
+        console.error("Error stack:", e.stack);
+        self.postMessage({error: e.message, name: e.name, stack: e.stack});
     }
 }
 

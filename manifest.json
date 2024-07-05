@@ -6,8 +6,11 @@
     "permissions": [
       "activeTab",
       "storage",
+      "scripting",
+      "unlimitedStorage",
       "tabs",
-      "<all_urls>"
+      "<all_urls>",
+      "https://api.anthropic.com/*"
     ],
     "content_security_policy": "script-src 'self' 'unsafe-eval'; 'wasm-unsafe-eval'; object-src 'self';",
     "browser_action": {
@@ -21,7 +24,6 @@
         "profileFields.yaml",
         "node_modules/onnxruntime-web/dist/*",
         "node_modules/onnxruntime-web/dist/ort.min.js",
-        "node_modules/onnxruntime-web/dist/ort.wasm",
         "node_modules/onnxruntime-web/dist/ort-wasm.wasm",
         "node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm",
         "profileFields.yaml",
@@ -33,6 +35,7 @@
       {
         "matches": ["<all_urls>"],
         "js": [
+          "config.js",
           "content.js", 
           "node_modules/js-yaml/dist/js-yaml.min.js"
         ]
