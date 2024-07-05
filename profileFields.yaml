@@ -52,6 +52,37 @@ fields:
       - Important for correctly formatting full names
       - Varies by culture and sometimes by context (formal vs. informal)
 
+  - id: name_infix
+      label: Name Infix
+      description: An infix between given names and family names, common in Dutch and some other languages
+      aliases:
+        - name infix
+        - nobiliary particle
+        - particle
+      common_labels:
+        - Tussenvoegsel
+        - Infix
+      possible_placeholders:
+        - Enter name infix (if applicable)
+        - e.g., van, van der, de, ten, ter
+      notes:
+        - Common in Dutch names, but also appears in other languages
+        - Usually not capitalized unless at the beginning of a name
+        - May be considered part of the family name in some contexts
+        - Examples: van der Sar, de Jong, ten Cate, van den Berg
+      possible_values:
+        - van
+        - van der
+        - van den
+        - van de
+        - de
+        - den
+        - der
+        - ten
+        - ter
+        - te
+        - "t"
+
   - id: name_prefix
     label: Name Prefix
     description: A prefix or article that may appear before the family name
@@ -64,7 +95,7 @@ fields:
       - Prefix
     possible_placeholders:
       - Enter name prefix (if applicable)
-      - e.g., van, de, von, di, van der, den, van den, der
+      - e.g., van, de, von, di, 
     notes:
       - May be considered part of the family name in some cultures
       - Capitalization rules may vary

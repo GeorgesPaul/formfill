@@ -1,3 +1,4 @@
+console.log("popup.js loaded");
 let profileFields = [];
 
 document.addEventListener('DOMContentLoaded', function() {
