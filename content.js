@@ -152,7 +152,9 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profil
   ${profileDataString}
   
   INSTRUCTIONS:
-  1. Generate the string that needs to be filled out in the form field, based on profile fields meta data and profile fields user data.
+  1. Generate the string that needs to be filled out in the form field.
+  2. If unsure, return empty string. 
+  3. Never fill out the placeholder value from FORM FIELD, unless it is exactly the same as in PROFILE FIELDS USER DATA.
   
   Return only the string to fill the form field with. No other text.`;
 
@@ -237,7 +239,11 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       const { fields: profileFields } = await loadYaml('profileFields.yaml');
       console.log("Loaded profile field meta data:", profileFields);
       
-      const formInputs = document.querySelectorAll('input, select, textarea');
+      const formInputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
+        .filter(el => {
+          const style = window.getComputedStyle(el);
+          return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+        });
       console.log("Found form text boxes:", formInputs.length);
       
       const formFieldsInfo = Array.from(formInputs).map(getFormFieldInfo);
@@ -248,19 +254,9 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
           try {
             
             const str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile); 
-            element.value = str_to_fill; 
-            //const bestMatchId = await matchFieldWithllama(info, profileFields);
-            // console.log("Best match for", info, ":", bestMatchId);
-            
-            // const cleanBestMatchId = bestMatchId.replace(/^["']|["']$/g, '');
-            // console.log("Cleaned Best match ID:", cleanBestMatchId);
-          
-            // if (profile[cleanBestMatchId] !== undefined) {
-            //   element.value = profile[cleanBestMatchId];
-            //   console.log("Filled", info.name || info.id, "with", profile[cleanBestMatchId]);
-            // } else {
-            //   console.log("No matching profile field found for textbox with name ", info.name || info.id);
-            // }
+            if (str_to_fill != '') {
+              element.value = str_to_fill; 
+            }
 
           } catch (fieldError) {
             console.error("Error processing field:", info, fieldError);
