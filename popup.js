@@ -31,6 +31,8 @@ function createTestProfile() {
       preferred_name: 'Johnny',
       full_name: 'Dr. John William van de Doe Smith Jr.',
       email: 'john.doe@example.com',
+      linkedIN: 'https://www.linkedin.com/in/georges-meinders/', 
+      Website: 'www.megahard.pro',
       phone: '+1 (555) 123-4567',
       phone_country_code: '+1',
       phone_area_code: '555',

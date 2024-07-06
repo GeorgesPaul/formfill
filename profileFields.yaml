@@ -22,6 +22,9 @@ fields:
       - Enter your username
     notes:
       - Can be an email address in some cases.
+      - Do not use when "name" is intended!
+      - Not the same as "name"
+      - Not for human name(s). 
 
   - id: given_names
     label: Given Name(s)
@@ -196,6 +199,14 @@ fields:
     # Example of additional properties:
     # type: email
     # required: true
+
+  - id: linkedIN
+    label: LinkedIN profile URL
+    description: For example https://www.linkedin.com/in/Sjonnie-de-Sjaak/
+  
+  - id: website
+    label: Personal website URL
+    description: For example https://www.somewebsite.li
 
   - id: phone
     label: Phone Number
