@@ -6,6 +6,23 @@
 # editting exiting entries (for example adding/removing aliases or common_labels) is fine
 
 fields:
+  - id: user_name
+    label: User Name
+    description: Login name or nickname for online services
+    aliases:
+      - nickname
+      - nick
+      - Redittor
+      - login name
+      - online name
+    common_labels:
+      - Username
+      - Login name
+    possible_placeholders:
+      - Enter your username
+    notes:
+      - Can be an email address in some cases.
+
   - id: given_names
     label: Given Name(s)
     description: One or more names given to a person, not including family names
@@ -241,6 +258,8 @@ fields:
     common_labels:
       - Address Line 2
       - Apartment/Suite
+      - additional
+      - toevoeging
     possible_placeholders:
       - Additional address information (optional)
       - e.g., Apartment 3, Building B

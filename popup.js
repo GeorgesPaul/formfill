@@ -18,37 +18,39 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function createTestProfile() {
   const testProfile = {
-    name: 'Test Profile',
-    given_names: 'John William',
-    family_names: 'Doe Smith',
-    name_order: 'Given-Family',
-    name_infix: 'van',
-    name_prefix: 'de',
-    title: 'Dr.',
-    salutation: 'Mr.',
-    name_suffix: 'Jr.',
-    preferred_name: 'Johnny',
-    full_name: 'Dr. John William van de Doe Smith Jr.',
-    email: 'john.doe@example.com',
-    phone: '+1 (555) 123-4567',
-    phone_country_code: '+1',
-    phone_area_code: '555',
-    phone_local_number: '123-4567',
-    address_line1: '123 Main Street',
-    address_line2: 'Apartment 4B',
-    address_street: 'Main Street',
-    address_house_number: '123',
-    address_city: 'Anytown',
-    address_state: 'State',
-    address_postal_code: '12345',
-    address_country: 'United States',
-    date_of_birth: '1980-01-01',
-    gender: 'Male',
-    nationality: 'American',
-    occupation: 'Software Engineer'
+    'Test Profile': {
+      user_name: 'usernametest',
+      given_names: 'John William',
+      family_names: 'Doe Smith',
+      name_order: 'Given-Family',
+      name_infix: 'van',
+      name_prefix: 'de',
+      title: 'Dr.',
+      salutation: 'Mr.',
+      name_suffix: 'Jr.',
+      preferred_name: 'Johnny',
+      full_name: 'Dr. John William van de Doe Smith Jr.',
+      email: 'john.doe@example.com',
+      phone: '+1 (555) 123-4567',
+      phone_country_code: '+1',
+      phone_area_code: '555',
+      phone_local_number: '123-4567',
+      address_line1: '123 Main Street',
+      address_line2: 'Apartment 4B',
+      address_street: 'Main Street',
+      address_house_number: '123',
+      address_city: 'Anytown',
+      address_state: 'State',
+      address_postal_code: '12345',
+      address_country: 'United States',
+      date_of_birth: '1980-01-01',
+      gender: 'Male',
+      nationality: 'American',
+      occupation: 'Software Engineer'
+    }
   };
   return browser.storage.local.set({ 
-    profiles: { 'Test Profile': testProfile },
+    profiles: testProfile,
     lastLoadedProfile: 'Test Profile'
   }).then(() => {
     console.log("Test profile created:", testProfile);
@@ -111,8 +113,8 @@ function loadProfiles() {
           option.value = 'Test Profile';
           profileSelect.add(option);
           profileSelect.value = 'Test Profile';
-          selectedProfile = testProfile;
-          return { profileName: 'Test Profile', profile: testProfile };
+          selectedProfile = testProfile['Test Profile'];
+          return { profileName: 'Test Profile', profile: selectedProfile };
         });
       } else if (data.lastLoadedProfile && profiles[data.lastLoadedProfile]) {
         // Set the select to the last loaded profile

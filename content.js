@@ -71,14 +71,48 @@ async function promptLLM(prompt) {
   }
 }
 
+function generateFieldInfoString(fieldInfo) {
+  let result = "";
+  for (const [key, value] of Object.entries(fieldInfo)) {
+    if (value !== null && value !== undefined) {
+      if (typeof value === 'object' && !Array.isArray(value)) {
+        // For nested objects like parentElement
+        result += `${key}:\n`;
+        for (const [subKey, subValue] of Object.entries(value)) {
+          if (subValue !== null && subValue !== undefined) {
+            result += `  ${subKey}: ${subValue}\n`;
+          }
+        }
+      } else if (Array.isArray(value)) {
+        // For array values
+        result += `${key}: ${value.join(', ')}\n`;
+      } else {
+        // For simple key-value pairs
+        result += `${key}: ${value}\n`;
+      }
+    }
+  }
+  return result;
+}
+
 // Main function to match field with LLM
 async function matchFieldWithllama(fieldInfo, profileFields) {
+
+  const fieldInfoString = generateFieldInfoString(fieldInfo);
   console.log('Preparing to call LLM API for field:', fieldInfo);
-  const prompt = `Given the following form field information:
-${JSON.stringify(fieldInfo, null, 2)}
-And the following list of profile fields:
-${JSON.stringify(profileFields, null, 2)}
-Which profile field is the best match for the form field? Return only the ID of the best matching profile field. No other text.`;
+  const prompt = `TASK: Match form field to profile field.
+
+  FORM FIELD:
+  ${fieldInfoString}
+  
+  PROFILE FIELDS:
+  ${profileFields.map(field => `- ${field.id}: ${field.label}`).join('\n')}
+  
+  INSTRUCTIONS:
+  1. Find the profile field that best matches the form field.
+  2. Return ONLY the id of the matching profile field.
+  
+  Now, provide the id of the best matching profile field. No other text.`;
 
   try {
     const bestMatchId = await promptLLM(prompt);
@@ -100,50 +134,99 @@ function getNearbyText(element, maxDistance = 50) {
   // ... (keep this function as it was) ...
 }
 
+// Gets info from textbox / form input
+function getFormFieldInfo(input) {
+  const info = {
+    name: input.name,
+    id: input.id,
+    placeholder: input.placeholder,
+    type: input.type,
+    required: input.required,
+    autocomplete: input.autocomplete,
+    ariaLabel: input.getAttribute('aria-label'),
+    ariaLabelledBy: input.getAttribute('aria-labelledby'),
+    ariaDescribedBy: input.getAttribute('aria-describedby'),
+    classes: input.className,
+    nearbyText: getNearbyText(input),
+    label: getAssociatedLabel(input),
+    parentElement: {
+      tagName: input.parentElement.tagName,
+      classes: input.parentElement.className
+    }
+  };
+
+  // Get all data attributes
+  const dataAttributes = {};
+  for (let attr of input.attributes) {
+    if (attr.name.startsWith('data-')) {
+      dataAttributes[attr.name] = attr.value;
+    }
+  }
+  info.dataAttributes = dataAttributes;
+
+  return { element: input, info: info };
+}
+
+// Gets data from label near form input / textbox
+function getAssociatedLabel(input) {
+  // Try to find a label that references this input
+  let label = document.querySelector(`label[for="${input.id}"]`);
+  
+  // If no label found, try to find a parent label
+  if (!label) {
+      label = input.closest('label');
+  }
+  
+  // If a label is found, return its text content
+  if (label) {
+      return label.textContent.trim();
+  }
+  
+  // If no label found, return null
+  return null;
+}
 
 browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.action === "fillForm") {
-      console.log("Filling form with profile:", message.profile);
-      const profile = message.profile;
-     
-      try {
-          const { fields: profileFields } = await loadYaml('profileFields.yaml');
-          console.log("Loaded profile field meta data:", profileFields);
+    console.log("Filling form with profile:", message.profile);
+    const profile = message.profile;
+   
+    try {
+      const { fields: profileFields } = await loadYaml('profileFields.yaml');
+      console.log("Loaded profile field meta data:", profileFields);
+      
+      const formInputs = document.querySelectorAll('input, select, textarea');
+      console.log("Found form text boxes:", formInputs.length);
+      
+      const formFieldsInfo = Array.from(formInputs).map(getFormFieldInfo);
+      console.log("Form fields info:", formFieldsInfo);
 
-          const formInputs = document.querySelectorAll('input, select, textarea');
-          console.log("Found form text boxes:", formInputs.length);
-
-          for (const input of formInputs) {
-            (async () => {  // Start of immediately invoked async function
-                const fieldInfo = {
-                    name: input.name,
-                    id: input.id,
-                    placeholder: input.placeholder,
-                    type: input.type,
-                    nearbyText: getNearbyText(input)
-                };
-        
-                if (Object.values(fieldInfo).some(value => value)) {
-                    const bestMatchId = await matchFieldWithllama(fieldInfo, profileFields);
-                    console.log("Best match for", fieldInfo, ":", bestMatchId);
-                    // Remove any surrounding quotes from bestMatchId
-                    const cleanBestMatchId = bestMatchId.replace(/^["']|["']$/g, '');
-                    console.log("Cleaned Best match ID:", cleanBestMatchId);
-                            
-                    if (profile[cleanBestMatchId] !== undefined) {
-                        input.value = profile[cleanBestMatchId];
-                        console.log("Filled", fieldInfo.name || fieldInfo.id, "with", profile[cleanBestMatchId]);
-                    } else {
-                        console.log("No matching profile field found for textbox with name ", fieldInfo.name || fieldInfo.id);
-                    }
-                }
-            })();  // End and immediate invocation of async function
+      for (const { element, info } of formFieldsInfo) {
+        if (info && Object.values(info).some(value => value)) {
+          try {
+            const bestMatchId = await matchFieldWithllama(info, profileFields);
+            console.log("Best match for", info, ":", bestMatchId);
+            
+            const cleanBestMatchId = bestMatchId.replace(/^["']|["']$/g, '');
+            console.log("Cleaned Best match ID:", cleanBestMatchId);
+          
+            if (profile[cleanBestMatchId] !== undefined) {
+              element.value = profile[cleanBestMatchId];
+              console.log("Filled", info.name || info.id, "with", profile[cleanBestMatchId]);
+            } else {
+              console.log("No matching profile field found for textbox with name ", info.name || info.id);
+            }
+          } catch (fieldError) {
+            console.error("Error processing field:", info, fieldError);
           }
-          sendResponse({status: "success"});
-      } catch (error) {
-          console.error("Error filling form:", error);
-          sendResponse({status: "error", message: error.toString()});
+        }
       }
+      
+      sendResponse({status: "success"});
+    } catch (error) {
+      console.error("Error filling form:", error);
+      sendResponse({status: "error", message: error.toString()});
+    }
   }
  
   return true;  // Indicates that we will send a response asynchronously
