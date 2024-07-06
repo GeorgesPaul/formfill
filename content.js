@@ -2,7 +2,7 @@ const apiUrl = 'http://localhost:11434/api/generate';
 const response_Timeout_ms = 15000; 
 // Example using ollama running locally
 
-const LLM_model = "llama3"; 
+const LLM_model = "gemma2"; //"llama3:70b"; 
 
 async function promptLLM(prompt) {
   console.log('Sending prompt to LLM:', prompt);
@@ -10,7 +10,13 @@ async function promptLLM(prompt) {
   const requestBody = {
     model: LLM_model,
     prompt: prompt,
-    stream: true
+    stream: true,
+    "options": {
+      "seed": 123,
+      "top_k": 20,
+      "top_p": 0.9,
+      "temperature": 0
+      }
   };
 
   const requestOptions = {
@@ -111,6 +117,7 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
   INSTRUCTIONS:
   1. Find the profile field that best matches the form field.
   2. Return ONLY the id of the matching profile field.
+  3. Return empty string if there is no obvious match. 
   
   Now, provide the id of the best matching profile field. No other text.`;
 
