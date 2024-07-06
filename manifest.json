@@ -9,8 +9,10 @@
     "tabs",
     "<all_urls>"
   ],
-  "browser_action": {
-    "default_popup": "popup.html"
+  "sidebar_action": {
+    "default_title": "Form Filler",
+    "default_panel": "popup.html",
+    "default_icon": "icon.png"
   },
   "background": {
     "scripts": ["background.js"]
@@ -23,7 +25,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
-        "content.js", 
+        "content.js",
         "node_modules/js-yaml/dist/js-yaml.min.js"
       ]
     }

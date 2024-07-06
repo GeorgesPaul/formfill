@@ -131,6 +131,41 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
   }
 }
 
+// Main function to match field with LLM
+async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profileData) {
+
+  const fieldInfoString = generateFieldInfoString(fieldInfo);
+  const profileFieldsMetaDataString = profileFieldsMetaData.map(field => `- ${field.id}: ${field.label}`).join('\n'); 
+  const profileDataString = generateFieldInfoString(profileData);
+
+  console.log('Preparing to call LLM API for field:', fieldInfo);
+
+  const prompt = `TASK: What string to fill out in the following form field:
+
+  FORM FIELD:
+  ${fieldInfoString}
+  
+  PROFILE FIELDS META DATA:
+  ${profileFieldsMetaDataString}
+
+  PROFILE FIELDS USER DATA:
+  ${profileDataString}
+  
+  INSTRUCTIONS:
+  1. Generate the string that needs to be filled out in the form field, based on profile fields meta data and profile fields user data.
+  
+  Return only the string to fill the form field with. No other text.`;
+
+  try {
+    const bestMatchId = await promptLLM(prompt);
+    console.log('Best match ID from LLM:', bestMatchId);
+    return bestMatchId;
+  } catch (error) {
+    console.error("Error in matchFieldWithllama:", error);
+    throw error;
+  }
+}
+
 async function loadYaml(src) {
   const response = await fetch(browser.runtime.getURL(src));
   const yamlText = await response.text();
@@ -211,18 +246,22 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       for (const { element, info } of formFieldsInfo) {
         if (info && Object.values(info).some(value => value)) {
           try {
-            const bestMatchId = await matchFieldWithllama(info, profileFields);
-            console.log("Best match for", info, ":", bestMatchId);
             
-            const cleanBestMatchId = bestMatchId.replace(/^["']|["']$/g, '');
-            console.log("Cleaned Best match ID:", cleanBestMatchId);
+            const str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile); 
+            element.value = str_to_fill; 
+            //const bestMatchId = await matchFieldWithllama(info, profileFields);
+            // console.log("Best match for", info, ":", bestMatchId);
+            
+            // const cleanBestMatchId = bestMatchId.replace(/^["']|["']$/g, '');
+            // console.log("Cleaned Best match ID:", cleanBestMatchId);
           
-            if (profile[cleanBestMatchId] !== undefined) {
-              element.value = profile[cleanBestMatchId];
-              console.log("Filled", info.name || info.id, "with", profile[cleanBestMatchId]);
-            } else {
-              console.log("No matching profile field found for textbox with name ", info.name || info.id);
-            }
+            // if (profile[cleanBestMatchId] !== undefined) {
+            //   element.value = profile[cleanBestMatchId];
+            //   console.log("Filled", info.name || info.id, "with", profile[cleanBestMatchId]);
+            // } else {
+            //   console.log("No matching profile field found for textbox with name ", info.name || info.id);
+            // }
+
           } catch (fieldError) {
             console.error("Error processing field:", info, fieldError);
           }

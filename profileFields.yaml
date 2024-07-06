@@ -346,15 +346,35 @@ fields:
       - Select your country
       - e.g., United States, France, Japan
 
-  - id: date_of_birth
-    label: Date of Birth
-    description: The person's date of birth
+  - id: date_of_birth_day
+    label: Date of Birth day
+    description: The person's date of birth as day
     common_labels:
-      - Date of Birth
+      - Date of Birth day of month
       - DOB
     possible_placeholders:
       - Enter your date of birth
-      - e.g., YYYY-MM-DD, DD/MM/YYYY
+      - e.g., DD
+    
+  - id: date_of_birth_month
+    label: Date of Birth month
+    description: The person's date of birth as month
+    common_labels:
+      - Date of Birth day of month
+      - DOB
+    possible_placeholders:
+      - Enter your date of birth
+      - e.g., MM
+
+  - id: date_of_birth_year
+    label: Date of Birth year
+    description: The person's date of birth as year
+    common_labels:
+      - Date of Birth day of month
+      - DOB
+    possible_placeholders:
+      - Enter your date of birth
+      - e.g., YYYY
 
   - id: gender
     label: Gender

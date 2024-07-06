@@ -45,7 +45,9 @@ function createTestProfile() {
       address_state: 'State',
       address_postal_code: '12345',
       address_country: 'United States',
-      date_of_birth: '1980-01-01',
+      date_of_birth_day: '10',
+      date_of_birth_month: '12',
+      date_of_birth_year: '1988', 
       gender: 'Male',
       nationality: 'American',
       occupation: 'Software Engineer'
