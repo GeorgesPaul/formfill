@@ -1,6 +1,8 @@
 # Formfill
 A Firefox extension that fills forms using ML for better filling and less typing. 
 
+# Screenie
+![f6d6ead3ea707654c30abbcd96ac2381.png](./f6d6ead3ea707654c30abbcd96ac2381.png)
 # To try it out
 This extension was written for Firefox
 
@@ -12,6 +14,3 @@ This extension was written for Firefox
 5. In Firefox in the address bar type "about:debugging#/runtime/this-firefox"
 6. In Firefox Click "Load Temporary Add-on..." and load "manifest.json" in the directory where you stored the files in this repository.
 7. In Firefox click "fill form" on a website with forms.
-
-# Screenie
-![7b4685d4bdaae32809c1fe77e79f5b8a.png](./7b4685d4bdaae32809c1fe77e79f5b8a.png)
