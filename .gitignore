@@ -3,6 +3,9 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+# BFG tool repo cleaner
+bfg.jar
+
 # API key for Claude
 config.js
 
