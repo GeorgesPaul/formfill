@@ -1,5 +1,7 @@
-# Formfill
-A Firefox extension that fills forms using ML for better filling and less typing. 
+# LLM Form filling Firefox extension
+A Firefox extension that fills forms using a large language model for better filling and less typing. 
+
+This mostly fixes the issues with all other form filling software that never seems to be able to get it right. 
 
 # Screenie
 ![f6d6ead3ea707654c30abbcd96ac2381.png](./f6d6ead3ea707654c30abbcd96ac2381.png)
