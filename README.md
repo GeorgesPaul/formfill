@@ -14,5 +14,4 @@ This extension was written for Firefox
 7. In Firefox on the extension toolbar click on the icon for this extension (a white puzzle piece) and click "fill form" on a website with forms.
 
 # Screenie
-
-![e6f6e5129e1d2cecd866e2fd6cab4535.png](./e6f6e5129e1d2cecd866e2fd6cab4535.png)
+![7b4685d4bdaae32809c1fe77e79f5b8a.png](./7b4685d4bdaae32809c1fe77e79f5b8a.png)
