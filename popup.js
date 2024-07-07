@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('showAddProfileForm').addEventListener('click', () => showProfileForm('add'));
     document.getElementById('submitProfile').addEventListener('click', submitProfile);
     document.getElementById('profileSelect').addEventListener('change', handleProfileSelect);
+    document.getElementById('backupProfile').addEventListener('click', backupProfileToTxt);
   });
 });
 
@@ -202,8 +203,8 @@ function showProfileForm(mode, profileName = null) {
 }
 
 function generateForm(form, profile = {}) {
-  console.log("Generating form with profile:", profile);
   profileFields.forEach(field => {
+    const div = document.createElement('div');
     const label = document.createElement('label');
     label.htmlFor = field.id;
     label.textContent = field.label + ':';
@@ -211,10 +212,9 @@ function generateForm(form, profile = {}) {
     input.type = 'text';
     input.id = field.id;
     input.value = profile[field.id] || '';
-    console.log(`Setting ${field.id} to ${input.value}`);
-    form.appendChild(label);
-    form.appendChild(input);
-    form.appendChild(document.createElement('br'));
+    div.appendChild(label);
+    div.appendChild(input);
+    form.appendChild(div);
   });
 }
 
@@ -229,12 +229,61 @@ function submitProfile() {
       const profiles = data.profiles || {};
       profiles[profileName] = profile;
       browser.storage.local.set({profiles: profiles}, function() {
-        loadProfiles();
-        document.getElementById('logMsg').textContent = "Profile saved successfully.";
-        document.getElementById('profileForm').style.display = 'none';
+        updateProfileSelect(profileName);  // Pass the profileName here
+        const timestamp = new Date().toLocaleString();
+        document.getElementById('logMsg').textContent = `${timestamp}: ${profileName} saved`;
       });
     });
   } else {
     document.getElementById('logMsg').textContent = "Please enter a profile name.";
+  }
+}
+
+// Updates the dropdown box with profiles to sync between stored profiles and what is displayed
+function updateProfileSelect(selectedProfileName = null) {
+  browser.storage.local.get('profiles', function(data) {
+    const profileSelect = document.getElementById('profileSelect');
+    const profiles = data.profiles || {};
+    profileSelect.innerHTML = '<option value="">Select a profile</option>';
+    for (let name in profiles) {
+      let option = document.createElement('option');
+      option.text = name;
+      option.value = name;
+      profileSelect.add(option);
+      if (name === selectedProfileName) {
+        option.selected = true;
+      }
+    }
+    // If no profile was selected and there are profiles, select the first one
+    if (!selectedProfileName && profileSelect.options.length > 1) {
+      profileSelect.selectedIndex = 1;
+    }
+  });
+}
+
+function backupProfileToTxt() {
+  const profileName = document.getElementById('profileName').value;
+  if (profileName) {
+    const profile = {};
+    profileFields.forEach(field => {
+      profile[field.id] = document.getElementById(field.id).value;
+    });
+    
+    const profileJson = JSON.stringify(profile, null, 2);
+    const blob = new Blob([profileJson], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${profileName}_backup.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    const timestamp = new Date().toLocaleString();
+    document.getElementById('logMsg').textContent = `${timestamp}: ${profileName} backed up to txt file`;
+  } else {
+    document.getElementById('logMsg').textContent = "Please enter a profile name before backing up.";
   }
 }

@@ -9,10 +9,21 @@
     "tabs",
     "<all_urls>"
   ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "sidebar_action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
     "default_title": "Form Filler",
-    "default_panel": "popup.html",
-    "default_icon": "icon.png"
+    "default_panel": "popup.html"
   },
   "background": {
     "scripts": ["background.js"]
