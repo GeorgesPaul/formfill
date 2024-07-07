@@ -407,4 +407,82 @@ fields:
       - Enter your occupation
       - e.g., Teacher, Engineer, Artist
 
+  - id: credit_card_name
+    label: Credit Card Name
+    description: A name to identify the credit card
+    common_labels:
+      - Card Name
+      - Credit Card Name
+    possible_placeholders:
+      - Enter a name for this card
+      - e.g., Personal Visa, Business Mastercard
+
+  - id: cardholder_name
+    label: Cardholder Name
+    description: The name of the person or entity that owns the credit card
+    common_labels:
+      - Cardholder Name
+      - Name on Card
+    possible_placeholders:
+      - Enter the name as it appears on the card
+      - e.g., John Q. Public
+
+  - id: credit_card_number
+    label: Credit Card Number
+    description: The full number printed on the credit card
+    common_labels:
+      - Card Number
+      - Credit Card Number
+    possible_placeholders:
+      - Enter your 16-digit card number
+      - e.g., 1234 5678 9012 3456
+
+  - id: credit_card_brand
+    label: Credit Card Brand
+    description: The brand or network of the credit card
+    common_labels:
+      - Card Brand
+      - Card Type
+    possible_placeholders:
+      - Select your card brand
+      - e.g., Visa, Mastercard, American Express
+
+  - id: credit_card_expiration_month
+    label: Expiration Month
+    description: The month when the credit card expires
+    common_labels:
+      - Exp. Month
+      - Valid Thru Month
+    possible_placeholders:
+      - Select expiration month
+      - e.g., 01 - January, 12 - December
+
+  - id: credit_card_expiration_year
+    label: Expiration Year
+    description: The year when the credit card expires
+    common_labels:
+      - Exp. Year
+      - Valid Thru Year
+    possible_placeholders:
+      - Enter expiration year
+      - e.g., 2024, 2025
+
+  - id: credit_card_security_code
+    label: Security Code
+    description: The security code printed on the credit card
+    aliases:
+      - CVV
+      - CVC
+      - CVV2
+    common_labels:
+      - Security Code
+      - CVV
+      - CVC
+    possible_placeholders:
+      - Enter 3 or 4-digit code
+      - e.g., 123, 1234
+    notes:
+      - Usually 3 digits, but 4 for American Express
+      - Found on the back of most cards, front for American Express
+
 # Add more fields as needed
