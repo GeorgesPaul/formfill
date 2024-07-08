@@ -1,8 +1,8 @@
 const apiUrl = 'http://localhost:11434/api/generate';
-const response_Timeout_ms = 15000; 
+const response_Timeout_ms = 60000; 
 // Example using ollama running locally
 
-const LLM_model = "gemma2"; //"llama3:70b"; 
+const LLM_model = "llama3"; //"llama3:70b"; 
 
 async function promptLLM(prompt) {
   console.log('Sending prompt to LLM:', prompt);
@@ -133,59 +133,63 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
 }
 
 // Main function to match field with LLM
-async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profileData, allFormFields) {
-  const fieldInfoString = generateFieldInfoString(fieldInfo);
-  const profileFieldsMetaDataString = profileFieldsMetaData.map(field => `- ${field.id}: ${field.label}`).join('\n'); 
-  const profileDataString = generateFieldInfoString(profileData);
-
-  // Generate a string representation of all form fields
-  const allFormFieldsString = allFormFields.map(field => {
-    return `Field:
+async function get_str_to_fill_with_LLM(formFieldsInfo, profileFieldsMetaData, profileData) {
+  const allFormFieldsString = formFieldsInfo.map((field, index) => {
+    return `Field ${index + 1}:
     Label: ${field.info.label}
     Name: ${field.info.name}
     Type: ${field.info.type}
-    Autocomplete: ${field.info.autocomplete}`;
+    Autocomplete: ${field.info.autocomplete}
+    ID: ${field.info.id}`;
   }).join('\n\n');
 
-  console.log('Preparing to call LLM API for field:', fieldInfo);
+  const profileFieldsMetaDataString = profileFieldsMetaData.map(field => `- ${field.id}: ${field.label}`).join('\n');
+  const profileDataString = generateFieldInfoString(profileData);
 
-  const prompt = `TASK: Determine the correct value to fill in a form field based on given information.
+  console.log('Preparing to call LLM API for all fields');
 
-  CURRENT FORM FIELD:
-  ${fieldInfoString}
-  
-  ALL FORM FIELDS:
-  ${allFormFieldsString}
-  
-  PROFILE FIELD MAPPINGS:
-  ${profileFieldsMetaDataString}
+  const prompt = `TASK: Determine the correct values to fill in multiple form fields based on given information.
 
-  USER DATA:
-  ${profileDataString}
-  
-  RULES:
-  1. Match the CURRENT FORM FIELD to the most appropriate PROFILE FIELD.
-  2. Prioritize the field's label as the primary identifier when available.
-  3. Use the autocomplete attribute as a strong hint for the field's purpose when present.
-  4. If a match is found, return the corresponding value from USER DATA.
-  5. Do not use placeholder values unless they exactly match USER DATA.
-  6. Return an empty string if:
-     - There is no obvious match
-     - The form field is not part of a form (e.g., search, password)
-     - The matching USER DATA field is empty
-  7. For address fields:
-     - Pay attention to specific components (city, street, house number, etc.)
-     - Consider that multiple form fields might map to parts of a single address field in USER DATA
-  8. Consider the context and relationships between ALL FORM FIELDS when making your decision.
-  9. Be aware that some fields might be mislabeled or use non-standard names.
-  
-  OUTPUT:
-  Provide only the string to fill the CURRENT FORM FIELD with. No explanation or additional text.`;
+ALL FORM FIELDS:
+${allFormFieldsString}
+
+PROFILE FIELD MAPPINGS:
+${profileFieldsMetaDataString}
+
+USER DATA:
+${profileDataString}
+
+RULES:
+1. Match each form field to the most appropriate PROFILE FIELD.
+2. Prioritize the field's label as the primary identifier when available.
+3. Use the autocomplete attribute as a strong hint for the field's purpose when present.
+4. If a match is found, provide the corresponding value from USER DATA.
+5. Do not use placeholder values unless they exactly match USER DATA.
+6. Provide an empty string if:
+   - There is no obvious match
+   - The form field is not part of a form (e.g., search, password)
+   - The matching USER DATA field is empty
+7. For address fields:
+   - Pay attention to specific components (city, street, house number, etc.)
+   - Consider that multiple form fields might map to parts of a single address field in USER DATA
+8. Consider the context and relationships between ALL FORM FIELDS when making your decisions.
+9. Be aware that some fields might be mislabeled or use non-standard names.
+
+OUTPUT:
+Provide a JSON object where each key is the field index (e.g., "Field 1", "Field 2", etc.) and the value is the string to fill that field with. Use empty strings for fields that should not be filled.
+Example:
+{
+  "Field 1": "John",
+  "Field 2": "Doe",
+  "Field 3": "",
+  "Field 4": "johndoe@example.com"
+}
+Only return the JSON object. Do not return any other text.`;
 
   try {
-    const bestMatchId = await promptLLM(prompt);
-    console.log('Best match ID from LLM:', bestMatchId);
-    return bestMatchId;
+    const response = await promptLLM(prompt);
+    console.log('LLM response:', response);
+    return JSON.parse(response);
   } catch (error) {
     console.error("Error in get_str_to_fill_with_LLM:", error);
     throw error;
@@ -351,25 +355,22 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       const formFieldsInfo = formElements.map(getFormFieldInfo);
       console.log("Form fields info:", formFieldsInfo);
 
-      for (const { element, info } of formFieldsInfo) {
-        if (info && Object.values(info).some(value => value)) {
-          try {
-            const str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile, formFieldsInfo); 
-            if (str_to_fill !== '') {
-              if (element.tagName.toLowerCase() === 'select') {
-                const bestMatch = findBestMatch(str_to_fill, info.options);
-                if (bestMatch) {
-                  element.value = Array.from(element.options).find(option => option.text === bestMatch).value;
-                }
-              } else {
-                element.value = str_to_fill;
-              }
+      const fillData = await get_str_to_fill_with_LLM(formFieldsInfo, profileFields, profile);
+
+      formFieldsInfo.forEach((field, index) => {
+        const str_to_fill = fillData[`Field ${index + 1}`];
+        if (str_to_fill) {
+          const element = field.element;
+          if (element.tagName.toLowerCase() === 'select') {
+            const bestMatch = findBestMatch(str_to_fill, field.info.options);
+            if (bestMatch) {
+              element.value = Array.from(element.options).find(option => option.text === bestMatch).value;
             }
-          } catch (fieldError) {
-            console.error("Error processing field:", info, fieldError);
+          } else {
+            element.value = str_to_fill;
           }
         }
-      }
+      });
       
       sendResponse({status: "success"});
     } catch (error) {
