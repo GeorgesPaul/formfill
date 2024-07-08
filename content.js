@@ -146,20 +146,24 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profil
   FORM FIELD:
   ${fieldInfoString}
   
-  PROFILE FIELDS META DATA:
+  PROFILE FIELD:
   ${profileFieldsMetaDataString}
 
-  PROFILE FIELDS USER DATA:
+  USER DATA:
   ${profileDataString}
   
-  INSTRUCTIONS:
-  1. Generate the string that needs to be filled out in the form field.
-  2. Never fill out the placeholder value from FORM FIELD, unless it is exactly the same as in PROFILE FIELDS USER DATA.
-  3. Return empty string if there is no obvious match. 
-  4. Return empty string if the form field is obviously not part of a form. Examples: search, password etc.
-  5. Return empty string if the matching PROFILE FIELDS USER DATA is empty. 
+  RULES:
+  1. Match the FORM FIELD to the most appropriate PROFILE FIELD.
+  2. If a match is found, return the corresponding value from USER DATA.
+  3. Do not use placeholder values unless they exactly match USER DATA.
+  4. Return an empty string if:
+     - There is no obvious match
+     - The form field is not part of a form (e.g., search, password)
+     - The matching USER DATA field is empty
+  5. For address fields, pay attention to specific components (city, street, etc.)
   
-  Return only the string to fill the form field with. No other text.`;
+  OUTPUT:
+  Provide only the string to fill the form field with. No explanation or additional text.`;
 
   try {
     const bestMatchId = await promptLLM(prompt);
@@ -177,43 +181,79 @@ async function loadYaml(src) {
   return jsyaml.load(yamlText);
 }
 
-function getNearbyText(element, maxDistance = 50) {
-  // ... (keep this function as it was) ...
+function getNearbyText(element, maxDistance = 100) {
+  let text = '';
+  let currentNode = element;
+  let distance = 0;
+
+  while (currentNode && distance < maxDistance) {
+      if (currentNode.nodeType === Node.TEXT_NODE) {
+          text += currentNode.textContent.trim() + ' ';
+      } else if (currentNode.nodeType === Node.ELEMENT_NODE) {
+          if (currentNode.tagName.toLowerCase() === 'label') {
+              text += currentNode.textContent.trim() + ' ';
+          }
+      }
+      
+      if (currentNode.previousSibling) {
+          currentNode = currentNode.previousSibling;
+      } else {
+          currentNode = currentNode.parentNode;
+          distance += 1;
+      }
+  }
+
+  return text.trim();
 }
 
 // Gets info from textbox / form input
 function getFormFieldInfo(input) {
   const info = {
-    name: input.name,
-    id: input.id,
-    placeholder: input.placeholder,
-    type: input.type,
-    required: input.required,
-    autocomplete: input.autocomplete,
-    ariaLabel: input.getAttribute('aria-label'),
-    ariaLabelledBy: input.getAttribute('aria-labelledby'),
-    ariaDescribedBy: input.getAttribute('aria-describedby'),
-    classes: input.className,
-    nearbyText: getNearbyText(input),
-    label: getAssociatedLabel(input),
-    parentElement: {
-      tagName: input.parentElement.tagName,
-      classes: input.parentElement.className
-    }
+      name: input.name,
+      id: input.id,
+      placeholder: input.placeholder,
+      type: input.type,
+      required: input.required,
+      autocomplete: input.autocomplete,
+      classes: input.className,
+      value: input.value,
+      parentElement: {
+          tagName: input.parentElement.tagName,
+          classes: input.parentElement.className
+      }
   };
 
-  // Get all data attributes
-  const dataAttributes = {};
-  for (let attr of input.attributes) {
-    if (attr.name.startsWith('data-')) {
-      dataAttributes[attr.name] = attr.value;
-    }
+  // Find all labels that reference this input's id
+  const labels = Array.from(document.querySelectorAll(`label[for="${input.id}"]`));
+
+  // Find the closest label by comparing positions
+  let closestLabel = null;
+  let minDistance = Infinity;
+  const inputRect = input.getBoundingClientRect();
+  for (const label of labels) {
+      const labelRect = label.getBoundingClientRect();
+      const distance = Math.abs(labelRect.top - inputRect.top);
+      if (distance < minDistance) {
+          minDistance = distance;
+          closestLabel = label;
+      }
   }
-  info.dataAttributes = dataAttributes;
+
+  // Get label text
+  info.label = closestLabel ? closestLabel.textContent.trim() : null;
+
+  // Get nearby text
+  info.nearbyText = getNearbyText(input);
+
+  // Get all attributes
+  info.attributes = {};
+  for (let attr of input.attributes) {
+      info.attributes[attr.name] = attr.value;
+  }
 
   // Add options for select elements
   if (input.tagName.toLowerCase() === 'select') {
-    info.options = Array.from(input.options).map(option => option.text);
+      info.options = Array.from(input.options).map(option => option.text);
   }
 
   return { element: input, info: info };
@@ -224,9 +264,24 @@ function getAssociatedLabel(input) {
   // Try to find a label that references this input
   let label = document.querySelector(`label[for="${input.id}"]`);
   
-  // If no label found, try to find a parent label
+  // If no label found, look for nearby labels
   if (!label) {
-      label = input.closest('label');
+    // Check parent elements up to 3 levels
+    let element = input;
+    for (let i = 0; i < 3; i++) {
+        element = element.parentElement;
+        if (!element) break;
+        
+        // Look for a label within this parent
+        label = element.querySelector('label');
+        if (label) break;
+        
+        // If the parent itself is a label, use it
+        if (element.tagName.toLowerCase() === 'label') {
+            label = element;
+            break;
+        }
+    }
   }
   
   // If a label is found, return its text content
