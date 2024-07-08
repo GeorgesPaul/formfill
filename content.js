@@ -1,8 +1,8 @@
 const apiUrl = 'http://localhost:11434/api/generate';
-const response_Timeout_ms = 60000; 
+const response_Timeout_ms = 120000; 
 // Example using ollama running locally
 
-const LLM_model = "llama3"; //"llama3:70b"; 
+const LLM_model = "gemma2"; //"llama3:70b"; 
 
 async function promptLLM(prompt) {
   console.log('Sending prompt to LLM:', prompt);
@@ -13,7 +13,7 @@ async function promptLLM(prompt) {
     stream: true,
     "options": {
       "seed": 123,
-      "top_k": 20,
+      "top_k": 40,
       "top_p": 0.9,
       "temperature": 0
       }
@@ -132,29 +132,56 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
   }
 }
 
+function extractJsonFromString(str) {
+  const jsonRegex = /\[[\s\S]*\]/;
+  const match = str.match(jsonRegex);
+  return match ? match[0] : null;
+}
+
 // Main function to match field with LLM
-async function get_str_to_fill_with_LLM(formFieldsInfo, profileFieldsMetaData, profileData) {
+async function get_str_to_fill_with_LLM(formFieldsInfo, profileFields, profileData) {
   const allFormFieldsString = formFieldsInfo.map((field, index) => {
-    return `Field ${index + 1}:
+    let fieldInfo = `Field ${index + 1}:
     Label: ${field.info.label}
     Name: ${field.info.name}
     Type: ${field.info.type}
     Autocomplete: ${field.info.autocomplete}
-    ID: ${field.info.id}`;
+    ID: ${field.info.id}
+    Required: ${field.info.required}
+    Placeholder: ${field.info.placeholder}
+    Classes: ${field.info.classes}
+    NearbyText: ${field.info.nearbyText}
+    Attributes: ${JSON.stringify(field.info.attributes)}`;
+
+    if (field.info.type === 'select-one' && field.info.options) {
+      fieldInfo += `\n    Options: ${field.info.options.join(', ')}`;
+    }
+
+    return fieldInfo;
   }).join('\n\n');
 
-  const profileFieldsMetaDataString = profileFieldsMetaData.map(field => `- ${field.id}: ${field.label}`).join('\n');
+  const profileFieldsString = profileFields.map(field => {
+    return `${field.id}:
+    Label: ${field.label}
+    Description: ${field.description || ''}
+    Aliases: ${field.aliases ? field.aliases.join(', ') : ''}
+    Common Labels: ${field.common_labels ? field.common_labels.join(', ') : ''}
+    Possible Placeholders: ${field.possible_placeholders ? field.possible_placeholders.join(', ') : ''}
+    Notes: ${field.notes ? field.notes.join(', ') : ''}
+    Possible Values: ${field.possible_values ? field.possible_values.join(', ') : ''}`;
+  }).join('\n\n');
+
   const profileDataString = generateFieldInfoString(profileData);
 
   console.log('Preparing to call LLM API for all fields');
 
-  const prompt = `TASK: Determine the correct values to fill in multiple form fields based on given information.
+  const prompt = `json: TASK: Determine the correct values to fill in multiple form fields based on given information.
 
 ALL FORM FIELDS:
 ${allFormFieldsString}
 
-PROFILE FIELD MAPPINGS:
-${profileFieldsMetaDataString}
+PROFILE FIELD DEFINITIONS:
+${profileFieldsString}
 
 USER DATA:
 ${profileDataString}
@@ -163,38 +190,47 @@ RULES:
 1. Match each form field to the most appropriate PROFILE FIELD.
 2. Prioritize the field's label as the primary identifier when available.
 3. Use the autocomplete attribute as a strong hint for the field's purpose when present.
-4. If a match is found, provide the corresponding value from USER DATA.
-5. Do not use placeholder values unless they exactly match USER DATA.
-6. Provide an empty string if:
+4. Consider nearby text and attributes for additional context.
+5. For dropdown fields (select elements), choose the best matching option from the provided list.
+6. If a match is found, provide the corresponding value from USER DATA.
+7. Do not use placeholder values unless they exactly match USER DATA.
+8. Provide an empty string if:
    - There is no obvious match
    - The form field is not part of a form (e.g., search, password)
    - The matching USER DATA field is empty
-7. For address fields:
+9. For address fields:
    - Pay attention to specific components (city, street, house number, etc.)
    - Consider that multiple form fields might map to parts of a single address field in USER DATA
-8. Consider the context and relationships between ALL FORM FIELDS when making your decisions.
-9. Be aware that some fields might be mislabeled or use non-standard names.
+10. Consider the context and relationships between ALL FORM FIELDS when making your decisions.
+11. Be aware that some fields might be mislabeled or use non-standard names.
+12. Use the PROFILE FIELD DEFINITIONS to understand the expected format and content of each field.
 
 OUTPUT:
-Provide a JSON object where each key is the field index (e.g., "Field 1", "Field 2", etc.) and the value is the string to fill that field with. Use empty strings for fields that should not be filled.
+Provide a JSON array of strings, where each string is the value to fill in the corresponding form field. Use empty strings for fields that should not be filled. The order of the array should match the order of the fields in ALL FORM FIELDS.
 Example:
-{
-  "Field 1": "John",
-  "Field 2": "Doe",
-  "Field 3": "",
-  "Field 4": "johndoe@example.com"
-}
-Only return the JSON object. Do not return any other text.`;
+["John", "Doe", "", "johndoe@example.com"]
+Only return the JSON array. Do not return any other text in front or behind the JSON. Do not include an explanation.`;
 
   try {
     const response = await promptLLM(prompt);
     console.log('LLM response:', response);
-    return JSON.parse(response);
+    
+    // Extract JSON from the response
+    const jsonString = extractJsonFromString(response);
+    if (!jsonString) {
+      throw new Error('No valid JSON found in LLM response');
+    }
+
+    // Parse the extracted JSON
+    const parsedResponse = JSON.parse(jsonString);
+    console.log('Parsed LLM response:', parsedResponse);
+    return parsedResponse;
   } catch (error) {
     console.error("Error in get_str_to_fill_with_LLM:", error);
     throw error;
   }
 }
+
 
 async function loadYaml(src) {
   const response = await fetch(browser.runtime.getURL(src));
@@ -357,8 +393,12 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
 
       const fillData = await get_str_to_fill_with_LLM(formFieldsInfo, profileFields, profile);
 
+      if (!Array.isArray(fillData)) {
+        throw new Error('Invalid response format from LLM');
+      }
+
       formFieldsInfo.forEach((field, index) => {
-        const str_to_fill = fillData[`Field ${index + 1}`];
+        const str_to_fill = fillData[index];
         if (str_to_fill) {
           const element = field.element;
           if (element.tagName.toLowerCase() === 'select') {
