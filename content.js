@@ -118,6 +118,7 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
   1. Find the profile field that best matches the form field.
   2. Return ONLY the id of the matching profile field.
   3. Return empty string if there is no obvious match. 
+  4. Return empty string if the form field is obviously not part of a form. Examples: search, password etc.
   
   Now, provide the id of the best matching profile field. No other text.`;
 
@@ -153,8 +154,10 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profil
   
   INSTRUCTIONS:
   1. Generate the string that needs to be filled out in the form field.
-  2. If unsure, return empty string. 
-  3. Never fill out the placeholder value from FORM FIELD, unless it is exactly the same as in PROFILE FIELDS USER DATA.
+  2. Never fill out the placeholder value from FORM FIELD, unless it is exactly the same as in PROFILE FIELDS USER DATA.
+  3. Return empty string if there is no obvious match. 
+  4. Return empty string if the form field is obviously not part of a form. Examples: search, password etc.
+  5. Return empty string if the the matching PROFILE FIELDS USER DATA is empty. 
   
   Return only the string to fill the form field with. No other text.`;
 
@@ -208,6 +211,11 @@ function getFormFieldInfo(input) {
   }
   info.dataAttributes = dataAttributes;
 
+  // Add options for select elements
+  if (input.tagName.toLowerCase() === 'select') {
+    info.options = Array.from(input.options).map(option => option.text);
+  }
+
   return { element: input, info: info };
 }
 
@@ -230,6 +238,28 @@ function getAssociatedLabel(input) {
   return null;
 }
 
+function findBestMatch(value, options) {
+  if (!value || !options || options.length === 0) return null;
+  
+  const lowerValue = value.toLowerCase();
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const option of options) {
+    const lowerOption = option.toLowerCase();
+    if (lowerOption === lowerValue) return option; // Exact match
+    
+    const score = lowerOption.includes(lowerValue) ? lowerValue.length / lowerOption.length : 0;
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = option;
+    }
+  }
+
+  return bestMatch;
+}
+
+
 browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.action === "fillForm") {
     console.log("Filling form with profile:", message.profile);
@@ -239,25 +269,30 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       const { fields: profileFields } = await loadYaml('profileFields.yaml');
       console.log("Loaded profile field meta data:", profileFields);
       
-      const formInputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
+      const formElements = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
         .filter(el => {
           const style = window.getComputedStyle(el);
           return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
         });
-      console.log("Found form text boxes:", formInputs.length);
-      
-      const formFieldsInfo = Array.from(formInputs).map(getFormFieldInfo);
+      console.log("Found form elements:", formElements.length);
+
+      const formFieldsInfo = formElements.map(getFormFieldInfo);
       console.log("Form fields info:", formFieldsInfo);
 
       for (const { element, info } of formFieldsInfo) {
         if (info && Object.values(info).some(value => value)) {
           try {
-            
             const str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile); 
-            if (str_to_fill != '') {
-              element.value = str_to_fill; 
+            if (str_to_fill !== '') {
+              if (element.tagName.toLowerCase() === 'select') {
+                const bestMatch = findBestMatch(str_to_fill, info.options);
+                if (bestMatch) {
+                  element.value = Array.from(element.options).find(option => option.text === bestMatch).value;
+                }
+              } else {
+                element.value = str_to_fill;
+              }
             }
-
           } catch (fieldError) {
             console.error("Error processing field:", info, fieldError);
           }
