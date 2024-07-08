@@ -133,44 +133,61 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
 }
 
 // Main function to match field with LLM
-async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profileData) {
-
+async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profileData, allFormFields) {
   const fieldInfoString = generateFieldInfoString(fieldInfo);
   const profileFieldsMetaDataString = profileFieldsMetaData.map(field => `- ${field.id}: ${field.label}`).join('\n'); 
   const profileDataString = generateFieldInfoString(profileData);
 
+  // Generate a string representation of all form fields
+  const allFormFieldsString = allFormFields.map(field => {
+    return `Field:
+    Label: ${field.info.label}
+    Name: ${field.info.name}
+    Type: ${field.info.type}
+    Autocomplete: ${field.info.autocomplete}`;
+  }).join('\n\n');
+
   console.log('Preparing to call LLM API for field:', fieldInfo);
 
-  const prompt = `TASK: What string to fill out in the following form field:
+  const prompt = `TASK: Determine the correct value to fill in a form field based on given information.
 
-  FORM FIELD:
+  CURRENT FORM FIELD:
   ${fieldInfoString}
   
-  PROFILE FIELD:
+  ALL FORM FIELDS:
+  ${allFormFieldsString}
+  
+  PROFILE FIELD MAPPINGS:
   ${profileFieldsMetaDataString}
 
   USER DATA:
   ${profileDataString}
   
   RULES:
-  1. Match the FORM FIELD to the most appropriate PROFILE FIELD.
-  2. If a match is found, return the corresponding value from USER DATA.
-  3. Do not use placeholder values unless they exactly match USER DATA.
-  4. Return an empty string if:
+  1. Match the CURRENT FORM FIELD to the most appropriate PROFILE FIELD.
+  2. Prioritize the field's label as the primary identifier when available.
+  3. Use the autocomplete attribute as a strong hint for the field's purpose when present.
+  4. If a match is found, return the corresponding value from USER DATA.
+  5. Do not use placeholder values unless they exactly match USER DATA.
+  6. Return an empty string if:
      - There is no obvious match
      - The form field is not part of a form (e.g., search, password)
      - The matching USER DATA field is empty
-  5. For address fields, pay attention to specific components (city, street, etc.)
+  7. For address fields:
+     - Pay attention to specific components (city, street, house number, etc.)
+     - Consider that multiple form fields might map to parts of a single address field in USER DATA
+  8. Consider the context and relationships between ALL FORM FIELDS when making your decision.
+  9. Be aware that some fields might be mislabeled or use non-standard names.
   
   OUTPUT:
-  Provide only the string to fill the form field with. No explanation or additional text.`;
+  Provide only the string to fill the CURRENT FORM FIELD with. No explanation or additional text.`;
 
   try {
     const bestMatchId = await promptLLM(prompt);
     console.log('Best match ID from LLM:', bestMatchId);
     return bestMatchId;
   } catch (error) {
-    console.error("Error in matchFieldWithllama:", error);
+    console.error("Error in get_str_to_fill_with_LLM:", error);
     throw error;
   }
 }
@@ -337,7 +354,7 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       for (const { element, info } of formFieldsInfo) {
         if (info && Object.values(info).some(value => value)) {
           try {
-            const str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile); 
+            const str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile, formFieldsInfo); 
             if (str_to_fill !== '') {
               if (element.tagName.toLowerCase() === 'select') {
                 const bestMatch = findBestMatch(str_to_fill, info.options);
