@@ -157,7 +157,7 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profil
   2. Never fill out the placeholder value from FORM FIELD, unless it is exactly the same as in PROFILE FIELDS USER DATA.
   3. Return empty string if there is no obvious match. 
   4. Return empty string if the form field is obviously not part of a form. Examples: search, password etc.
-  5. Return empty string if the the matching PROFILE FIELDS USER DATA is empty. 
+  5. Return empty string if the matching PROFILE FIELDS USER DATA is empty. 
   
   Return only the string to fill the form field with. No other text.`;
 
