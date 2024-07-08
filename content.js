@@ -1,8 +1,8 @@
 const apiUrl = 'http://localhost:11434/api/generate';
-const response_Timeout_ms = 15000; 
+const response_Timeout_ms = 20000; 
 // Example using ollama running locally
 
-const LLM_model = "gemma2"; //"llama3:70b"; 
+const LLM_model = "llama3"; //"llama3:70b"; 
 
 async function promptLLM(prompt) {
   console.log('Sending prompt to LLM:', prompt);
@@ -13,9 +13,9 @@ async function promptLLM(prompt) {
     stream: true,
     "options": {
       "seed": 123,
-      "top_k": 20,
+      "top_k": 40,
       "top_p": 0.9,
-      "temperature": 0
+      "temperature": 0.5
       }
   };
 
@@ -79,22 +79,25 @@ async function promptLLM(prompt) {
 
 function generateFieldInfoString(fieldInfo) {
   let result = "";
+  const longestKey = Math.max(...Object.keys(fieldInfo).map(key => key.length));
+  
   for (const [key, value] of Object.entries(fieldInfo)) {
     if (value !== null && value !== undefined) {
+      const paddedKey = key.padEnd(longestKey);
       if (typeof value === 'object' && !Array.isArray(value)) {
-        // For nested objects like parentElement
-        result += `${key}:\n`;
+        // For nested objects
+        result += `${paddedKey}: \n`;
         for (const [subKey, subValue] of Object.entries(value)) {
           if (subValue !== null && subValue !== undefined) {
-            result += `  ${subKey}: ${subValue}\n`;
+            result += `  ${subKey.padEnd(longestKey - 2)}: ${subValue}\n`;
           }
         }
       } else if (Array.isArray(value)) {
         // For array values
-        result += `${key}: ${value.join(', ')}\n`;
+        result += `${paddedKey}: ${value.join(', ')}\n`;
       } else {
         // For simple key-value pairs
-        result += `${key}: ${value}\n`;
+        result += `${paddedKey}: ${value}\n`;
       }
     }
   }
@@ -133,59 +136,83 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
 }
 
 // Main function to match field with LLM
-async function get_str_to_fill_with_LLM(fieldInfo, profileFieldsMetaData, profileData, allFormFields) {
-  const fieldInfoString = generateFieldInfoString(fieldInfo);
-  const profileFieldsMetaDataString = profileFieldsMetaData.map(field => `- ${field.id}: ${field.label}`).join('\n'); 
-  const profileDataString = generateFieldInfoString(profileData);
+async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, allFormFields) {
+  
+  const fieldInfoString = 
+`Label: ${fieldInfo.label || ''}
+Name: ${fieldInfo.name || ''}
+ID: ${fieldInfo.id || ''}
+Placeholder: ${fieldInfo.placeholder || ''}
+NearbyText: ${fieldInfo.nearbyText || ''}
+Attributes: ${JSON.stringify(fieldInfo.attributes || {})}${fieldInfo.type === 'select-one' && fieldInfo.options ? `\n  Options: ${fieldInfo.options.join(', ')}` : ''}`;
 
-  // Generate a string representation of all form fields
-  const allFormFieldsString = allFormFields.map(field => {
-    return `Field:
+  const allFormFieldsString = allFormFields.map((field, index) => {
+    let fieldInfo = `Field ${index + 1}:
     Label: ${field.info.label}
     Name: ${field.info.name}
-    Type: ${field.info.type}
-    Autocomplete: ${field.info.autocomplete}`;
+    ID: ${field.info.id}
+    Placeholder: ${field.info.placeholder}
+    NearbyText: ${field.info.nearbyText}`; 
+    //Attributes: ${JSON.stringify(field.info.attributes)}`;
+
+    // if (field.info.type === 'select-one' && field.info.options) {
+    //   fieldInfo += `\n    Options: ${field.info.options.join(', ')}`;
+    // }
+
+    return fieldInfo;
   }).join('\n\n');
+
+  const profileFieldsString = profileFields.map(field => {
+    return `${field.id}:
+    Label: ${field.label}
+    Description: ${field.description || ''}
+    Aliases: ${field.aliases ? field.aliases.join(', ') : ''}
+    Common Labels: ${field.common_labels ? field.common_labels.join(', ') : ''}
+    Possible Placeholders: ${field.possible_placeholders ? field.possible_placeholders.join(', ') : ''}
+    Notes: ${field.notes ? field.notes.join(', ') : ''}
+    Possible Values: ${field.possible_values ? field.possible_values.join(', ') : ''}`;
+  }).join('\n\n');
+
+  const profileDataString = generateFieldInfoString(profileData);
 
   console.log('Preparing to call LLM API for field:', fieldInfo);
 
-  const prompt = `TASK: Determine the correct value to fill in a form field based on given information.
-
-  CURRENT FORM FIELD:
-  ${fieldInfoString}
-  
-  ALL FORM FIELDS:
+  /*   ALL FORM FIELDS FOR CONTEXT:
   ${allFormFieldsString}
-  
-  PROFILE FIELD MAPPINGS:
-  ${profileFieldsMetaDataString}
 
-  USER DATA:
+  USER DATA META DATA:
+  ${profileFieldsString}*/
+
+  const prompt = `TASK: Determine the correct value to fill in a form field on a web page based on given information.
+
+FORM FIELD:
+  ${fieldInfoString}
+
+USER DATA:
   ${profileDataString}
   
   RULES:
-  1. Match the CURRENT FORM FIELD to the most appropriate PROFILE FIELD.
-  2. Prioritize the field's label as the primary identifier when available.
-  3. Use the autocomplete attribute as a strong hint for the field's purpose when present.
-  4. If a match is found, return the corresponding value from USER DATA.
-  5. Do not use placeholder values unless they exactly match USER DATA.
-  6. Return an empty string if:
+  1. From the USER DATA get the most appropriate data to fill out in the one FORM FIELD described above. 
+  2. NearbyText and Label attributes in FORM FIELD above have priority over other attributes in FORM FIELD. 
+  3. If a match is found, return the corresponding data from USER DATA.
+  4. Do not use placeholder values unless they match USER DATA.
+  5. Return an empty string if:
      - There is no obvious match
      - The form field is not part of a form (e.g., search, password)
      - The matching USER DATA field is empty
-  7. For address fields:
+  6. For address fields:
      - Pay attention to specific components (city, street, house number, etc.)
      - Consider that multiple form fields might map to parts of a single address field in USER DATA
-  8. Consider the context and relationships between ALL FORM FIELDS when making your decision.
-  9. Be aware that some fields might be mislabeled or use non-standard names.
+  7. Be aware that some fields might be mislabeled or use non-standard names.
+  8. Do not include any additional text or explanation before or after your answer. 
   
   OUTPUT:
-  Provide only the string to fill the CURRENT FORM FIELD with. No explanation or additional text.`;
+  Only a value. No explanation or additional text.`;
 
   try {
-    const bestMatchId = await promptLLM(prompt);
-    console.log('Best match ID from LLM:', bestMatchId);
-    return bestMatchId;
+    const str_to_fill = await promptLLM(prompt);
+    console.log('LLM response for field:', str_to_fill);
+    return str_to_fill;
   } catch (error) {
     console.error("Error in get_str_to_fill_with_LLM:", error);
     throw error;

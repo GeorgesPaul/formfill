@@ -407,16 +407,6 @@ fields:
       - Enter your occupation
       - e.g., Teacher, Engineer, Artist
 
-  - id: credit_card_name
-    label: Credit Card Name
-    description: A name to identify the credit card
-    common_labels:
-      - Card Name
-      - Credit Card Name
-    possible_placeholders:
-      - Enter a name for this card
-      - e.g., Personal Visa, Business Mastercard
-
   - id: cardholder_name
     label: Cardholder Name
     description: The name of the person or entity that owns the credit card

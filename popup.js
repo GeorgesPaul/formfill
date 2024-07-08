@@ -43,7 +43,7 @@ function createTestProfile() {
       address_street: 'Main Street',
       address_house_number: '123',
       address_city: 'Anytown',
-      address_state: 'State',
+      address_state: 'California',
       address_postal_code: '12345',
       address_country: 'United States',
       date_of_birth_day: '10',
