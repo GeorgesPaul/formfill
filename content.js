@@ -358,6 +358,19 @@ function findBestMatch(value, options) {
   return bestMatch;
 }
 
+function simulateInput(element, value) {
+  element.focus();
+  const inputEvent = new InputEvent('input', {
+    inputType: 'insertText',
+    data: value,
+    bubbles: true,
+    cancelable: true,
+  });
+  element.value = value;
+  element.dispatchEvent(inputEvent);
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  element.blur();
+}
 
 browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.action === "fillForm") {
@@ -389,7 +402,8 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
                   element.value = Array.from(element.options).find(option => option.text === bestMatch).value;
                 }
               } else {
-                element.value = str_to_fill;
+                simulateInput(element, str_to_fill);
+                //element.value = str_to_fill;
               }
             }
           } catch (fieldError) {
