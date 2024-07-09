@@ -78,30 +78,27 @@ async function promptLLM(prompt) {
 }
 
 function generateFieldInfoString(fieldInfo) {
-  let result = "";
-  const longestKey = Math.max(...Object.keys(fieldInfo).map(key => key.length));
-  
-  for (const [key, value] of Object.entries(fieldInfo)) {
-    if (value !== null && value !== undefined) {
-      const paddedKey = key.padEnd(longestKey);
-      if (typeof value === 'object' && !Array.isArray(value)) {
-        // For nested objects
-        result += `${paddedKey}: \n`;
-        for (const [subKey, subValue] of Object.entries(value)) {
-          if (subValue !== null && subValue !== undefined) {
-            result += `  ${subKey.padEnd(longestKey - 2)}: ${subValue}\n`;
-          }
+  // Create a deep copy of the object to avoid modifying the original
+  let jsonObject = JSON.parse(JSON.stringify(fieldInfo));
+
+  // Remove null and undefined values
+  function removeEmptyValues(obj) {
+    for (let key in obj) {
+      if (obj[key] === null || obj[key] === undefined) {
+        delete obj[key];
+      } else if (typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+        removeEmptyValues(obj[key]);
+        if (Object.keys(obj[key]).length === 0) {
+          delete obj[key];
         }
-      } else if (Array.isArray(value)) {
-        // For array values
-        result += `${paddedKey}: ${value.join(', ')}\n`;
-      } else {
-        // For simple key-value pairs
-        result += `${paddedKey}: ${value}\n`;
       }
     }
   }
-  return result;
+
+  removeEmptyValues(jsonObject);
+
+  // Convert the object to a JSON string
+  return JSON.stringify(jsonObject, null, 2);
 }
 
 // Main function to match field with LLM
@@ -138,13 +135,15 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
 // Main function to match field with LLM
 async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, allFormFields) {
   
-  const fieldInfoString = 
-`Label: ${fieldInfo.label || ''}
-Name: ${fieldInfo.name || ''}
-ID: ${fieldInfo.id || ''}
-Placeholder: ${fieldInfo.placeholder || ''}
-NearbyText: ${fieldInfo.nearbyText || ''}
-Attributes: ${JSON.stringify(fieldInfo.attributes || {})}${fieldInfo.type === 'select-one' && fieldInfo.options ? `\n  Options: ${fieldInfo.options.join(', ')}` : ''}`;
+  const fieldInfoString = JSON.stringify({
+    Label: fieldInfo.label || '',
+    Name: fieldInfo.name || '',
+    ID: fieldInfo.id || '',
+    Placeholder: fieldInfo.placeholder || '',
+    NearbyText: fieldInfo.nearbyText || '',
+    Attributes: fieldInfo.attributes || {},
+    Options: fieldInfo.type === 'select-one' && fieldInfo.options ? fieldInfo.options : undefined
+  }, null, 2);
 
   const allFormFieldsString = allFormFields.map((field, index) => {
     let fieldInfo = `Field ${index + 1}:
@@ -193,7 +192,7 @@ USER DATA:
   
   RULES:
   1. From the USER DATA get the most appropriate data to fill out in the one FORM FIELD described above. 
-  2. NearbyText and Label attributes in FORM FIELD above have priority over other attributes in FORM FIELD. 
+  2. NearbyText and Label attribute values in FORM FIELD above have priority over other attributes in FORM FIELD. 
   3. If a match is found, return the corresponding data from USER DATA.
   4. Do not use placeholder values unless they match USER DATA.
   5. Return an empty string if:
@@ -372,6 +371,18 @@ function simulateInput(element, value) {
   element.blur();
 }
 
+function trimAndRemoveQuotes(str) {
+  // First, trim leading and trailing whitespace
+  str = str.trim();
+  
+  // Then, remove leading and trailing double quotes if they exist
+  if (str.startsWith('"') && str.endsWith('"')) {
+    str = str.slice(1, -1);
+  }
+  
+  return str;
+}
+
 browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.action === "fillForm") {
     console.log("Filling form with profile:", message.profile);
@@ -394,7 +405,10 @@ browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
       for (const { element, info } of formFieldsInfo) {
         if (info && Object.values(info).some(value => value)) {
           try {
-            const str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile, formFieldsInfo); 
+
+            let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile, formFieldsInfo); 
+            str_to_fill = trimAndRemoveQuotes(str_to_fill); 
+
             if (str_to_fill !== '') {
               if (element.tagName.toLowerCase() === 'select') {
                 const bestMatch = findBestMatch(str_to_fill, info.options);
