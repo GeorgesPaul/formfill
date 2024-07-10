@@ -13,9 +13,9 @@ async function promptLLM(prompt) {
     stream: true,
     "options": {
       "seed": 123,
-      "top_k": 40,
+      "top_k": 20,
       "top_p": 0.9,
-      "temperature": 0.5
+      "temperature": 0
       }
   };
 
@@ -184,10 +184,10 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, a
 
   const prompt = `TASK: Determine the correct value to fill in a form field on a web page based on given information.
 
-FORM FIELD:
+FORM FIELD json:
   ${fieldInfoString}
 
-USER DATA:
+USER DATA json:
   ${profileDataString}
   
   RULES:
