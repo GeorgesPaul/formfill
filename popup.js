@@ -301,7 +301,16 @@ function loadProfileFromTxt() {
         const profile = JSON.parse(event.target.result);
         const profileName = file.name.replace('_backup.txt', '');
         
-        // Update form fields
+        // Clear all form fields first
+        document.getElementById('profileName').value = '';
+        profileFields.forEach(field => {
+          const input = document.getElementById(field.id);
+          if (input) {
+            input.value = '';
+          }
+        });
+
+        // Update form fields with loaded data
         document.getElementById('profileName').value = profileName;
         profileFields.forEach(field => {
           const input = document.getElementById(field.id);
