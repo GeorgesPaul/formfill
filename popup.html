@@ -54,29 +54,35 @@
       margin-right: auto;
       text-align: center; /* This centers the text within the button */
     }
-    #submitProfile, #backupProfile {
+
+    #profileFormButtons {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       margin-top: 10px;
-      width: auto;
-      float: right;
     }
 
-    #backupProfile {
-      margin-left: 10px; /* Add space to the left of the backup button */
-      margin-right: 20px; 
+    #profileFormButtons button {
+      flex: 1;
+      margin: 0 5px;
+      padding: 3px 5px;
+      height: 24px;
+      box-sizing: border-box;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    /* Increase specificity to override previous styles */
-    #profileForm #submitProfile,
-    #profileForm #backupProfile {
-      width: auto;
-      padding-left: 30px;
-      padding-right: 30px;
+    #profileFormButtons button:first-child {
+      margin-left: 0;
     }
-    /* Clear the float after the buttons */
-    #profileForm::after {
-      content: "";
-      display: table;
-      clear: both;
+
+    #profileFormButtons button:last-child {
+      margin-right: 0;
+    }
+
+    #profileFormButtons > div {
+      margin-left: 10px;
     }
 
     /* Profile select div */
@@ -173,8 +179,11 @@
   <div id="profileForm" style="display: none;">
     <h3 id="formTitle">Add Profile</h3>
     <form id="dynamicProfileForm"></form>
-    <button id="submitProfile">Save</button>
-    <button id="backupProfile">Backup to txt file</button>
+    <div id="profileFormButtons">
+      <button id="loadFromTxt">Load from txt file</button>
+      <button id="backupProfile">Backup to txt file</button>
+      <button id="submitProfile">Save</button>
+    </div>
   </div>
   <footer>
     <a href="https://github.com/GeorgesPaul/formfill" target="_blank">GitHub Repository</a>
@@ -182,4 +191,3 @@
   <script src="node_modules/js-yaml/dist/js-yaml.min.js"></script>
   <script src="popup.js"></script>
 </body>
-</html>

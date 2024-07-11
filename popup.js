@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('submitProfile').addEventListener('click', submitProfile);
     document.getElementById('profileSelect').addEventListener('change', handleProfileSelect);
     document.getElementById('backupProfile').addEventListener('click', backupProfileToTxt);
+    document.getElementById('loadFromTxt').addEventListener('click', loadProfileFromTxt);
   });
 });
 
@@ -286,4 +287,44 @@ function backupProfileToTxt() {
   } else {
     document.getElementById('logMsg').textContent = "Please enter a profile name before backing up.";
   }
+}
+
+function loadProfileFromTxt() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.txt';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = function(event) {
+      try {
+        const profile = JSON.parse(event.target.result);
+        const profileName = file.name.replace('_backup.txt', '');
+        
+        // Update form fields
+        document.getElementById('profileName').value = profileName;
+        profileFields.forEach(field => {
+          const input = document.getElementById(field.id);
+          if (input && profile[field.id]) {
+            input.value = profile[field.id];
+          }
+        });
+
+        // Save the loaded profile
+        browser.storage.local.get('profiles', function(data) {
+          const profiles = data.profiles || {};
+          profiles[profileName] = profile;
+          browser.storage.local.set({profiles: profiles}, function() {
+            updateProfileSelect(profileName);
+            const timestamp = new Date().toLocaleString();
+            document.getElementById('logMsg').textContent = `${timestamp}: ${profileName} loaded from txt file and saved`;
+          });
+        });
+      } catch (error) {
+        document.getElementById('logMsg').textContent = "Error loading profile: " + error.message;
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
 }
