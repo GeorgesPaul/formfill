@@ -383,55 +383,64 @@ function trimAndRemoveQuotes(str) {
   return str;
 }
 
-browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender) => {
   if (message.action === "fillForm") {
     console.log("Filling form with profile:", message.profile);
     const profile = message.profile;
    
-    try {
-      const { fields: profileFields } = await loadYaml('profileFields.yaml');
-      console.log("Loaded profile field meta data:", profileFields);
-      
-      const formElements = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
-        .filter(el => {
-          const style = window.getComputedStyle(el);
-          return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-        });
-      console.log("Found form elements:", formElements.length);
+    return (async () => {
+      try {
+        const { fields: profileFields } = await loadYaml('profileFields.yaml');
+        console.log("Loaded profile field meta data:", profileFields);
+        
+        const formElements = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
+          .filter(el => {
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          });
+        console.log("Found form elements:", formElements.length);
 
-      const formFieldsInfo = formElements.map(getFormFieldInfo);
-      console.log("Form fields info:", formFieldsInfo);
+        const formFieldsInfo = formElements.map(getFormFieldInfo);
+        console.log("Form fields info:", formFieldsInfo);
 
-      for (const { element, info } of formFieldsInfo) {
-        if (info && Object.values(info).some(value => value)) {
-          try {
+        let filledCount = 0;
+        const totalFields = formFieldsInfo.length;
 
-            let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile, formFieldsInfo); 
-            str_to_fill = trimAndRemoveQuotes(str_to_fill); 
+        for (const { element, info } of formFieldsInfo) {
+          if (info && Object.values(info).some(value => value)) {
+            try {
+              let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile, formFieldsInfo); 
+              str_to_fill = trimAndRemoveQuotes(str_to_fill); 
 
-            if (str_to_fill !== '') {
-              if (element.tagName.toLowerCase() === 'select') {
-                const bestMatch = findBestMatch(str_to_fill, info.options);
-                if (bestMatch) {
-                  element.value = Array.from(element.options).find(option => option.text === bestMatch).value;
+              if (str_to_fill !== '') {
+                if (element.tagName.toLowerCase() === 'select') {
+                  const bestMatch = findBestMatch(str_to_fill, info.options);
+                  if (bestMatch) {
+                    element.value = Array.from(element.options).find(option => option.text === bestMatch).value;
+                  }
+                } else {
+                  simulateInput(element, str_to_fill);
                 }
-              } else {
-                simulateInput(element, str_to_fill);
-                //element.value = str_to_fill;
+                filledCount++;
               }
+            } catch (fieldError) {
+              console.error("Error processing field:", info, fieldError);
             }
-          } catch (fieldError) {
-            console.error("Error processing field:", info, fieldError);
           }
+          // Send progress update
+          browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            filled: filledCount,
+            total: totalFields
+          });
         }
+        
+        console.log("Sending response from content script:", {status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.`});
+        return {status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.`};
+      } catch (error) {
+        console.error("Error filling form:", error);
+        return {status: "error", message: error.toString()};
       }
-      
-      sendResponse({status: "success"});
-    } catch (error) {
-      console.error("Error filling form:", error);
-      sendResponse({status: "error", message: error.toString()});
-    }
+    })();
   }
- 
-  return true;  // Indicates that we will send a response asynchronously
 });

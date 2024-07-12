@@ -1,7 +1,18 @@
 console.log("popup.js loaded");
 let profileFields = [];
 
+// A function to log things to the end user of the extension 
+// under "system messages"
+function updateStatusMessage(message) {
+  const logMsg = document.getElementById('logMsg');
+  logMsg.textContent = message;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+  
+  // Display the instructional message every time the extension loads
+  updateStatusMessage("Press the Fill Form button to start filling forms on any website.\n\nMake sure ollama is running llama3 by typing \"ollama run llama3\" after downloading and installing Ollama from Ollama.com");
+  
   loadProfileFields().then(() => {
     return loadProfiles();
   }).then(({ profileName, profile }) => {
@@ -151,19 +162,39 @@ async function fillForm() {
     
     console.log("Sending fillForm message with profile:", profile);
     
-    browser.tabs.query({active: true, currentWindow: true}, function(tabs) {
-      try {
-        browser.tabs.sendMessage(tabs[0].id, {action: "fillForm", profile: profile}, function(response) {
-          console.log("Response from content script:", response);
-        });
-      } catch (error) {
-        console.error("Error sending message to content script:", error);
+    const startTime = Date.now();
+    const startTimestamp = new Date(startTime).toLocaleString();
+    updateStatusMessage(`${startTimestamp}: Starting to fill form...`);
+    
+    try {
+      const tabs = await browser.tabs.query({active: true, currentWindow: true});
+      const response = await browser.tabs.sendMessage(tabs[0].id, {action: "fillForm", profile: profile});
+      
+      console.log("Response from content script:", response);
+      if (response && response.status === "success") {
+        const endTime = Date.now();
+        const processingTime = (endTime - startTime) / 1000; // Convert to seconds
+        const endTimestamp = new Date(endTime).toLocaleString();
+        updateStatusMessage(`${startTimestamp}: Starting to fill form...\n${response.message}\n${endTimestamp}: Done filling. It took ${processingTime.toFixed(2)} seconds to process.`);
+      } else {
+        updateStatusMessage(`Error filling form: ${response ? response.message : 'Unknown error'}`);
       }
-    });
+    } catch (error) {
+      console.error("Error sending message to content script:", error);
+      updateStatusMessage(`Error filling form: ${error.message}`);
+    }
   } else {
-    document.getElementById('logMsg').textContent = "Please select a profile to fill the form.";
+    updateStatusMessage("Please select a profile to fill the form.");
   }
 }
+
+// This listens to updates from the thread(s) running in content.js
+// This is to give user feedback about the status of the form filling (running in another thread/isolated from the extension)
+browser.runtime.onMessage.addListener((message) => {
+  if (message.action === "fillFormProgress") {
+    updateStatusMessage(`Processing ${message.filled} out of ${message.total} fields done.`);
+  }
+});
 
 function showProfileForm(mode, profileName = null) {
   console.log("showProfileForm called with mode:", mode, "and profileName:", profileName);
