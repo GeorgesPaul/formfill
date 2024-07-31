@@ -1,23 +1,62 @@
-const apiUrl = 'http://localhost:11434/api/generate';
-const response_Timeout_ms = 20000; 
-// Example using ollama running locally
 
-const LLM_model = "llama3.1"; //"llama3:70b"; 
+// Loads LLM config from file
+// Supports both Ollama and Openrouter style API requests
+let currentLlmConfig = null;
+const response_Timeout_ms = 15000; 
+
+
+async function getLlmConfig() {
+  console.log("Getting LLM config, current config:", currentLlmConfig);
+  if (currentLlmConfig) {
+    console.log("Using current config:", currentLlmConfig);
+    return currentLlmConfig;
+  }
+
+  try {
+    const data = await browser.storage.local.get(['llmConfigurations', 'currentLlmConfig']);
+    console.log("Retrieved from storage:", data);
+    if (data.currentLlmConfig && data.llmConfigurations[data.currentLlmConfig]) {
+      currentLlmConfig = data.llmConfigurations[data.currentLlmConfig];
+      console.log("Using config from storage:", currentLlmConfig);
+      return currentLlmConfig;
+    }
+  } catch (error) {
+    console.error("Error retrieving LLM config:", error);
+  }
+
+  // Fallback to default config if no current config is set
+  console.log("No current config, using default");
+  return {
+    apiUrl: 'http://localhost:11434/api/generate',
+    model: 'llama3.1',
+    apiKey: ''
+  };
+}
 
 async function promptLLM(prompt) {
-  console.log('Sending prompt to LLM:', prompt);
+  const config = await getLlmConfig();
+  console.log('Using LLM config:', config);
 
-  const requestBody = {
-    model: LLM_model,
-    prompt: prompt,
-    stream: true,
-    "options": {
-      "seed": 123,
-      "top_k": 20,
-      "top_p": 0.9,
-      "temperature": 0
+  let requestBody;
+  if (config.apiUrl.includes('openrouter.ai')) {
+    requestBody = {
+      model: config.model,
+      messages: [{ role: "user", content: prompt }],
+      stream: false
+    };
+  } else {
+    requestBody = {
+      model: config.model,
+      prompt: prompt,
+      stream: false,
+      options: {
+        seed: 123,
+        top_k: 20,
+        top_p: 0.9,
+        temperature: 0
       }
-  };
+    };
+  }
 
   const requestOptions = {
     method: 'POST',
@@ -27,8 +66,12 @@ async function promptLLM(prompt) {
     body: JSON.stringify(requestBody)
   };
 
+  if (config.apiKey) {
+    requestOptions.headers['Authorization'] = `Bearer ${config.apiKey}`;
+  }
+
   try {
-    const response = await fetch(apiUrl, requestOptions);
+    const response = await fetch(config.apiUrl, requestOptions);
     console.log('Received response from LLM API. Status:', response.status);
 
     if (!response.ok) {
@@ -37,40 +80,46 @@ async function promptLLM(prompt) {
       throw new Error(`HTTP error! status: ${response.status}, body: ${errorBody}`);
     }
 
-    const reader = response.body.getReader();
-    let accumulatedResponse = '';
-    const startTime = Date.now();
+    if (config.apiUrl.includes('openrouter.ai')) {
+      const data = await response.json();
+      return data.choices[0].message.content.trim();
+    } else {
+      const reader = response.body.getReader();
+      let accumulatedResponse = '';
+      const startTime = Date.now();
 
-    while (true) {
-      const { done, value } = await reader.read();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      if (done) {
-        break;
-      }
+        const chunk = new TextDecoder().decode(value);
+        const lines = chunk.split('\n');
 
-      const chunk = new TextDecoder().decode(value);
-      const lines = chunk.split('\n');
-
-      for (const line of lines) {
-        if (line.trim() !== '') {
-          const parsedLine = JSON.parse(line);
-          accumulatedResponse += parsedLine.response;
-
-          if (parsedLine.done) {
-            console.log('Full response:', accumulatedResponse);
-            return accumulatedResponse.trim();
+        for (const line of lines) {
+          if (line.trim() !== '') {
+            try {
+              const parsedLine = JSON.parse(line);
+              accumulatedResponse += parsedLine.response;
+              if (parsedLine.done) {
+                console.log('Full response:', accumulatedResponse);
+                return accumulatedResponse.trim();
+              }
+            } catch (parseError) {
+              console.warn('Error parsing JSON line:', line, parseError);
+              // Continue to next line if parsing fails
+            }
           }
+        }
+
+        // Check for timeout
+        const time_elapsed_ms = Date.now() - startTime;
+        if (time_elapsed_ms > response_Timeout_ms) {
+          throw new Error(`LLM API request timed out after ${time_elapsed_ms} milliseconds.`);
         }
       }
 
-      // Check for timeout
-      const time_elapsed_ms = Date.now() - startTime;
-      if (time_elapsed_ms > response_Timeout_ms) {
-        throw new Error(`LLM API request timed out after ${time_elapsed_ms} milliseconds.`);
-      }
+      throw new Error('LLM API response ended unexpectedly');
     }
-
-    throw new Error('LLM API response ended unexpectedly');
   } catch (error) {
     console.error("Error interacting with LLM API:", error);
     throw error;
@@ -422,8 +471,16 @@ function getVisibleFormElements() {
 }
 
 browser.runtime.onMessage.addListener((message, sender) => {
+
+  if (message.action === "updateLlmConfig") {
+    console.log("Updating LLM config:", message.config);
+    currentLlmConfig = message.config;
+  }
+
   if (message.action === "fillForm") {
     console.log("Filling form with profile:", message.profile);
+    console.log("Using LLM config:", message.llmConfig);
+    currentLlmConfig = message.llmConfig;
     const profile = message.profile;
    
     return (async () => {

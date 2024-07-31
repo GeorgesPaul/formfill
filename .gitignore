@@ -3,6 +3,8 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+apitest.html
+
 # Firefox Extension zip file
 *.zip
 

@@ -26,8 +26,18 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('profileSelect').addEventListener('change', handleProfileSelect);
     document.getElementById('backupProfile').addEventListener('click', backupProfileToTxt);
     document.getElementById('loadFromTxt').addEventListener('click', loadProfileFromTxt);
+    document.getElementById('llmConfigButton').addEventListener('click', openLlmConfig);
   });
 });
+
+function openLlmConfig() {
+  browser.windows.create({
+    url: 'llmConfig.html',
+    type: 'popup',
+    width: 800,
+    height: 600
+  });
+}
 
 function createTestProfile() {
   const testProfile = {
@@ -153,10 +163,12 @@ function loadProfiles() {
 async function fillForm() {
   const profileName = document.getElementById('profileSelect').value;
   if (profileName) {
-    const profiles = await browser.storage.local.get('profiles');
-    console.log("All profiles:", profiles);
-    const profile = profiles.profiles[profileName];
-    console.log("Selected profile:", profile);
+    const storage = await browser.storage.local.get(['profiles', 'llmConfigurations', 'currentLlmConfig']);
+    const profile = storage.profiles[profileName];
+    const currentConfigName = storage.currentLlmConfig;
+    const currentLlmConfig = storage.llmConfigurations[currentConfigName];
+
+    console.log("Current LLM Config:", currentLlmConfig);
     
     await setLastLoadedProfile(profileName);
     
@@ -168,7 +180,11 @@ async function fillForm() {
     
     try {
       const tabs = await browser.tabs.query({active: true, currentWindow: true});
-      const response = await browser.tabs.sendMessage(tabs[0].id, {action: "fillForm", profile: profile});
+      const response = await browser.tabs.sendMessage(tabs[0].id, {
+        action: "fillForm",
+        profile: profile,
+        llmConfig: currentLlmConfig
+      });
       
       console.log("Response from content script:", response);
       if (response && response.status === "success") {
