@@ -1,7 +1,7 @@
 # LLM Form filling Firefox extension
 A Firefox extension that fills forms using a large language model for better filling and less typing. 
 
-This mostly fixes the issues with all other form filling software that never seems to be able to get it right. 
+This attempts to fix issues with all other form filling software that never seems to be able to get it right. Note: at the time of writing (July 2024) models that can run on a laptop (for example llama3 by Meta) are not good enough to make this solution perfect. Regardless of a few mistakes when filling forms, I still find this to perform much better than other form filling apps. 
 
 # Screenie
 ![f6d6ead3ea707654c30abbcd96ac2381.png](./f6d6ead3ea707654c30abbcd96ac2381.png)

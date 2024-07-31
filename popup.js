@@ -11,7 +11,7 @@ function updateStatusMessage(message) {
 document.addEventListener('DOMContentLoaded', function() {
   
   // Display the instructional message every time the extension loads
-  updateStatusMessage("Press the Fill Form button to start filling forms on any website.\n\nMake sure ollama is running llama3 by typing \"ollama run llama3\" after downloading and installing Ollama from Ollama.com");
+  updateStatusMessage("Press the Fill Form button to start filling forms on any website.\n\nMake sure ollama is running llama3 by typing \"ollama run llama3.1\" after downloading and installing Ollama from Ollama.com");
   
   loadProfileFields().then(() => {
     return loadProfiles();

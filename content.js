@@ -2,7 +2,7 @@ const apiUrl = 'http://localhost:11434/api/generate';
 const response_Timeout_ms = 20000; 
 // Example using ollama running locally
 
-const LLM_model = "llama3"; //"llama3:70b"; 
+const LLM_model = "llama3.1"; //"llama3:70b"; 
 
 async function promptLLM(prompt) {
   console.log('Sending prompt to LLM:', prompt);
@@ -383,6 +383,44 @@ function trimAndRemoveQuotes(str) {
   return str;
 }
 
+function removeEmptyFields(profile, profileFields) {
+  const cleanProfile = {};
+  const cleanProfileFields = [];
+
+  for (const [key, value] of Object.entries(profile)) {
+    if (value !== "" && value !== null && value !== undefined) {
+      cleanProfile[key] = value;
+      const fieldDescription = profileFields.find(field => field.id === key);
+      if (fieldDescription) {
+        cleanProfileFields.push(fieldDescription);
+      }
+    }
+  }
+
+  return { cleanProfile, cleanProfileFields };
+}
+
+function getVisibleFormElements() {
+  const viewport = {
+    width: window.innerWidth || document.documentElement.clientWidth,
+    height: window.innerHeight || document.documentElement.clientHeight
+  };
+
+  return Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
+    .filter(el => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      
+      return style.display !== 'none' && 
+             style.visibility !== 'hidden' && 
+             style.opacity !== '0' &&
+             rect.top < viewport.height &&
+             rect.left < viewport.width &&
+             rect.bottom > 0 &&
+             rect.right > 0;
+    });
+}
+
 browser.runtime.onMessage.addListener((message, sender) => {
   if (message.action === "fillForm") {
     console.log("Filling form with profile:", message.profile);
@@ -392,26 +430,23 @@ browser.runtime.onMessage.addListener((message, sender) => {
       try {
         const { fields: profileFields } = await loadYaml('profileFields.yaml');
         console.log("Loaded profile field meta data:", profileFields);
-        
-        const formElements = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
-          .filter(el => {
-            const style = window.getComputedStyle(el);
-            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-          });
-        console.log("Found form elements:", formElements.length);
+       
+        // Clean the profile and profileFields
+        const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields);
+        console.log("Cleaned profile:", cleanProfile);
+        console.log("Cleaned profile fields:", cleanProfileFields);
 
+        const formElements = getVisibleFormElements();
+        console.log("Found form elements:", formElements.length);
         const formFieldsInfo = formElements.map(getFormFieldInfo);
         console.log("Form fields info:", formFieldsInfo);
-
         let filledCount = 0;
         const totalFields = formFieldsInfo.length;
-
         for (const { element, info } of formFieldsInfo) {
           if (info && Object.values(info).some(value => value)) {
             try {
-              let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profile, formFieldsInfo); 
-              str_to_fill = trimAndRemoveQuotes(str_to_fill); 
-
+              let str_to_fill = await get_str_to_fill_with_LLM(info, cleanProfileFields, cleanProfile, formFieldsInfo);
+              str_to_fill = trimAndRemoveQuotes(str_to_fill);
               if (str_to_fill !== '') {
                 if (element.tagName.toLowerCase() === 'select') {
                   const bestMatch = findBestMatch(str_to_fill, info.options);
@@ -434,7 +469,7 @@ browser.runtime.onMessage.addListener((message, sender) => {
             total: totalFields
           });
         }
-        
+       
         console.log("Sending response from content script:", {status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.`});
         return {status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.`};
       } catch (error) {
