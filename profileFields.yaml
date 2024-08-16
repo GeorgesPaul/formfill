@@ -396,6 +396,52 @@ fields:
       - Select your nationality
       - e.g., American, British, Japanese
 
+  - id: passport_number
+    label: Passport Number
+    description: The unique identifier number on a passport
+    aliases:
+      - passport ID
+      - travel document number
+    common_labels:
+      - Passport Number
+      - Passport ID
+    possible_placeholders:
+      - Enter your passport number
+      - e.g., A1234567, 123456789
+    notes:
+      - Format may vary by country
+      - Usually a combination of letters and numbers
+
+  - id: passport_expiry_day
+    label: Passport Expiry Day
+    description: The day of the month when the passport expires
+    common_labels:
+      - Expiry Day
+      - Expiration Day
+    possible_placeholders:
+      - Enter expiry day
+      - e.g., DD
+
+  - id: passport_expiry_month
+    label: Passport Expiry Month
+    description: The month when the passport expires
+    common_labels:
+      - Expiry Month
+      - Expiration Month
+    possible_placeholders:
+      - Enter expiry month
+      - e.g., MM
+
+  - id: passport_expiry_year
+    label: Passport Expiry Year
+    description: The year when the passport expires
+    common_labels:
+      - Expiry Year
+      - Expiration Year
+    possible_placeholders:
+      - Enter expiry year
+      - e.g., YYYY
+      
   - id: occupation
     label: Occupation
     description: The person's job or profession
