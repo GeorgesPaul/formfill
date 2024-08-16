@@ -72,7 +72,7 @@ function openLlmConfig() {
 function createTestProfile() {
   const testProfile = {
     'Test Profile': {
-      user_name: 'usernametest',
+      user_name: 'johndoe123',
       given_names: 'John William',
       family_names: 'Doe Smith',
       name_order: 'Given-Family',
@@ -84,8 +84,8 @@ function createTestProfile() {
       preferred_name: 'Johnny',
       full_name: 'Dr. John William van de Doe Smith Jr.',
       email: 'john.doe@example.com',
-      linkedIN: 'https://www.linkedin.com/in/georges-meinders/', 
-      Website: 'www.megahard.pro',
+      linkedIN: 'https://www.linkedin.com/in/johndoe',
+      Website: 'www.johndoe.com',
       phone: '+1 (555) 123-4567',
       phone_country_code: '+1',
       phone_area_code: '555',
@@ -98,14 +98,19 @@ function createTestProfile() {
       address_state: 'California',
       address_postal_code: '12345',
       address_country: 'United States',
-      date_of_birth_day: '10',
-      date_of_birth_month: '12',
-      date_of_birth_year: '1988', 
+      date_of_birth_day: '15',
+      date_of_birth_month: '07',
+      date_of_birth_year: '1985',
       gender: 'Male',
       nationality: 'American',
-      occupation: 'Software Engineer'
+      occupation: 'Software Engineer',
+      passport_number: 'A1234567',
+      passport_expiry_day: '20',
+      passport_expiry_month: '09',
+      passport_expiry_year: '2028'
     }
   };
+  
   return browser.storage.local.set({ 
     profiles: testProfile,
     lastLoadedProfile: 'Test Profile'

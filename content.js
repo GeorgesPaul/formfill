@@ -374,6 +374,7 @@ function simulateInput(element, value) {
   });
   element.value = value;
   element.dispatchEvent(inputEvent);
+  element.dispatchEvent(new Event('input', { bubbles: true }));
   element.dispatchEvent(new Event('change', { bubbles: true }));
   element.blur();
 }
@@ -419,6 +420,7 @@ function getVisibleFormElements() {
              style.opacity !== '0' &&
              rect.top < viewport.height &&
              rect.left < viewport.width &&
+             rect.width > 0 && rect.height > 0 &&
              rect.bottom > 0 &&
              rect.right > 0;
     });
@@ -431,6 +433,7 @@ async function fillForm(profile) {
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields);
     
     const formElements = getVisibleFormElements();
+    console.log('found formElements on page:', formElements);
     const formFieldsInfo = formElements.map(getFormFieldInfo);
     
     const config = await getLlmConfig();
@@ -441,14 +444,24 @@ async function fillForm(profile) {
     } else {
       filledFields = await fillFormSequential(formFieldsInfo, cleanProfileFields, cleanProfile);
     }
+    console.log('Fields to fill:', filledFields);
     
     const totalFields = formFieldsInfo.length;
     const filledCount = Object.keys(filledFields).length;
     
     for (const { element, info } of formFieldsInfo) {
-      if (filledFields[info.id] || filledFields[info.name]) {
-        const value = filledFields[info.id] || filledFields[info.name];
+      //console.log('info id, name, classes:', info.id, info.name, info.classes);
+      const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
+      
+      // Find the first matching class in filledFields
+      const matchingClass = classes.find(cls => cls in filledFields);
+      
+      if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
+        //console.log('Matching field found:', info.id, info.name, matchingClass || classes.join(' '));
+        const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
         fillField(element, value, info);
+      } else {
+        console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
     }
     
@@ -466,11 +479,12 @@ The LLM should be smart enough to return the correct values for all fields in th
 */
 async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData) {
   const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData);
+  //console.log('prompt:', prompt);
   try {
     const response = await promptLLM(prompt);
     return JSON.parse(response);
   } catch (error) {
-    console.error("Error in fillFormOpenRouter:", error);
+    console.error("Error in fillFormSinglePrompt:", error);
     throw error;
   }
 }
@@ -479,6 +493,8 @@ function generateSinglePromptForAllFields(formFieldsInfo, profileFields, profile
   const formFieldsString = JSON.stringify(formFieldsInfo, null, 2);
   const profileFieldsString = JSON.stringify(profileFields, null, 2);
   const profileDataString = JSON.stringify(profileData, null, 2);
+
+  //console.log('formFieldsString:', formFieldsString);
 
   return `TASK: Fill out a web form based on given information.
 
@@ -500,7 +516,6 @@ INSTRUCTIONS:
    c. Leave a field empty (do not include in the JSON) if:
       - There is no obvious match
       - The form field is not part of a form (e.g., search, password)
-      - The matching USER DATA field is empty
    d. For address fields:
       - Pay attention to specific components (city, street, house number, etc.)
       - Consider that multiple form fields might map to parts of a single address field in USER DATA
@@ -535,13 +550,29 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
 }
 
 function fillField(element, value, info) {
+  console.log(`Filling field:`, element, `with value:`, value);
+
   if (element.tagName.toLowerCase() === 'select') {
-    const bestMatch = findBestMatch(value, info.options);
-    if (bestMatch) {
-      element.value = Array.from(element.options).find(option => option.text === bestMatch).value;
-    }
+    fillSelectField(element, value);
   } else {
     simulateInput(element, value);
+  }
+}
+
+function fillSelectField(selectElement, value) {
+  console.log(`Filling select field ${selectElement.name} with value:`, value);
+  const options = Array.from(selectElement.options);
+  const optionToSelect = options.find(option => 
+    option.text.trim().toLowerCase() === value.toString().toLowerCase() || 
+    option.value.trim().toLowerCase() === value.toString().toLowerCase()
+  );
+
+  if (optionToSelect) {
+    selectElement.value = optionToSelect.value;
+    selectElement.dispatchEvent(new Event('change', { bubbles: true }));
+    console.log(`Selected option in ${selectElement.name}:`, optionToSelect.text);
+  } else {
+    console.warn(`Could not find matching option for ${value} in`, selectElement);
   }
 }
 

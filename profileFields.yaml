@@ -385,6 +385,60 @@ fields:
     possible_placeholders:
       - Select your gender
       - e.g., Male, Female, Non-binary, Prefer not to say
+      
+  - id: tax_number
+    label: Tax Identification Number
+    description: A unique number assigned by tax authorities for identification purposes
+    aliases:
+      - TIN
+      - tax ID
+      - taxpayer ID
+    common_labels:
+      - Tax ID
+      - Tax Number
+      - TIN
+    possible_placeholders:
+      - Enter your tax identification number
+      - e.g., 123-45-6789 (US), 1234567890 (UK)
+    notes:
+      - Format varies by country
+      - May be called different names in different countries (e.g., SSN in US, NIN in UK)
+
+  - id: social_security_number
+    label: Social Security Number
+    description: A unique identifier assigned by the government for social security purposes
+    aliases:
+      - SSN
+      - social insurance number
+      - national insurance number
+    common_labels:
+      - SSN
+      - Social Security
+      - National Insurance Number
+    possible_placeholders:
+      - Enter your social security number
+      - e.g., 123-45-6789 (US), AB 12 34 56 C (UK)
+    notes:
+      - Format and usage vary by country
+      - Highly sensitive information, handle with care
+
+  - id: health_insurance_number
+    label: Health Insurance Number
+    description: A unique identifier associated with an individual's health insurance coverage
+    aliases:
+      - insurance ID
+      - policy number
+      - medicare number
+    common_labels:
+      - Insurance ID
+      - Policy Number
+      - Health Card Number
+    possible_placeholders:
+      - Enter your health insurance number
+      - e.g., 1EG4-TE5-MK72 (US Medicare), 123 456 789 (Canada)
+    notes:
+      - Format varies by country and insurance provider
+      - May be called different names in different healthcare systems
 
   - id: nationality
     label: Nationality
@@ -441,7 +495,7 @@ fields:
     possible_placeholders:
       - Enter expiry year
       - e.g., YYYY
-      
+
   - id: occupation
     label: Occupation
     description: The person's job or profession
