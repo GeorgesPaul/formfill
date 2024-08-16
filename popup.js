@@ -1,5 +1,6 @@
 console.log("popup.js loaded");
 let profileFields = [];
+let currentProfileName = '';
 
 // A function to log things to the end user of the extension 
 // under "system messages"
@@ -51,11 +52,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     document.getElementById('fillForm').addEventListener('click', fillForm);
     document.getElementById('showAddProfileForm').addEventListener('click', () => showProfileForm('add'));
-    document.getElementById('submitProfile').addEventListener('click', submitProfile);
     document.getElementById('profileSelect').addEventListener('change', handleProfileSelect);
     document.getElementById('backupProfile').addEventListener('click', backupProfileToTxt);
     document.getElementById('loadFromTxt').addEventListener('click', loadProfileFromTxt);
     document.getElementById('llmConfigButton').addEventListener('click', openLlmConfig);
+    document.getElementById('removeProfile').addEventListener('click', removeSelectedProfile);
   });
 });
 
@@ -260,13 +261,19 @@ function showProfileForm(mode, profileName = null) {
   dynamicForm.appendChild(profileNameInput);
   dynamicForm.appendChild(document.createElement('br'));
 
+  // Set the current profile name
+  currentProfileName = profileName || '';
+  profileNameInput.value = currentProfileName;
+
+  // Add event listener for input changes
+  profileNameInput.addEventListener('input', handleProfileNameChange);
+
   if (mode === 'edit' && profileName) {
     browser.storage.local.get('profiles').then(data => {
       console.log("Retrieved profiles:", data.profiles);
       const profile = data.profiles[profileName];
       console.log("Retrieved profile:", profile);
       if (profile) {
-        profileNameInput.value = profileName;
         generateForm(dynamicForm, profile);
       } else {
         document.getElementById('logMsg').textContent = "Profile not found.";
@@ -275,6 +282,69 @@ function showProfileForm(mode, profileName = null) {
   } else {
     generateForm(dynamicForm);
   }
+
+  // Add event listeners to all form inputs
+  const allInputs = dynamicForm.querySelectorAll('input');
+  allInputs.forEach(input => {
+    if (input.id !== 'profileName') {
+      input.addEventListener('input', autoSaveProfile);
+    }
+  });
+}
+
+function handleProfileNameChange(event) {
+  const newProfileName = event.target.value.trim();
+  if (newProfileName && newProfileName !== currentProfileName) {
+    browser.storage.local.get('profiles').then(data => {
+      const profiles = data.profiles || {};
+      if (profiles[currentProfileName]) {
+        // Rename existing profile
+        profiles[newProfileName] = profiles[currentProfileName];
+        delete profiles[currentProfileName];
+      }
+      browser.storage.local.set({profiles: profiles}).then(() => {
+        currentProfileName = newProfileName;
+        updateProfileSelect(newProfileName);
+        document.getElementById('logMsg').textContent = `Profile renamed to ${newProfileName}`;
+      });
+    });
+  }
+}
+
+function autoSaveProfile() {
+  const profileName = document.getElementById('profileName').value.trim();
+  if (profileName) {
+    const profile = {};
+    profileFields.forEach(field => {
+      profile[field.id] = document.getElementById(field.id).value;
+    });
+    
+    browser.storage.local.get('profiles').then(data => {
+      const profiles = data.profiles || {};
+      profiles[profileName] = profile;
+      browser.storage.local.set({profiles: profiles}).then(() => {
+        document.getElementById('logMsg').textContent = `${profileName} auto-saved`;
+      });
+    });
+  }
+}
+
+function updateProfileSelect(selectedProfileName = null) {
+  browser.storage.local.get('profiles', function(data) {
+    const profileSelect = document.getElementById('profileSelect');
+    const profiles = data.profiles || {};
+    profileSelect.innerHTML = '<option value="">Select a profile</option>';
+    
+    for (let name in profiles) {
+      let option = document.createElement('option');
+      option.text = name;
+      option.value = name;
+      profileSelect.add(option);
+      if (name === selectedProfileName) {
+        option.selected = true;
+      }
+    }
+  });
 }
 
 function generateForm(form, profile = {}) {
@@ -290,48 +360,6 @@ function generateForm(form, profile = {}) {
     div.appendChild(label);
     div.appendChild(input);
     form.appendChild(div);
-  });
-}
-
-function submitProfile() {
-  const profileName = document.getElementById('profileName').value;
-  if (profileName) {
-    const profile = {};
-    profileFields.forEach(field => {
-      profile[field.id] = document.getElementById(field.id).value;
-    });
-    browser.storage.local.get('profiles', function(data) {
-      const profiles = data.profiles || {};
-      profiles[profileName] = profile;
-      browser.storage.local.set({profiles: profiles}, function() {
-        updateProfileSelect(profileName);  // Pass the profileName here
-        document.getElementById('logMsg').textContent = `${profileName} saved`;
-      });
-    });
-  } else {
-    document.getElementById('logMsg').textContent = "Please enter a profile name.";
-  }
-}
-
-// Updates the dropdown box with profiles to sync between stored profiles and what is displayed
-function updateProfileSelect(selectedProfileName = null) {
-  browser.storage.local.get('profiles', function(data) {
-    const profileSelect = document.getElementById('profileSelect');
-    const profiles = data.profiles || {};
-    profileSelect.innerHTML = '<option value="">Select a profile</option>';
-    for (let name in profiles) {
-      let option = document.createElement('option');
-      option.text = name;
-      option.value = name;
-      profileSelect.add(option);
-      if (name === selectedProfileName) {
-        option.selected = true;
-      }
-    }
-    // If no profile was selected and there are profiles, select the first one
-    if (!selectedProfileName && profileSelect.options.length > 1) {
-      profileSelect.selectedIndex = 1;
-    }
   });
 }
 
@@ -407,4 +435,30 @@ function loadProfileFromTxt() {
     reader.readAsText(file);
   };
   input.click();
+}
+
+function removeSelectedProfile() {
+  const profileSelect = document.getElementById('profileSelect');
+  const selectedProfileName = profileSelect.value;
+
+  if (!selectedProfileName) {
+    updateStatusMessage("Please select a profile to remove.");
+    return;
+  }
+
+  if (confirm(`Are you sure you want to remove the profile "${selectedProfileName}"?`)) {
+    browser.storage.local.get('profiles').then(data => {
+      const profiles = data.profiles || {};
+      if (profiles[selectedProfileName]) {
+        delete profiles[selectedProfileName];
+        browser.storage.local.set({profiles: profiles}).then(() => {
+          updateProfileSelect();
+          document.getElementById('profileForm').style.display = 'none';
+          updateStatusMessage(`Profile "${selectedProfileName}" has been removed.`);
+        });
+      } else {
+        updateStatusMessage(`Profile "${selectedProfileName}" not found.`);
+      }
+    });
+  }
 }
