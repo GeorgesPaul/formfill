@@ -433,30 +433,105 @@ async function fillForm(profile) {
     const formElements = getVisibleFormElements();
     const formFieldsInfo = formElements.map(getFormFieldInfo);
     
-    let filledCount = 0;
-    const totalFields = formFieldsInfo.length;
+    const config = await getLlmConfig();
     
-    for (const { element, info } of formFieldsInfo) {
-      if (info && Object.values(info).some(value => value)) {
-        try {
-          let str_to_fill = await get_str_to_fill_with_LLM(info, cleanProfileFields, cleanProfile, formFieldsInfo);
-          str_to_fill = trimAndRemoveQuotes(str_to_fill);
-          if (str_to_fill !== '') {
-            fillField(element, str_to_fill, info);
-            filledCount++;
-          }
-        } catch (fieldError) {
-          console.error("Error processing field:", info, fieldError);
-        }
-      }
-      updateFillProgress(filledCount, totalFields);
+    let filledFields;
+    if (config.apiUrl.includes('openrouter.ai')) {
+      filledFields = await fillFormSinglePrompt(formFieldsInfo, cleanProfileFields, cleanProfile);
+    } else {
+      filledFields = await fillFormSequential(formFieldsInfo, cleanProfileFields, cleanProfile);
     }
     
+    const totalFields = formFieldsInfo.length;
+    const filledCount = Object.keys(filledFields).length;
+    
+    for (const { element, info } of formFieldsInfo) {
+      if (filledFields[info.id] || filledFields[info.name]) {
+        const value = filledFields[info.id] || filledFields[info.name];
+        fillField(element, value, info);
+      }
+    }
+    
+    updateFillProgress(filledCount, totalFields);
     return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
   } catch (error) {
     console.error("Error filling form:", error);
     return { status: "error", message: error.toString() };
   }
+}
+
+/*
+Generates 1 prompt for all fillable elements on the page/form. 
+The LLM should be smart enough to return the correct values for all fields in the form with 1 prompt.
+*/
+async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData) {
+  const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData);
+  try {
+    const response = await promptLLM(prompt);
+    return JSON.parse(response);
+  } catch (error) {
+    console.error("Error in fillFormOpenRouter:", error);
+    throw error;
+  }
+}
+
+function generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData) {
+  const formFieldsString = JSON.stringify(formFieldsInfo, null, 2);
+  const profileFieldsString = JSON.stringify(profileFields, null, 2);
+  const profileDataString = JSON.stringify(profileData, null, 2);
+
+  return `TASK: Fill out a web form based on given information.
+
+FORM FIELDS:
+${formFieldsString}
+
+PROFILE FIELDS:
+${profileFieldsString}
+
+USER DATA:
+${profileDataString}
+
+INSTRUCTIONS:
+1. Analyze the form fields and match them with the appropriate user data.
+2. Create a JSON object where keys are either the 'id' or 'name' of the form field, and values are the corresponding data to fill.
+3. Follow these rules for matching and filling fields:
+   a. NearbyText and Label attribute values in FORM FIELDS have priority over other attributes.
+   b. Do not use placeholder values unless they match USER DATA.
+   c. Leave a field empty (do not include in the JSON) if:
+      - There is no obvious match
+      - The form field is not part of a form (e.g., search, password)
+      - The matching USER DATA field is empty
+   d. For address fields:
+      - Pay attention to specific components (city, street, house number, etc.)
+      - Consider that multiple form fields might map to parts of a single address field in USER DATA
+   e. Be aware that some fields might be mislabeled or use non-standard names.
+   f. For select fields, choose the option that best matches the USER DATA.
+4. Return only the JSON object, no additional text.
+
+OUTPUT:
+Provide a JSON object with the fields to fill. No explanation or additional text.`;
+}
+
+/*
+Generates 1 prompt for each fillable element on the page/form. 
+Use this for LLMs that are not as good at handling this type of prompt (e.g. llama3.1 8B and similar models)
+*/
+async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
+  let filledFields = {};
+  for (const { info } of formFieldsInfo) {
+    if (info && Object.values(info).some(value => value)) {
+      try {
+        let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, formFieldsInfo);
+        str_to_fill = trimAndRemoveQuotes(str_to_fill);
+        if (str_to_fill !== '') {
+          filledFields[info.id || info.name] = str_to_fill;
+        }
+      } catch (fieldError) {
+        console.error("Error processing field:", info, fieldError);
+      }
+    }
+  }
+  return filledFields;
 }
 
 function fillField(element, value, info) {
