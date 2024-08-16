@@ -275,21 +275,15 @@ function showProfileForm(mode, profileName = null) {
       console.log("Retrieved profile:", profile);
       if (profile) {
         generateForm(dynamicForm, profile);
+        addEventListenersToInputs();
       } else {
         document.getElementById('logMsg').textContent = "Profile not found.";
       }
     });
   } else {
     generateForm(dynamicForm);
+    addEventListenersToInputs();
   }
-
-  // Add event listeners to all form inputs
-  const allInputs = dynamicForm.querySelectorAll('input');
-  allInputs.forEach(input => {
-    if (input.id !== 'profileName') {
-      input.addEventListener('input', autoSaveProfile);
-    }
-  });
 }
 
 function handleProfileNameChange(event) {
@@ -311,7 +305,8 @@ function handleProfileNameChange(event) {
   }
 }
 
-function autoSaveProfile() {
+function autoSaveProfile(changedField, changedValue) {
+  console.log('autoSaveProfile triggered');
   const profileName = document.getElementById('profileName').value.trim();
   if (profileName) {
     const profile = {};
@@ -323,7 +318,9 @@ function autoSaveProfile() {
       const profiles = data.profiles || {};
       profiles[profileName] = profile;
       browser.storage.local.set({profiles: profiles}).then(() => {
-        document.getElementById('logMsg').textContent = `${profileName} auto-saved`;
+        console.log(`${profileName} auto-saved`);
+        // Add status message update
+        updateStatusMessage(`Automatically saved ${changedField}: ${changedValue} to profile "${profileName}"`);
       });
     });
   }
@@ -360,6 +357,20 @@ function generateForm(form, profile = {}) {
     div.appendChild(label);
     div.appendChild(input);
     form.appendChild(div);
+  });
+}
+
+function addEventListenersToInputs() {
+  const dynamicForm = document.getElementById('dynamicProfileForm');
+  const allInputs = dynamicForm.querySelectorAll('input');
+  allInputs.forEach(input => {
+    if (input.id === 'profileName') {
+      input.addEventListener('input', handleProfileNameChange);
+    } else {
+      input.addEventListener('input', function() {
+        autoSaveProfile(this.id, this.value);
+      });
+    }
   });
 }
 
