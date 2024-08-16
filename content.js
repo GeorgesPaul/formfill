@@ -364,27 +364,112 @@ function findBestMatch(value, options) {
   return bestMatch;
 }
 
-function simulateInput(element, value) {
-  element.focus();
-  const inputEvent = new InputEvent('input', {
-    inputType: 'insertText',
-    data: value,
-    bubbles: true,
-    cancelable: true,
-  });
-  element.value = value;
-  element.dispatchEvent(inputEvent);
-  element.dispatchEvent(new Event('input', { bubbles: true }));
-  element.dispatchEvent(new Event('change', { bubbles: true }));
-  element.blur();
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function trimAndRemoveQuotes(str) {
-  str = str.trim();
-  if (str.startsWith('"') && str.endsWith('"')) {
-    str = str.slice(1, -1);
+async function simulateHumanTyping(element, value) {
+  const specialChars = {
+    ' ': 'Space',
+    '.': 'Period',
+    '/': 'Slash',
+    '-': 'Dash'
+  };
+
+  element.focus();
+  
+  // Clear existing value
+  element.value = '';
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    const keyChar = specialChars[char] || char;
+
+    // Simulate keydown
+    const keydownEvent = new KeyboardEvent('keydown', {
+      key: char,
+      code: `Key${keyChar.toUpperCase()}`,
+      bubbles: true,
+      cancelable: true,
+    });
+    element.dispatchEvent(keydownEvent);
+
+    // Simulate keypress
+    const keypressEvent = new KeyboardEvent('keypress', {
+      key: char,
+      code: `Key${keyChar.toUpperCase()}`,
+      bubbles: true,
+      cancelable: true,
+      charCode: char.charCodeAt(0),
+    });
+    element.dispatchEvent(keypressEvent);
+
+    // Update value and dispatch input event
+    element.value += char;
+    const inputEvent = new InputEvent('input', {
+      inputType: 'insertText',
+      data: char,
+      bubbles: true,
+      cancelable: true,
+    });
+    element.dispatchEvent(inputEvent);
+
+    // Simulate keyup
+    const keyupEvent = new KeyboardEvent('keyup', {
+      key: char,
+      code: `Key${keyChar.toUpperCase()}`,
+      bubbles: true,
+      cancelable: true,
+    });
+    element.dispatchEvent(keyupEvent);
+
+    // Random delay between keystrokes (50-150ms)
+    await sleep(50 + Math.random() * 100);
   }
-  return str;
+
+  // Final events
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  element.dispatchEvent(new Event('blur', { bubbles: true }));
+}
+
+async function simulateInput(element, value) {
+  // Try different methods to set the value
+  const methods = [
+    // Method 1: Direct value assignment
+    () => {
+      element.value = value;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    // Method 2: Using Object.getOwnPropertyDescriptor
+    () => {
+      const propertyDescriptor = Object.getOwnPropertyDescriptor(element.__proto__, 'value');
+      propertyDescriptor.set.call(element, value);
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    // Method 3: Using defineProperty
+    () => {
+      Object.defineProperty(element, 'value', { writable: true, value: value });
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    // Method 4: Simulated human typing
+    () => simulateHumanTyping(element, value)
+  ];
+
+  for (const method of methods) {
+    await method();
+    await sleep(100);  // Wait a bit to see if the value sticks
+    if (element.value === value) {
+      console.log("Input successful with method:", method.name);
+      return;
+    }
+  }
+
+  console.error("Failed to set input value after trying all methods");
 }
 
 function removeEmptyFields(profile, profileFields) {
@@ -549,13 +634,13 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
   return filledFields;
 }
 
-function fillField(element, value, info) {
+async function fillField(element, value, info) {
   console.log(`Filling field:`, element, `with value:`, value);
 
   if (element.tagName.toLowerCase() === 'select') {
     fillSelectField(element, value);
   } else {
-    simulateInput(element, value);
+    await simulateInput(element, value);
   }
 }
 
