@@ -27,13 +27,14 @@
     "default_panel": "popup.html"
   },
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["background.js"], 
+    "persistent": true
   },
   "web_accessible_resources": [
-    "profileFields.yaml",
-    "node_modules/js-yaml/dist/js-yaml.min.js", 
+    "profileFields.yaml", 
     "llmConfig.html",
-    "llmConfig.js"
+    "llmConfig.js", 
+    "popup.js"
   ],
   "content_scripts": [
     {

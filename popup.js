@@ -4,8 +4,37 @@ let profileFields = [];
 // A function to log things to the end user of the extension 
 // under "system messages"
 function updateStatusMessage(message) {
+  // Skip empty messages
+  if (!message.trim()) return;
+
   const logMsg = document.getElementById('logMsg');
-  logMsg.textContent = message;
+  const heightInNrofLines = 6; // Set the desired number of lines here
+
+
+  // Get current timestamp
+  const timestamp = new Date().toLocaleString();
+
+  // Create the new message with timestamp
+  const newMessage = `${timestamp}: ${message}`;
+
+  // Split the current content into an array of messages
+  let messages = logMsg.textContent.split('\n').filter(msg => msg.trim() !== '');
+
+  // Add the new message to the beginning of the array
+  messages.unshift(newMessage);
+
+  // Keep only the most recent messages based on heightInNrofLines
+  messages = messages.slice(0, heightInNrofLines);
+
+  // Update the logMsg content
+  logMsg.textContent = messages.join('\n');
+
+  // Ensure the logMsg element has a fixed height
+  logMsg.style.height = `${heightInNrofLines * 1.5}em`; // Adjust 1.5em as needed for line height
+  logMsg.style.overflowY = 'auto';
+
+  // Scroll to the top
+  logMsg.scrollTop = 0;
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -161,43 +190,41 @@ function loadProfiles() {
 }
 
 async function fillForm() {
+  const startTime = Date.now();
   const profileName = document.getElementById('profileSelect').value;
   if (profileName) {
-    const storage = await browser.storage.local.get(['profiles', 'llmConfigurations', 'currentLlmConfig']);
+    const storage = await browser.storage.local.get(['profiles']);
     const profile = storage.profiles[profileName];
-    const currentConfigName = storage.currentLlmConfig;
-    const currentLlmConfig = storage.llmConfigurations[currentConfigName];
+    //const currentConfigName = storage.currentLlmConfig;
+    //const currentLlmConfig = storage.llmConfigurations[currentConfigName];
 
-    console.log("Current LLM Config:", currentLlmConfig);
-    
+    //console.log("Current LLM Config:", currentLlmConfig);
+
     await setLastLoadedProfile(profileName);
     
     console.log("Sending fillForm message with profile:", profile);
     
-    const startTime = Date.now();
-    const startTimestamp = new Date(startTime).toLocaleString();
-    updateStatusMessage(`${startTimestamp}: Starting to fill form...`);
+    updateStatusMessage(`Starting to fill form...`);
     
     try {
       const tabs = await browser.tabs.query({active: true, currentWindow: true});
       const response = await browser.tabs.sendMessage(tabs[0].id, {
         action: "fillForm",
-        profile: profile,
-        llmConfig: currentLlmConfig
+        profile: profile//,
+        //llmConfig: currentLlmConfig
       });
       
       console.log("Response from content script:", response);
       if (response && response.status === "success") {
         const endTime = Date.now();
         const processingTime = (endTime - startTime) / 1000; // Convert to seconds
-        const endTimestamp = new Date(endTime).toLocaleString();
-        updateStatusMessage(`${startTimestamp}: Starting to fill form...\n${response.message}\n${endTimestamp}: Done filling. It took ${processingTime.toFixed(2)} seconds to process.`);
+        updateStatusMessage(`Starting to fill form...\n${response.message}\nDone filling. It took ${processingTime.toFixed(2)} seconds to process.`);
       } else {
         updateStatusMessage(`Error filling form: ${response ? response.message : 'Unknown error'}`);
       }
     } catch (error) {
       console.error("Error sending message to content script:", error);
-      updateStatusMessage(`Error filling form: ${error.message}`);
+      updateStatusMessage(`Error filling form: ${error.toString()}`);
     }
   } else {
     updateStatusMessage("Please select a profile to fill the form.");
@@ -278,8 +305,7 @@ function submitProfile() {
       profiles[profileName] = profile;
       browser.storage.local.set({profiles: profiles}, function() {
         updateProfileSelect(profileName);  // Pass the profileName here
-        const timestamp = new Date().toLocaleString();
-        document.getElementById('logMsg').textContent = `${timestamp}: ${profileName} saved`;
+        document.getElementById('logMsg').textContent = `${profileName} saved`;
       });
     });
   } else {
@@ -329,8 +355,7 @@ function backupProfileToTxt() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
-    const timestamp = new Date().toLocaleString();
-    document.getElementById('logMsg').textContent = `${timestamp}: ${profileName} backed up to txt file`;
+    document.getElementById('logMsg').textContent = `${profileName} backed up to txt file`;
   } else {
     document.getElementById('logMsg').textContent = "Please enter a profile name before backing up.";
   }
@@ -372,8 +397,7 @@ function loadProfileFromTxt() {
           profiles[profileName] = profile;
           browser.storage.local.set({profiles: profiles}, function() {
             updateProfileSelect(profileName);
-            const timestamp = new Date().toLocaleString();
-            document.getElementById('logMsg').textContent = `${timestamp}: ${profileName} loaded from txt file and saved`;
+            document.getElementById('logMsg').textContent = `${profileName} loaded from txt file and saved`;
           });
         });
       } catch (error) {

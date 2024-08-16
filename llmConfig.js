@@ -12,7 +12,7 @@ function setupEventListeners() {
   document.getElementById('addConfig').addEventListener('click', () => showConfigForm());
   document.getElementById('editConfig').addEventListener('click', editSelectedConfig);
   document.getElementById('deleteConfig').addEventListener('click', deleteSelectedConfig);
-  document.getElementById('testApi').addEventListener('click', testSelectedApi);
+  document.getElementById('testApi').addEventListener('click', testAPI);
   document.getElementById('cancelEdit').addEventListener('click', hideConfigForm);
   document.getElementById('closePersistentMessage').addEventListener('click', hidePersistentMessage);
 }
@@ -94,19 +94,20 @@ async function updateCurrentConfig(row) {
   await browser.storage.local.set({ currentLlmConfig: configName });
   console.log(`Current LLM config set to:`, selectedConfig);
   
-  notifyAllTabs(selectedConfig);
+  //notifyAllTabs(selectedConfig);
 }
 
-function notifyAllTabs(config) {
-  browser.tabs.query({}).then((tabs) => {
-    for (let tab of tabs) {
-      browser.tabs.sendMessage(tab.id, {
-        action: "updateLlmConfig",
-        config: config
-      }).catch(err => console.log(`Could not update tab ${tab.id}:`, err));
-    }
-  });
-}
+// This doesn't work as this script can't access the content.js script
+// function notifyAllTabs(config) {
+//   browser.tabs.query({}).then((tabs) => {
+//     for (let tab of tabs) {
+//       browser.tabs.sendMessage(tab.id, {
+//         action: "updateLlmConfig",
+//         config: config
+//       }).catch(err => console.log(`Could not update tab ${tab.id}:`, err));
+//     }
+//   });
+// }
 
 function selectActiveConfig() {
   browser.storage.local.get('currentLlmConfig').then(data => {
@@ -182,7 +183,7 @@ async function saveConfigToStorage(configName, config) {
     currentLlmConfig: configName
   });
   console.log(`Saved and set current LLM config to:`, config);
-  notifyAllTabs(config);
+  //notifyAllTabs(config);
   loadConfigurations();
 }
 
@@ -212,40 +213,33 @@ async function deleteSelectedConfig() {
   }
 }
 
-async function testSelectedApi() {
-  const selectedConfig = getSelectedConfig();
-  if (selectedConfig) {
-    const data = await browser.storage.local.get('llmConfigurations');
-    const config = data.llmConfigurations[selectedConfig];
-    
-    console.log('Selected configuration:', config);
-    
-    updateStatusMessage('Testing API...');
-    
-    try {
-      const result = await browser.runtime.sendMessage({
-        action: "testAPI",
-        config: config
-      });
-      
-      handleApiTestResult(result);
-    } catch (error) {
-      console.error('Error during API test:', error);
-      updateStatusMessage('Error during API test: ' + error.message);
-    }
-  } else {
-    updateStatusMessage('Please select a configuration to test.');
+function testAPI() {
+  const config = getSelectedConfig();
+  if (!config) {
+    updateStatusMessage('No configuration selected.');
+    return;
   }
+  browser.runtime.sendMessage({ action: "performAPITest" }) // send msg to background.js to be relayed to content.js
+    .then(response => {
+      if (response && response.result) {
+        handleApiTestResult(response.result);
+      } else {
+        throw new Error('No response from content script');
+      }
+    })
+    .catch(error => {
+      console.error('Error in API test:', error);
+      updateStatusMessage('API test failed: ' + error.toString());
+    });
 }
 
 function handleApiTestResult(result) {
-  const timestamp = new Date().toLocaleString();
   if (result.success) {
     console.log('API test successful:', result.data);
     updateStatusMessage('API test successful! ' + result.data.choices[0].message.content.trim());
   } else {
     console.error('API test failed:', result.error);
-    updateStatusMessage('API test failed:' + result.error);
+    updateStatusMessage('API test failed: ' + result.error);
   }
 }
 
@@ -258,8 +252,12 @@ function showStatus(message) {
 }
 
 function updateStatusMessage(message) {
+  // Skip empty messages
+  if (!message.trim()) return;
+
   const logMsg = document.getElementById('logMsg');
-  const maxMessages = 6; // Maximum number of messages to display
+  const heightInNrofLines = 6; // Set the desired number of lines here
+
 
   // Get current timestamp
   const timestamp = new Date().toLocaleString();
@@ -273,13 +271,15 @@ function updateStatusMessage(message) {
   // Add the new message to the beginning of the array
   messages.unshift(newMessage);
 
-  // Keep only the most recent messages
-  if (messages.length > maxMessages) {
-    messages = messages.slice(0, maxMessages);
-  }
+  // Keep only the most recent messages based on heightInNrofLines
+  messages = messages.slice(0, heightInNrofLines);
 
   // Update the logMsg content
   logMsg.textContent = messages.join('\n');
+
+  // Ensure the logMsg element has a fixed height
+  logMsg.style.height = `${heightInNrofLines * 1.5}em`; // Adjust 1.5em as needed for line height
+  logMsg.style.overflowY = 'auto';
 
   // Scroll to the top
   logMsg.scrollTop = 0;
