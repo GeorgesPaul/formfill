@@ -85,7 +85,7 @@ function createTestProfile() {
       full_name: 'Dr. John William van de Doe Smith Jr.',
       email: 'john.doe@example.com',
       linkedIN: 'https://www.linkedin.com/in/johndoe',
-      Website: 'www.johndoe.com',
+      website: 'www.johndoe.com',
       phone: '+1 (555) 123-4567',
       phone_country_code: '+1',
       phone_area_code: '555',
@@ -102,12 +102,21 @@ function createTestProfile() {
       date_of_birth_month: '07',
       date_of_birth_year: '1985',
       gender: 'Male',
+      tax_number: '123-45-6789',
+      social_security_number: '987-65-4321',
+      health_insurance_number: '1EG4-TE5-MK72',
       nationality: 'American',
-      occupation: 'Software Engineer',
       passport_number: 'A1234567',
       passport_expiry_day: '20',
       passport_expiry_month: '09',
-      passport_expiry_year: '2028'
+      passport_expiry_year: '2028',
+      occupation: 'Software Engineer',
+      cardholder_name: 'John W. Doe',
+      credit_card_number: '4111111111111111',
+      credit_card_brand: 'Visa',
+      credit_card_expiration_month: '12',
+      credit_card_expiration_year: '2025',
+      credit_card_security_code: '123'
     }
   };
   
