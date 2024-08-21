@@ -262,18 +262,61 @@ USER DATA json:
   Only a value. No explanation or additional text.`;
 }
 
+function getAllFormElements() {
+  const formElements = [];
+
+  function collectFormElements(doc) {
+    const elements = doc.querySelectorAll('input:not([type="hidden"]), select, textarea');
+    formElements.push(...elements);
+
+    const iframes = doc.querySelectorAll('iframe');
+    iframes.forEach(iframe => {
+      try {
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+        collectFormElements(iframeDoc);
+      } catch (e) {
+        console.warn('Error accessing iframe:', e);
+      }
+    });
+  }
+
+  collectFormElements(document);
+  return formElements;
+}
+
 // Form field processing functions
 function getFormFieldInfo(input) {
   const info = getBasicFieldInfo(input);
   info.label = getAssociatedLabel(input);
   info.nearbyText = getNearbyText(input);
   info.attributes = getElementAttributes(input);
+  info.iframeInfo = getIframeInfo(input);
   
   if (input.tagName.toLowerCase() === 'select') {
     info.options = Array.from(input.options).map(option => option.text);
   }
 
   return { element: input, info: info };
+}
+
+function getIframeInfo(element) {
+  let win = element.ownerDocument.defaultView;
+  let iframeElement = null;
+  const iframePath = [];
+
+  while (win !== window.top) {
+    iframeElement = win.frameElement;
+    if (iframeElement) {
+      iframePath.unshift({
+        id: iframeElement.id,
+        name: iframeElement.name,
+        src: iframeElement.src
+      });
+    }
+    win = win.parent;
+  }
+
+  return iframePath.length > 0 ? iframePath : null;
 }
 
 function getBasicFieldInfo(input) {
@@ -340,6 +383,22 @@ function getElementAttributes(element) {
     attributes[attr.name] = attr.value;
   }
   return attributes;
+}
+
+function findIframesWithForms() {
+  const iframesWithForms = [];
+  const iframes = document.querySelectorAll('iframe');
+  for (const iframe of iframes) {
+    try {
+      const iframeDocument = iframe.contentDocument || iframe.contentWindow.document;
+      if (iframeDocument.querySelector('input, select, textarea')) {
+        iframesWithForms.push(iframeDocument);
+      }
+    } catch (e) {
+      console.warn('Error accessing iframe:', e);
+    }
+  }
+  return iframesWithForms.length > 0 ? iframesWithForms : [document];
 }
 
 // Form filling functions
@@ -489,26 +548,33 @@ function removeEmptyFields(profile, profileFields) {
   return { cleanProfile, cleanProfileFields };
 }
 
-function getVisibleFormElements() {
-  const viewport = {
-    width: window.innerWidth || document.documentElement.clientWidth,
-    height: window.innerHeight || document.documentElement.clientHeight
-  };
+function getVisibleFormElements(documents) {
+  let allElements = [];
+  documents.forEach(doc => {
+    const viewport = {
+      width: window.innerWidth || doc.documentElement.clientWidth,
+      height: window.innerHeight || doc.documentElement.clientHeight
+    };
 
-  return Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'))
-    .filter(el => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      
-      return style.display !== 'none' && 
-             style.visibility !== 'hidden' && 
-             style.opacity !== '0' &&
-             rect.top < viewport.height &&
-             rect.left < viewport.width &&
-             rect.width > 0 && rect.height > 0 &&
-             rect.bottom > 0 &&
-             rect.right > 0;
-    });
+    const elements = Array.from(doc.querySelectorAll('input:not([type="hidden"]), select, textarea'))
+      .filter(el => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        
+        return style.display !== 'none' && 
+               style.visibility !== 'hidden' && 
+               style.opacity !== '0' &&
+               rect.top < viewport.height &&
+               rect.left < viewport.width &&
+               rect.width > 0 && rect.height > 0 &&
+               rect.bottom > 0 &&
+               rect.right > 0;
+      });
+    
+    allElements = allElements.concat(elements);
+  });
+  
+  return allElements;
 }
 
 // Main form filling process
@@ -517,7 +583,7 @@ async function fillForm(profile) {
     const { fields: profileFields } = await loadYaml('profileFields.yaml');
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields);
     
-    const formElements = getVisibleFormElements();
+    const formElements = getAllFormElements();
     console.log('found formElements on page:', formElements);
     const formFieldsInfo = formElements.map(getFormFieldInfo);
     
@@ -535,16 +601,12 @@ async function fillForm(profile) {
     const filledCount = Object.keys(filledFields).length;
     
     for (const { element, info } of formFieldsInfo) {
-      //console.log('info id, name, classes:', info.id, info.name, info.classes);
       const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
-      
-      // Find the first matching class in filledFields
       const matchingClass = classes.find(cls => cls in filledFields);
       
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
-        //console.log('Matching field found:', info.id, info.name, matchingClass || classes.join(' '));
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
-        fillField(element, value, info);
+        await fillField(element, value, info);
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
@@ -637,10 +699,33 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
 async function fillField(element, value, info) {
   console.log(`Filling field:`, element, `with value:`, value);
 
+  if (info.iframeInfo) {
+    await focusIframeElement(info.iframeInfo);
+  }
+
+  const win = element.ownerDocument.defaultView;
+
   if (element.tagName.toLowerCase() === 'select') {
     fillSelectField(element, value);
   } else {
-    await simulateInput(element, value);
+    await simulateInput(element, value, win);
+  }
+}
+
+async function focusIframeElement(iframePath) {
+  let currentWindow = window;
+  for (const frameInfo of iframePath) {
+    await new Promise(resolve => {
+      currentWindow.focus();
+      setTimeout(() => {
+        const iframe = currentWindow.document.querySelector(`iframe[name="${frameInfo.name}"], iframe[id="${frameInfo.id}"], iframe[src="${frameInfo.src}"]`);
+        if (iframe) {
+          iframe.focus();
+          currentWindow = iframe.contentWindow;
+        }
+        resolve();
+      }, 100);
+    });
   }
 }
 
