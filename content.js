@@ -1,32 +1,8 @@
-// Loads LLM config from file
-// Supports both Ollama and Openrouter style API requests
-//let currentLlmConfig = null;
 const response_Timeout_ms = 15000;
 
 // Event listeners
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("Message received in content script:", message); 
-  if (message.action === "performAPITeste") {
-    console.log('Performing API test with config:', getLlmConfig());
-    const prompt = "Hello world in French.";
-
-    promptLLM(prompt)
-      .then(response => {
-        console.log('API test successful:', response);
-        sendResponse({ success: true, data: response });
-      })
-      .catch(error => {
-        console.error('API test failed:', error);
-        sendResponse({ success: false, error: error.toString() });
-      });
-
-    return true; // Will respond asynchronously
-  }
-
-  // if (message.action === "updateLlmConfig") {
-  //   console.log("Updating LLM config:", request.config);
-  //   currentLlmConfig = request.config;
-  // }
+  console.log("Content script received message:", message);
 
   if (message.action === "fillForm") {
     console.log("Filling form with profile:", message.profile);
@@ -674,19 +650,37 @@ OUTPUT:
 Provide a JSON object with the fields to fill. No explanation or additional text.`;
 }
 
+function trimAndRemoveQuotes(str) {
+  // First, trim leading and trailing whitespace
+  str = str.trim();
+  
+  // Then, remove leading and trailing double quotes if they exist
+  if (str.startsWith('"') && str.endsWith('"')) {
+    str = str.slice(1, -1);
+  }
+  
+  return str;
+}
+
 /*
 Generates 1 prompt for each fillable element on the page/form. 
 Use this for LLMs that are not as good at handling this type of prompt (e.g. llama3.1 8B and similar models)
 */
 async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
   let filledFields = {};
-  for (const { info } of formFieldsInfo) {
+  let filledCount = 0;
+  const totalFields = formFieldsInfo.length;
+
+  for (const { element, info } of formFieldsInfo) {
     if (info && Object.values(info).some(value => value)) {
       try {
         let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, formFieldsInfo);
         str_to_fill = trimAndRemoveQuotes(str_to_fill);
         if (str_to_fill !== '') {
           filledFields[info.id || info.name] = str_to_fill;
+          await fillField(element, str_to_fill, info);
+          filledCount++;
+          updateFillProgress(filledCount, totalFields);
         }
       } catch (fieldError) {
         console.error("Error processing field:", info, fieldError);
@@ -697,18 +691,22 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
 }
 
 async function fillField(element, value, info) {
-  console.log(`Filling field:`, element, `with value:`, value);
+  try {
+    console.log(`Filling field:`, element, `with value:`, value);
 
-  if (info.iframeInfo) {
-    await focusIframeElement(info.iframeInfo);
-  }
+    if (info.iframeInfo) {
+      await focusIframeElement(info.iframeInfo);
+    }
 
-  const win = element.ownerDocument.defaultView;
+    const win = element.ownerDocument.defaultView;
 
-  if (element.tagName.toLowerCase() === 'select') {
-    fillSelectField(element, value);
-  } else {
-    await simulateInput(element, value, win);
+    if (element.tagName.toLowerCase() === 'select') {
+      fillSelectField(element, value);
+    } else {
+      await simulateInput(element, value, win);
+    }
+  } catch (error) {
+    console.error(`Error filling field:`, element, error);
   }
 }
 
@@ -760,3 +758,19 @@ async function loadYaml(src) {
   const yamlText = await response.text();
   return jsyaml.load(yamlText);
 }
+
+
+function runContentTest() {
+  console.log("Running API test from content script...");
+  ApiUtils.testAPI().then(result => {
+    console.log("Content API test result:", result);
+  }).catch(error => {
+    console.error("Content API test error:", error);
+  });
+}
+
+// Run the test every 6 seconds
+//setInterval(runContentTest, 6000);
+
+// Run once immediately
+runContentTest();

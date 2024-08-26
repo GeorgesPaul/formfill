@@ -12,7 +12,7 @@ function setupEventListeners() {
   document.getElementById('addConfig').addEventListener('click', () => showConfigForm());
   document.getElementById('editConfig').addEventListener('click', editSelectedConfig);
   document.getElementById('deleteConfig').addEventListener('click', deleteSelectedConfig);
-  document.getElementById('testApi').addEventListener('click', testAPI);
+  document.getElementById('testApi').addEventListener('click', initiateAPITest);
   document.getElementById('cancelEdit').addEventListener('click', hideConfigForm);
   document.getElementById('closePersistentMessage').addEventListener('click', hidePersistentMessage);
 }
@@ -213,30 +213,30 @@ async function deleteSelectedConfig() {
   }
 }
 
-function testAPI() {
+function initiateAPITest() {
   const config = getSelectedConfig();
   if (!config) {
     updateStatusMessage('No configuration selected.');
     return;
   }
-  browser.runtime.sendMessage({ action: "performAPITest" }) // send msg to background.js to be relayed to content.js
-    .then(response => {
-      if (response && response.result) {
-        handleApiTestResult(response.result);
-      } else {
-        throw new Error('No response from content script');
-      }
+  updateStatusMessage('Initiating API test...');
+  console.log('Starting API test');
+  
+  ApiUtils.testAPI()
+    .then(result => {
+      console.log('Received API test result:', result);
+      handleApiTestResult(result);
     })
     .catch(error => {
       console.error('Error in API test:', error);
-      updateStatusMessage('API test failed: ' + error.toString());
+      updateStatusMessage('API test failed: ' + error.message);
     });
 }
 
 function handleApiTestResult(result) {
   if (result.success) {
     console.log('API test successful:', result.data);
-    updateStatusMessage('API test successful! ' + result.data.choices[0].message.content.trim());
+    updateStatusMessage('API test successful! ' + result.data);
   } else {
     console.error('API test failed:', result.error);
     updateStatusMessage('API test failed: ' + result.error);
@@ -284,3 +284,24 @@ function updateStatusMessage(message) {
   // Scroll to the top
   logMsg.scrollTop = 0;
 }
+
+// function runPopupTest() {
+//   console.log("Running API test from popup...");
+//   if (typeof ApiUtils !== 'undefined' && ApiUtils.testAPI) {
+//     ApiUtils.testAPI().then(result => {
+//       console.log("Popup API test result:", result);
+//       handleApiTestResult(result);
+//     }).catch(error => {
+//       console.error("Popup API test error:", error);
+//       updateStatusMessage('API test failed: ' + error.message);
+//     });
+//   } else {
+//     console.error("ApiUtils is not defined in the popup context");
+//   }
+// }
+
+// // Run the test every 6 seconds
+// setInterval(runPopupTest, 6000);
+
+// // Run once when popup opens
+// runPopupTest();

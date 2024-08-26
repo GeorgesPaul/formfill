@@ -8,7 +8,8 @@
     "storage",
     "tabs",
     "<all_urls>",
-    "http://localhost/*"
+    "http://localhost/*",
+    "https://localhost/*"
   ],
   "icons": {
     "16": "icons/icon16.png",
@@ -27,10 +28,11 @@
     "default_panel": "popup.html"
   },
   "background": {
-    "scripts": ["background.js"], 
+    "scripts": ["apiUtils.js", "background.js"], 
     "persistent": true
   },
   "web_accessible_resources": [
+    "apiUtils.js",
     "profileFields.yaml", 
     "llmConfig.html",
     "llmConfig.js", 
@@ -40,6 +42,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "apiUtils.js",
         "content.js",
         "node_modules/js-yaml/dist/js-yaml.min.js"
       ]
