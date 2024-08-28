@@ -7,7 +7,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "fillForm") {
     console.log("Filling form with profile:", message.profile);
 
-    return fillForm(message.profile);
+    fillForm(message.profile).then(result => {
+      sendResponse(result);
+    }).catch(error => {
+      sendResponse({ status: "error", message: error.toString() });
+    });
+
+    return true; // Indicate that we will send a response asynchronously
   }
 });
 
@@ -238,7 +244,8 @@ USER DATA json:
   Only a value. No explanation or additional text.`;
 }
 
-function getAllFormElements() {
+
+function getAllFormElements(doc = document) {
   const formElements = [];
 
   function collectFormElements(doc) {
@@ -256,7 +263,7 @@ function getAllFormElements() {
     });
   }
 
-  collectFormElements(document);
+  collectFormElements(doc);
   return formElements;
 }
 
@@ -558,13 +565,13 @@ async function fillForm(profile) {
   try {
     const { fields: profileFields } = await loadYaml('profileFields.yaml');
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields);
-    
+
     const formElements = getAllFormElements();
     console.log('found formElements on page:', formElements);
     const formFieldsInfo = formElements.map(getFormFieldInfo);
-    
+
     const config = await getLlmConfig();
-    
+
     let filledFields;
     if (config.apiUrl.includes('openrouter.ai')) {
       filledFields = await fillFormSinglePrompt(formFieldsInfo, cleanProfileFields, cleanProfile);
@@ -572,22 +579,23 @@ async function fillForm(profile) {
       filledFields = await fillFormSequential(formFieldsInfo, cleanProfileFields, cleanProfile);
     }
     console.log('Fields to fill:', filledFields);
-    
+
     const totalFields = formFieldsInfo.length;
-    const filledCount = Object.keys(filledFields).length;
-    
+    let filledCount = 0;
+
     for (const { element, info } of formFieldsInfo) {
       const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
       const matchingClass = classes.find(cls => cls in filledFields);
-      
+
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
         await fillField(element, value, info);
+        filledCount++;
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
     }
-    
+
     updateFillProgress(filledCount, totalFields);
     return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
   } catch (error) {
@@ -773,4 +781,4 @@ function runContentTest() {
 //setInterval(runContentTest, 6000);
 
 // Run once immediately
-runContentTest();
+//runContentTest();

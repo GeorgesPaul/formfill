@@ -45,7 +45,8 @@
         "apiUtils.js",
         "content.js",
         "node_modules/js-yaml/dist/js-yaml.min.js"
-      ]
+      ],
+      "run_at": "document_idle"
     }
   ]
 }
