@@ -246,25 +246,7 @@ USER DATA json:
 
 
 function getAllFormElements(doc = document) {
-  const formElements = [];
-
-  function collectFormElements(doc) {
-    const elements = doc.querySelectorAll('input:not([type="hidden"]), select, textarea');
-    formElements.push(...elements);
-
-    const iframes = doc.querySelectorAll('iframe');
-    iframes.forEach(iframe => {
-      try {
-        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-        collectFormElements(iframeDoc);
-      } catch (e) {
-        console.warn('Error accessing iframe:', e);
-      }
-    });
-  }
-
-  collectFormElements(doc);
-  return formElements;
+  return Array.from(doc.querySelectorAll('input:not([type="hidden"]), select, textarea'));
 }
 
 // Form field processing functions
@@ -273,33 +255,13 @@ function getFormFieldInfo(input) {
   info.label = getAssociatedLabel(input);
   info.nearbyText = getNearbyText(input);
   info.attributes = getElementAttributes(input);
-  info.iframeInfo = getIframeInfo(input);
-  
+  // Remove the iframeInfo property
+
   if (input.tagName.toLowerCase() === 'select') {
     info.options = Array.from(input.options).map(option => option.text);
   }
 
   return { element: input, info: info };
-}
-
-function getIframeInfo(element) {
-  let win = element.ownerDocument.defaultView;
-  let iframeElement = null;
-  const iframePath = [];
-
-  while (win !== window.top) {
-    iframeElement = win.frameElement;
-    if (iframeElement) {
-      iframePath.unshift({
-        id: iframeElement.id,
-        name: iframeElement.name,
-        src: iframeElement.src
-      });
-    }
-    win = win.parent;
-  }
-
-  return iframePath.length > 0 ? iframePath : null;
 }
 
 function getBasicFieldInfo(input) {
@@ -567,7 +529,11 @@ async function fillForm(profile) {
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields);
 
     const formElements = getAllFormElements();
+    const totalFields = formElements.length;
     console.log('found formElements on page:', formElements);
+
+    browser.runtime.sendMessage({ action: "fillFormStart" });
+
     const formFieldsInfo = formElements.map(getFormFieldInfo);
 
     const config = await getLlmConfig();
@@ -580,7 +546,6 @@ async function fillForm(profile) {
     }
     console.log('Fields to fill:', filledFields);
 
-    const totalFields = formFieldsInfo.length;
     let filledCount = 0;
 
     for (const { element, info } of formFieldsInfo) {
@@ -591,17 +556,35 @@ async function fillForm(profile) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
         await fillField(element, value, info);
         filledCount++;
+        updateFillProgress(filledCount, totalFields);
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
     }
 
-    updateFillProgress(filledCount, totalFields);
+    browser.runtime.sendMessage({ 
+      action: "fillFormComplete",
+      filledCount: filledCount,
+      totalFields: totalFields
+    });
+
     return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
   } catch (error) {
     console.error("Error filling form:", error);
+    browser.runtime.sendMessage({ 
+      action: "fillFormError",
+      error: error.toString()
+    });
     return { status: "error", message: error.toString() };
   }
+}
+
+function updateFillProgress(filled, total) {
+  browser.runtime.sendMessage({
+    action: "fillFormProgress",
+    filled: filled,
+    total: total
+  });
 }
 
 /*
@@ -702,36 +685,13 @@ async function fillField(element, value, info) {
   try {
     console.log(`Filling field:`, element, `with value:`, value);
 
-    if (info.iframeInfo) {
-      await focusIframeElement(info.iframeInfo);
-    }
-
-    const win = element.ownerDocument.defaultView;
-
     if (element.tagName.toLowerCase() === 'select') {
       fillSelectField(element, value);
     } else {
-      await simulateInput(element, value, win);
+      await simulateInput(element, value);
     }
   } catch (error) {
     console.error(`Error filling field:`, element, error);
-  }
-}
-
-async function focusIframeElement(iframePath) {
-  let currentWindow = window;
-  for (const frameInfo of iframePath) {
-    await new Promise(resolve => {
-      currentWindow.focus();
-      setTimeout(() => {
-        const iframe = currentWindow.document.querySelector(`iframe[name="${frameInfo.name}"], iframe[id="${frameInfo.id}"], iframe[src="${frameInfo.src}"]`);
-        if (iframe) {
-          iframe.focus();
-          currentWindow = iframe.contentWindow;
-        }
-        resolve();
-      }, 100);
-    });
   }
 }
 
@@ -750,14 +710,6 @@ function fillSelectField(selectElement, value) {
   } else {
     console.warn(`Could not find matching option for ${value} in`, selectElement);
   }
-}
-
-function updateFillProgress(filled, total) {
-  browser.runtime.sendMessage({
-    action: "fillFormProgress",
-    filled: filled,
-    total: total
-  });
 }
 
 // Utility functions
