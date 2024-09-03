@@ -407,7 +407,12 @@ function backupProfileToTxt() {
     
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${profileName}_backup.txt`;
+
+    // Get current date
+    const date = new Date();
+    const formattedDate = `${date.getFullYear()} ${String(date.getMonth() + 1).padStart(2, '0')} ${String(date.getDate()).padStart(2, '0')}`;
+    
+    a.download = `${formattedDate} ${profileName}.txt`; // Updated filename format
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

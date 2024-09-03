@@ -346,6 +346,16 @@ fields:
       - Select your country
       - e.g., United States, France, Japan
 
+  - id: place_of_birth
+    label: Place of Birth
+    description: The city or country where the person was born
+    common_labels:
+      - Place of Birth
+      - Birthplace
+    possible_placeholders:
+      - Enter your place of birth
+      - e.g., New York, USA
+
   - id: date_of_birth_day
     label: Date of Birth day
     description: The person's date of birth as day
@@ -466,6 +476,36 @@ fields:
       - Format may vary by country
       - Usually a combination of letters and numbers
 
+  - id: passport_issue_day
+    label: Passport Issue Day
+    description: The day of the month when the passport was issued
+    common_labels:
+      - Issue Day
+      - Date of Issue
+    possible_placeholders:
+      - Enter issue day
+      - e.g., DD
+
+  - id: passport_issue_month
+    label: Passport Issue Month
+    description: The month when the passport was issued
+    common_labels:
+      - Issue Month
+      - Date of Issue
+    possible_placeholders:
+      - Enter issue month
+      - e.g., MM
+
+  - id: passport_issue_year
+    label: Passport Issue Year
+    description: The year when the passport was issued
+    common_labels:
+      - Issue Year
+      - Date of Issue
+    possible_placeholders:
+      - Enter issue year
+      - e.g., YYYY
+
   - id: passport_expiry_day
     label: Passport Expiry Day
     description: The day of the month when the passport expires
@@ -574,5 +614,45 @@ fields:
     notes:
       - Usually 3 digits, but 4 for American Express
       - Found on the back of most cards, front for American Express
+
+  - id: iban
+    label: IBAN
+    description: International Bank Account Number
+    common_labels:
+      - IBAN
+      - International Bank Account Number
+    possible_placeholders:
+      - Enter your IBAN
+      - e.g., GB29 NWBK 6016 1331 9268 19
+
+  - id: bic
+    label: BIC
+    description: Bank Identifier Code
+    common_labels:
+      - BIC
+      - SWIFT Code
+    possible_placeholders:
+      - Enter your BIC
+      - e.g., NWBKGB2L
+
+  - id: account_holder_name
+    label: Account Holder Name
+    description: The name of the person or entity that owns the bank account
+    common_labels:
+      - Account Holder Name
+      - Name on Account
+    possible_placeholders:
+      - Enter the name as it appears on the account
+      - e.g., John Doe
+
+  - id: bank_name
+    label: Bank Name
+    description: The name of the bank where the account is held
+    common_labels:
+      - Bank Name
+    possible_placeholders:
+      - Enter the name of your bank
+      - e.g., National Westminster Bank
+
 
 # Add more fields as needed

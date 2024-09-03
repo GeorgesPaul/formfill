@@ -430,7 +430,7 @@ async function simulateHumanTyping(element, value) {
     element.dispatchEvent(keyupEvent);
 
     // Random delay between keystrokes (50-150ms)
-    await sleep(50 + Math.random() * 100);
+    await sleep(10 + Math.random() * 50);
   }
 
   // Final events
