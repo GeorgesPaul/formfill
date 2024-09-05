@@ -372,6 +372,22 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function simulateMouseClick(element) {
+  const rect = element.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+
+  const clickEvent = new MouseEvent('click', {
+    view: window,
+    bubbles: true,
+    cancelable: true,
+    clientX: centerX,
+    clientY: centerY
+  });
+
+  element.dispatchEvent(clickEvent);
+}
+
 async function simulateHumanTyping(element, value) {
   const specialChars = {
     ' ': 'Space',
@@ -551,12 +567,13 @@ async function fillForm(profile) {
     for (const { element, info } of formFieldsInfo) {
       const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
       const matchingClass = classes.find(cls => cls in filledFields);
-
+      
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
         await fillField(element, value, info);
-        filledCount++;
-        updateFillProgress(filledCount, totalFields);
+        
+        // Add a small delay between filling fields
+        await sleep(10);
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
@@ -623,18 +640,17 @@ ${profileDataString}
 
 INSTRUCTIONS:
 1. Analyze the form fields and match them with the appropriate user data.
-2. Create a JSON object where keys are either the 'id' or 'name' of the form field, and values are the corresponding data to fill.
+2. Create a JSON object where keys are either the 'id', 'name' or 'class' of the form field (depending on which one is present), and values are the corresponding data to fill.
 3. Follow these rules for matching and filling fields:
-   a. NearbyText and Label attribute values in FORM FIELDS have priority over other attributes.
-   b. Do not use placeholder values unless they match USER DATA.
-   c. Leave a field empty (do not include in the JSON) if:
+   a. Do not use placeholder values unless they match USER DATA.
+   b. Leave a field empty (do not include in the JSON) if:
       - There is no obvious match
       - The form field is not part of a form (e.g., search, password)
-   d. For address fields:
+   c. For address fields:
       - Pay attention to specific components (city, street, house number, etc.)
       - Consider that multiple form fields might map to parts of a single address field in USER DATA
-   e. Be aware that some fields might be mislabeled or use non-standard names.
-   f. For select fields, choose the option that best matches the USER DATA.
+   d. Be aware that some fields might be mislabeled or use non-standard names.
+   e. For select fields, choose the option that best matches the USER DATA.
 4. Return only the JSON object, no additional text.
 
 OUTPUT:
@@ -682,17 +698,28 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
 }
 
 async function fillField(element, value, info) {
-  try {
-    console.log(`Filling field:`, element, `with value:`, value);
+  console.log(`Filling field:`, element, `with value:`, value);
 
-    if (element.tagName.toLowerCase() === 'select') {
-      fillSelectField(element, value);
-    } else {
-      await simulateInput(element, value);
-    }
-  } catch (error) {
-    console.error(`Error filling field:`, element, error);
+  if (info.iframeInfo) {
+    await focusIframeElement(info.iframeInfo);
   }
+
+  // Simulate mouse click on the element
+  simulateMouseClick(element);
+
+  // Wait a bit for any click-triggered events to settle
+  await sleep(50);
+
+  const win = element.ownerDocument.defaultView;
+
+  if (element.tagName.toLowerCase() === 'select') {
+    fillSelectField(element, value);
+  } else {
+    await simulateInput(element, value, win);
+  }
+
+  // Wait a bit after filling
+  await sleep(50);
 }
 
 function fillSelectField(selectElement, value) {

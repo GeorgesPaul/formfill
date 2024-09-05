@@ -337,14 +337,24 @@ fields:
       - e.g., 90210, SW1A 1AA, 100-0001
 
   - id: address_country
-    label: Country
-    description: The name of the country
+    label: Address Country
+    description: The name of the country where the address is located
     common_labels:
       - Country
       - Nation
     possible_placeholders:
       - Select your country
       - e.g., United States, France, Japan
+
+  - id: country_of_birth
+    label: Country of Birth
+    description: The country where the person was born
+    common_labels:
+      - Country of Birth
+      - Birth Country
+    possible_placeholders:
+      - Enter your country of birth
+      - e.g., United States, Canada, Japan
 
   - id: place_of_birth
     label: Place of Birth
@@ -654,5 +664,16 @@ fields:
       - Enter the name of your bank
       - e.g., National Westminster Bank
 
+  - id: newsletter
+    label: Newsletter Subscription
+    description: Indicates whether the user wants to receive newsletters
+    common_labels:
+      - Newsletter Subscription
+      - Subscribe to Newsletter
+    possible_values:
+      - Yes
+      - No
+    possible_placeholders:
+      - Select your preference
 
 # Add more fields as needed
