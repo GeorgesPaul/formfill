@@ -372,10 +372,27 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function simulateMouseClick(element) {
+// Simulates fake manual events on an element to trick web pages into thinking they are being filled out by a human
+function triggerEvents(element, eventTypes) {
+  eventTypes.forEach(eventType => {
+    const event = new Event(eventType, { bubbles: true, cancelable: true });
+    element.dispatchEvent(event);
+  });
+}
+
+function simulateMouseClick(element, outsideClick = false) {
   const rect = element.getBoundingClientRect();
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
+  let centerX, centerY;
+
+  if (outsideClick) {
+    // Click slightly outside the element
+    centerX = rect.right + 10;
+    centerY = rect.bottom + 10;
+  } else {
+    // Click in the center of the element
+    centerX = rect.left + rect.width / 2;
+    centerY = rect.top + rect.height / 2;
+  }
 
   const clickEvent = new MouseEvent('click', {
     view: window,
@@ -385,8 +402,13 @@ function simulateMouseClick(element) {
     clientY: centerY
   });
 
-  element.dispatchEvent(clickEvent);
+  if (outsideClick) {
+    document.elementFromPoint(centerX, centerY)?.dispatchEvent(clickEvent);
+  } else {
+    element.dispatchEvent(clickEvent);
+  }
 }
+
 
 async function simulateHumanTyping(element, value) {
   const specialChars = {
@@ -479,6 +501,8 @@ async function simulateInput(element, value) {
     // Method 4: Simulated human typing
     () => simulateHumanTyping(element, value)
   ];
+
+  triggerEvents(element, ['input', 'change', 'blur']);
 
   for (const method of methods) {
     await method();
@@ -578,6 +602,9 @@ async function fillForm(profile) {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
     }
+    
+    // Simulate final click outside the form
+    simulateMouseClick(document.body, true);
 
     browser.runtime.sendMessage({ 
       action: "fillFormComplete",
@@ -698,6 +725,7 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
 }
 
 async function fillField(element, value, info) {
+  const sleep_between_events_ms = 50; 
   console.log(`Filling field:`, element, `with value:`, value);
 
   if (info.iframeInfo) {
@@ -708,7 +736,7 @@ async function fillField(element, value, info) {
   simulateMouseClick(element);
 
   // Wait a bit for any click-triggered events to settle
-  await sleep(50);
+  await sleep(sleep_between_events_ms);
 
   const win = element.ownerDocument.defaultView;
 
@@ -718,8 +746,14 @@ async function fillField(element, value, info) {
     await simulateInput(element, value, win);
   }
 
+  // Trigger additional events
+  triggerEvents(element, ['input', 'change', 'blur']);
+
+  // Simulate click outside the form field
+  simulateMouseClick(element, true);
+
   // Wait a bit after filling
-  await sleep(50);
+  await sleep(sleep_between_events_ms);
 }
 
 function fillSelectField(selectElement, value) {
