@@ -676,4 +676,19 @@ fields:
     possible_placeholders:
       - Select your preference
 
+# // The following is a special field
+# // It's custom for the user to add additional fields to the form
+  - id: additionalFields
+    label: Additional Fields
+    type: textarea
+    description: Any additional information or notes
+    common_labels:
+      - Additional Information
+      - Notes
+      - Other Details
+    possible_placeholders:
+      - Enter any additional information here
+    notes:
+      - This field can be used for any extra details that don't fit in other fields
+      - The content is free-form and can include multiple lines
 # Add more fields as needed

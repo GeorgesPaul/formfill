@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edge case test form</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .column {
+            flex: 1;
+            min-width: 200px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input {
+            width: 100%;
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <form>
+        <div class="column">
+            <!-- First column inputs -->
+            <label for="KLM number">Flying blue:</label>
+            <input type="text" id="frequent flyer" name="frequent flyer">
+
+            <label for="Flying blue nummer:">Flying blue:</label>
+            <input type="text" id="frequent_flyer" name="frequent_flyer">
+
+        </div>
+    </form>
+</body>
+</html>

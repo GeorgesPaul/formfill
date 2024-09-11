@@ -1,6 +1,7 @@
 console.log("popup.js loaded");
 let profileFields = [];
 let currentProfileName = '';
+let additionalFieldsHeight = 100; // Default height in pixels
 
 // A function to log things to the end user of the extension 
 // under "system messages"
@@ -361,6 +362,7 @@ function updateProfileSelect(selectedProfileName = null) {
       }
     }
   });
+
 }
 
 function generateForm(form, profile = {}) {
@@ -369,10 +371,33 @@ function generateForm(form, profile = {}) {
     const label = document.createElement('label');
     label.htmlFor = field.id;
     label.textContent = field.label + ':';
-    const input = document.createElement('input');
-    input.type = 'text';
+    
+    let input;
+    if (field.type === 'textarea') {
+      input = document.createElement('textarea');
+      input.style.width = '100%';
+      input.style.minHeight = '100px';
+      input.style.resize = 'vertical';
+      input.style.height = `${additionalFieldsHeight}px`;
+      
+      // Fetch the height from storage when creating the textarea
+      browser.storage.local.get('additionalFieldsHeight').then(data => {
+        input.style.height = `${data.additionalFieldsHeight || 100}px`;
+      });
+
+      // Add event listener for textarea resizing
+      input.addEventListener('mouseup', function() {
+        additionalFieldsHeight = this.offsetHeight;
+        browser.storage.local.set({ additionalFieldsHeight: additionalFieldsHeight });
+      });
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+    }
+    
     input.id = field.id;
     input.value = profile[field.id] || '';
+    
     div.appendChild(label);
     div.appendChild(input);
     form.appendChild(div);
@@ -395,6 +420,14 @@ function addEventListenersToInputs() {
 
 function backupProfileToTxt() {
   const profileName = document.getElementById('profileName').value;
+
+  // Remove previous date from the profile name to avoid chaining dates every time an export is made
+  // Today's date is added later in the code
+  const datePattern = /^\d{4}-\d{2}-\d{2}/;
+  if (datePattern.test(profileName)) {
+    profileName = profileName.replace(datePattern, '');
+  }
+
   if (profileName) {
     const profile = {};
     profileFields.forEach(field => {
@@ -435,6 +468,8 @@ function loadProfileFromTxt() {
       try {
         const profile = JSON.parse(event.target.result);
         const profileName = file.name.replace('_backup.txt', '');
+        profileName = profileName.replace('.txt', '');
+        profileName = profileName.replace(/\s*\(.*?\)/, '');
         
         // Clear all form fields first
         document.getElementById('profileName').value = '';
