@@ -467,7 +467,7 @@ function loadProfileFromTxt() {
     reader.onload = function(event) {
       try {
         const profile = JSON.parse(event.target.result);
-        const profileName = file.name.replace('_backup.txt', '');
+        let profileName = file.name.replace('_backup.txt', '');
         profileName = profileName.replace('.txt', '');
         profileName = profileName.replace(/\s*\(.*?\)/, '');
         
