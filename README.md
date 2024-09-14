@@ -10,7 +10,7 @@ The advantages of running the offline LLM are that it's free and that no data is
 
 # Example of form filling: 
 
-[![Filling example](https://youtu.be/RIxEZ4BZXlI)]
+[![Filling example](https://youtu.be/RIxEZ4BZXlI/0.jpg)](https://youtu.be/RIxEZ4BZXlI)
 
 # To try it out
 This extension was written for Firefox
