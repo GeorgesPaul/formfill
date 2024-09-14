@@ -9,7 +9,8 @@ Currently there 2 ways to run LLMs:
 The advantages of running the offline LLM are that it's free and that no data is shared with anybody. The disadvantage are that it's much slower, less performant and requires a fast machine to run acceptably fast. 
 
 # Example of form filling: 
-![Filling example](/screenies/video.mp4)
+
+[![Filling example](https://youtu.be/RIxEZ4BZXlI)]
 
 # To try it out
 This extension was written for Firefox
