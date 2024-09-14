@@ -10,8 +10,7 @@ The advantages of running the offline LLM are that it's free and that no data is
 
 # Example video of form filling: 
 
-![Filling example video (Youtube)](https://img.youtube.com/vi/RIxEZ4BZXlI/0.jpg)
-[Watch the video](https://youtu.be/RIxEZ4BZXlI)
+[![Filling example video (Youtube)](https://img.youtube.com/vi/RIxEZ4BZXlI/0.jpg)](https://youtu.be/RIxEZ4BZXlI)
 
 
 # To try it out
