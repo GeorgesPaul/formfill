@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Smart Form Filler</title>
+  <link rel="stylesheet" href="styles.css">
   <style>
     body {
       font-family: 'MS Sans Serif', Arial, sans-serif;
@@ -206,10 +207,18 @@
     <button id="llmConfigButton">LLM API Config</button>
   </div>
   <footer>
+    <button id="donateLink" class="button donate-button">Donate</button>
+    <br><br>
     <a href="https://github.com/GeorgesPaul/formfill" target="_blank">GitHub Repository</a>
   </footer>
   <script src="node_modules/js-yaml/dist/js-yaml.min.js"></script>
   <script src="popup.js"></script>
   <script src="apiUtils.js"></script>
   <script src="llmConfig.js"></script>
+  <script>
+    document.getElementById('donateLink').addEventListener('click', function(e) {
+        e.preventDefault();
+        browser.tabs.create({ url: '/donation/donation.html' });
+    });
+</script>
 </body>

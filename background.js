@@ -3,18 +3,18 @@ let formFillStart = null;
 let totalFields = 0;
 
 function generateLoadingBar(percentage) {
-  const barLength = 10;
+  const barLength = 20;
   const filledLength = Math.round(percentage * barLength);
   const emptyLength = barLength - filledLength;
   return '[' + '█'.repeat(filledLength) + '░'.repeat(emptyLength) + ']';
 }
 
-browser.runtime.onMessage.addListener((message, sender) => {
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch(message.action) {
     case "fillFormStart":
       formFillProgress = {};
       formFillStart = Date.now();
-      totalFields = 0;  // We'll sum this up as we receive progress from each frame
+      totalFields = 0;
       browser.runtime.sendMessage({ 
         action: "updateStatus", 
         message: "Starting to fill form...\n" + generateLoadingBar(0) + " 0%"
@@ -23,7 +23,7 @@ browser.runtime.onMessage.addListener((message, sender) => {
 
     case "fillFormProgress":
       if (!formFillProgress[sender.frameId]) {
-        totalFields += message.total;  // Add to total fields only on first message from each frame
+        totalFields += message.total;
       }
       formFillProgress[sender.frameId] = {
         filled: message.filled,

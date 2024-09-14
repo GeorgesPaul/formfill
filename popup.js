@@ -249,11 +249,11 @@ async function fillForm() {
 
 // This listens to updates from the thread(s) running in content.js
 // This is to give user feedback about the status of the form filling (running in another thread/isolated from the extension)
-browser.runtime.onMessage.addListener((message) => {
-  if (message.action === "consolidatedFormProgress") {
-    updateStatusMessage(`Processing ${message.filled} out of ${message.total} fields done.`);
-  }
-});
+// browser.runtime.onMessage.addListener((message) => {
+//   if (message.action === "consolidatedFormProgress") {
+//     updateStatusMessage(`Processing ${message.filled} out of ${message.total} fields done.`);
+//   }
+// });
 browser.runtime.onMessage.addListener((message) => {
   if (message.action === "updateStatus") {
     updateStatusMessage(message.message);

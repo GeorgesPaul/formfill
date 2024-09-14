@@ -565,14 +565,14 @@ function getVisibleFormElements(documents) {
 // Main form filling process
 async function fillForm(profile) {
   try {
+    browser.runtime.sendMessage({ action: "fillFormStart" });
+
     const { fields: profileFields } = await loadYaml('profileFields.yaml');
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields);
 
     const formElements = getAllFormElements();
     const totalFields = formElements.length;
     console.log('found formElements on page:', formElements);
-
-    browser.runtime.sendMessage({ action: "fillFormStart" });
 
     const formFieldsInfo = formElements.map(getFormFieldInfo);
 
@@ -595,7 +595,12 @@ async function fillForm(profile) {
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
         await fillField(element, value, info);
-        
+        filledCount++; // Keep track of how many elements where filled
+        browser.runtime.sendMessage({ 
+          action: "fillFormProgress", 
+          filled: filledCount, 
+          total: totalFields 
+        });
         // Add a small delay between filling fields
         await sleep(10);
       } else {
@@ -608,8 +613,8 @@ async function fillForm(profile) {
 
     browser.runtime.sendMessage({ 
       action: "fillFormComplete",
-      filledCount: filledCount,
-      totalFields: totalFields
+      filled: filledCount,
+      total: totalFields
     });
 
     return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
