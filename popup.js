@@ -467,9 +467,11 @@ function loadProfileFromTxt() {
     reader.onload = function(event) {
       try {
         const profile = JSON.parse(event.target.result);
-        let profileName = file.name.replace('_backup.txt', '');
-        profileName = profileName.replace('.txt', '');
-        profileName = profileName.replace(/\s*\(.*?\)/, '');
+        let profileName = file.name
+          .replace(/\.txt$/, '')  // Remove .txt extension
+          .replace(/_backup$/, '')  // Remove _backup suffix if present
+          .replace(/^\d{4}\s\d{2}\s\d{2}\s/, '')  // Remove date prefix if present
+          .trim();  // Remove any leading/trailing whitespace
         
         // Clear all form fields first
         document.getElementById('profileName').value = '';
@@ -499,7 +501,7 @@ function loadProfileFromTxt() {
           });
         });
       } catch (error) {
-        document.getElementById('logMsg').textContent = "Error loading profile: " + error.message;
+        updateStatusMessage("Error loading profile: " + error.message);
       }
     };
     reader.readAsText(file);
