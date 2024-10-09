@@ -181,6 +181,18 @@
       resize: vertical;
       margin-bottom: 10px;
     }
+    #qrCodeContainer {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 10px 0;
+    }
+
+  #qrCodeContainer img {
+    max-width: 100%;
+    height: auto;
+  }
+
   </style>
 </head>
 <body>
@@ -207,7 +219,9 @@
     <button id="llmConfigButton">LLM API Config</button>
   </div>
   <footer>
-    <button id="donateLink" class="button donate-button">Donate</button>
+    <button id="donateButton" class="button donate-button">Donate</button>
+    <br>
+    <img src="qr-code.png" alt="Donate QR Code" width="150">
     <br><br>
     <a href="https://github.com/GeorgesPaul/formfill" target="_blank">GitHub Repository</a>
   </footer>

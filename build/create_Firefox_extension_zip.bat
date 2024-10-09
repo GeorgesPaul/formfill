@@ -7,6 +7,8 @@ rem Delete existing zip file if it exists
 if exist extension.zip del extension.zip
 
 rem Create new zip file with specified contents
-zip -r extension.zip icons node_modules background.js content.js LICENSE manifest.json popup.html popup.js profileFields.yaml README.md
+zip -r extension.zip icons node_modules background.js content.js LICENSE manifest.json popup.html popup.js profileFields.yaml README.md qr-code.png apiUtils.js llmConfig.html llmConfig.js styles.css
+
+
 
 echo Zip file created successfully.

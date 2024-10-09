@@ -29,26 +29,37 @@ function loadProfileFields() {
     });
 }
 
-function loadProfiles() {
-  return browser.storage.local.get(['profiles', 'lastLoadedProfile'])
-    .then(data => {
-      const profiles = data.profiles || {};
-      const lastLoadedProfile = data.lastLoadedProfile;
-      
-      if (Object.keys(profiles).length === 0) {
-        return createDefaultProfile();
-      }
-      
-      return { profiles, lastLoadedProfile };
-    });
+async function loadProfiles() {
+  try {
+    const data = await browser.storage.local.get(['profiles', 'lastLoadedProfile']);
+    let profiles = data.profiles || {};
+    let lastLoadedProfile = data.lastLoadedProfile;
+
+    if (Object.keys(profiles).length === 0) {
+      console.log("No profiles found, creating default profile");
+      const defaultData = await createDefaultProfile();
+      profiles = defaultData.profiles;
+      lastLoadedProfile = defaultData.lastLoadedProfile;
+
+      // Store the newly created default profile
+      await browser.storage.local.set({ profiles, lastLoadedProfile });
+      console.log("Default profile created and stored:", profiles, lastLoadedProfile);
+    }
+
+    return { profiles, lastLoadedProfile };
+  } catch (error) {
+    console.error("Error in loadProfiles:", error);
+    throw error;
+  }
 }
 
 
 
 function createDefaultProfile() {
+  const defaultProfileId = generateUUID();
   const defaultProfile = {
-    [generateUUID()]: {
-      name: 'Default Profile',
+    [defaultProfileId]: {
+      name: 'Test Profile',
       user_name: 'johndoe123',
       given_names: 'John William',
       family_names: 'Doe Smith',
@@ -99,10 +110,10 @@ function createDefaultProfile() {
   
   return browser.storage.local.set({ 
     profiles: defaultProfile,
-    lastLoadedProfile: 'Default Profile'
+    lastLoadedProfile: defaultProfileId
   }).then(() => ({
     profiles: defaultProfile,
-    lastLoadedProfile: 'Default Profile'
+    lastLoadedProfile: defaultProfileId
   }));
 }
 
@@ -124,6 +135,11 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
   document.getElementById('llmConfigButton').addEventListener('click', openLlmConfig);
   document.getElementById('removeProfile').addEventListener('click', removeSelectedProfile);
   document.getElementById('profileName').addEventListener('input', handleProfileNameChange);
+  document.getElementById('donateButton').addEventListener('click', function() {
+    const stripePaymentLink = 'https://donate.stripe.com/cN2dRB4RRcT40OA000';
+    // Open the Stripe payment link in a new tab
+    window.open(stripePaymentLink, '_blank');
+  } )
 
   document.getElementById('profileForm').style.display = 'block';
 }
@@ -254,14 +270,18 @@ function addNewProfile() {
 }
 
 function fillForm() {
-  const profileName = document.getElementById('profileSelect').value;
-  if (!profileName) {
+  const profileId = document.getElementById('profileSelect').value;
+  if (!profileId) {
     updateStatusMessage("Please select a profile to fill the form.");
     return;
   }
 
   browser.storage.local.get('profiles').then(data => {
-    const profile = data.profiles[profileName];
+    const profile = data.profiles[profileId];
+    if (!profile) {
+      updateStatusMessage("Selected profile not found.");
+      return;
+    }
     browser.tabs.query({active: true, currentWindow: true}).then(tabs => {
       browser.tabs.sendMessage(tabs[0].id, {
         action: "fillForm",
