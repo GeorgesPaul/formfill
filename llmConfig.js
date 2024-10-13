@@ -165,6 +165,10 @@ async function saveConfiguration(event) {
   await saveConfigToStorage(configName, config);
   hideConfigForm();
   showStatus('Configuration saved!');
+  
+  // Select the newly saved or edited configuration
+  await loadConfigurations();
+  selectConfigByName(configName);
 }
 
 function ensureCorrectApiUrl(apiUrl) {
@@ -305,3 +309,13 @@ function updateStatusMessage(message) {
 
 // // Run once when popup opens
 // runPopupTest();
+
+function selectConfigByName(configName) {
+  const rows = document.querySelectorAll('#configTable tbody tr');
+  for (let row of rows) {
+    if (row.cells[0].textContent === configName) {
+      selectRow(row);
+      break;
+    }
+  }
+}
