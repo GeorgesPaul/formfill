@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.6",
+  "version": "1.7",
   "description": "Intelligently fills forms based on user profiles",
   "permissions": [
     "activeTab",
