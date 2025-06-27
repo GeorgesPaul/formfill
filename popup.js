@@ -283,12 +283,13 @@ function fillForm() {
       return;
     }
     browser.tabs.query({active: true, currentWindow: true}).then(tabs => {
+      updateStatusMessage("Starting to fill form...");
       browser.tabs.sendMessage(tabs[0].id, {
         action: "fillForm",
         profile: profile
       }).then(response => {
         if (response && response.status === "success") {
-          updateStatusMessage(`Form filled: ${response.message}`);
+          updateStatusMessage(`Form filling complete: ${response.message}`);
         } else {
           updateStatusMessage(`Error filling form: ${response ? response.message : 'Unknown error'}`);
         }
@@ -407,6 +408,9 @@ function openLlmConfig() {
   });
 }
 
+let lastUpdateTime = 0;
+const updateInterval = 50; // Minimum time between updates in milliseconds
+
 function updateStatusMessage(message) {
   const logMsg = document.getElementById('logMsg');
   const timestamp = new Date().toLocaleString();
@@ -418,9 +422,21 @@ function updateStatusMessage(message) {
 }
 
 browser.runtime.onMessage.addListener((message) => {
-  if (message.action === "fillFormProgress") {
-    updateStatusMessage(`Filled ${message.filled} out of ${message.total} fields.`);
+  switch (message.action) {
+    case "fillFormStart":
+      updateStatusMessage("Starting to fill form...");
+      break;
+    case "fillFormProgress":
+      updateStatusMessage(message.message || `Filled ${message.filled} out of ${message.total} fields.`);
+      break;
+    case "fillFormComplete":
+      updateStatusMessage(message.message || `Completed filling ${message.filled} out of ${message.total} fields.`);
+      break;
+    case "fillFormError":
+      updateStatusMessage(`Error filling form: ${message.error}`);
+      break;
+    case "updateProgress":
+      updateStatusMessage(message.message);
+      break;
   }
 });
-
-

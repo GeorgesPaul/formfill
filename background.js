@@ -1,3 +1,5 @@
+// Remove the following code from background.js
+
 let formFillProgress = {};
 let formFillStart = null;
 let totalFields = 0;
@@ -15,7 +17,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       formFillProgress = {};
       formFillStart = Date.now();
       totalFields = 0;
-      browser.runtime.sendMessage({ 
+      updatePopup({ 
         action: "updateStatus", 
         message: "Starting to fill form...\n" + generateLoadingBar(0) + " 0%"
       });
@@ -31,7 +33,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
       let totalFilled = Object.values(formFillProgress).reduce((sum, progress) => sum + progress.filled, 0);
       let percentage = totalFields > 0 ? totalFilled / totalFields : 0;
-      browser.runtime.sendMessage({ 
+      updatePopup({ 
         action: "updateStatus", 
         message: `Filling form...\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%`
       });
@@ -41,17 +43,23 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
       let finalFilled = Object.values(formFillProgress).reduce((sum, progress) => sum + progress.filled, 0);
       let finalPercentage = totalFields > 0 ? finalFilled / totalFields : 0;
-      browser.runtime.sendMessage({ 
+      updatePopup({ 
         action: "updateStatus", 
         message: `Form filling complete.\n${generateLoadingBar(finalPercentage)} ${Math.round(finalPercentage * 100)}%\nFilled ${finalFilled} out of ${totalFields} fields in ${duration} seconds.`
       });
       break;
 
     case "fillFormError":
-      browser.runtime.sendMessage({ 
+      updatePopup({ 
         action: "updateStatus", 
         message: `Error filling form: ${message.error}`
       });
       break;
   }
 });
+
+function updatePopup(message) {
+  browser.runtime.sendMessage(message).catch(error => {
+    console.error("Error sending message to popup:", error);
+  });
+}

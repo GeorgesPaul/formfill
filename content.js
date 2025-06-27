@@ -97,15 +97,33 @@ function createRequestOptions(config, requestBody) {
 }
 
 async function handleLlmResponse(response, config) {
+  // Check 1: Was the HTTP request successful? (e.g., not a 404 or 500)
   if (!response.ok) {
     const errorBody = await response.text();
+    // This gives a very clear error like "HTTP error! status: 401, body: Invalid API Key"
     throw new Error(`HTTP error! status: ${response.status}, body: ${errorBody}`);
   }
 
+  // Check 2: Did the server send us JSON? This is the crucial new check.
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) {
+    const responseText = await response.text();
+    // This is the error we are currently experiencing.
+    logToUser(
+      `API Error: Expected JSON response but received '${contentType}'. ` +
+      `This often means an invalid API key or incorrect endpoint. ` +
+      `Response body (first 200 chars): ${responseText.substring(0, 200)}`
+    );
+  }
+
+  // If both checks pass, we can confidently proceed.
   if (config.apiUrl.includes('openrouter.ai')) {
+    // We already know it's JSON, so we can parse it here safely.
+    // This simplifies the logic in fillFormSinglePrompt.
     const data = await response.json();
     return data.choices[0].message.content.trim();
   } else {
+    // Streaming response is handled differently.
     return handleStreamingResponse(response);
   }
 }
@@ -201,14 +219,24 @@ function generateMatchFieldPrompt(fieldInfoString, profileFields) {
   Now, provide the id of the best matching profile field. No other text.`;
 }
 
-async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, allFormFields) {
-  const fieldInfoString = generateFieldInfoString(fieldInfo);
-  const profileDataString = generateFieldInfoString(profileData);
-  const prompt = generateFillFieldPrompt(fieldInfoString, profileDataString);
+async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, profileFieldsInfo) {
+  const fieldInfoString = JSON.stringify(fieldInfo, null, 2);
+  const profileDataString = JSON.stringify(profileData, null, 2);
+  const prompt = generateFillFieldPrompt(fieldInfoString, profileDataString, profileFields, profileFieldsInfo);
 
   try {
-    const str_to_fill = await promptLLM(prompt);
-    console.log('LLM response for field:', str_to_fill);
+    let str_to_fill = await promptLLM(prompt);
+    console.log('Raw LLM response for field:', str_to_fill);
+
+    // Clean up the response
+    str_to_fill = str_to_fill.trim();
+    
+    // If the response contains multiple lines or looks like code, return an empty string
+    if (str_to_fill.includes('\n') || str_to_fill.includes('function') || str_to_fill.includes('{')) {
+      console.warn('LLM returned unexpected format. Ignoring response.');
+      return '';
+    }
+
     return str_to_fill;
   } catch (error) {
     console.error("Error in get_str_to_fill_with_LLM:", error);
@@ -216,34 +244,78 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, a
   }
 }
 
-function generateFillFieldPrompt(fieldInfoString, profileDataString) {
-  return `TASK: Determine the correct value to fill in a form field on a web page based on given information.
+function generateFillFieldPrompt(fieldInfoString, profileDataString, profileFields, profileFieldsInfo) {
+  const relevantFieldInfo = getRelevantFieldInfo(fieldInfoString, profileFieldsInfo);
 
-FORM FIELD json:
-  ${fieldInfoString}
+  const prompt = `TASK: Fill a form field with user data.
 
-USER DATA json:
-  ${profileDataString}
-  
-  RULES:
-  1. From the USER DATA get the most appropriate data to fill out in the one FORM FIELD described above. 
-  2. NearbyText and Label attribute values in FORM FIELD above have priority over other attributes in FORM FIELD. 
-  3. If a match is found, return the corresponding data from USER DATA.
-  4. Do not use placeholder values unless they match USER DATA.
-  5. Return an empty string if:
-     - There is no obvious match
-     - The form field is not part of a form (e.g., search, password)
-     - The matching USER DATA field is empty
-  6. For address fields:
-     - Pay attention to specific components (city, street, house number, etc.)
-     - Consider that multiple form fields might map to parts of a single address field in USER DATA
-  7. Be aware that some fields might be mislabeled or use non-standard names.
-  8. Do not include any additional text or explanation before or after your answer. 
-  
-  OUTPUT:
-  Only a value. No explanation or additional text.`;
+FORM FIELD:
+${fieldInfoString}
+
+USER DATA:
+${profileDataString}
+
+FIELD INFO:
+${relevantFieldInfo}
+
+RULES:
+1. Match the form field to the best fitting user data.
+2. Prioritize NearbyText and Label in FORM FIELD.
+3. Use FIELD INFO for additional context if needed.
+4. Return empty string if no match or field is not part of a form.
+5. For addresses, match specific components (city, street, etc.).
+6. Ignore placeholder values unless they match USER DATA.
+
+OUTPUT:
+Return ONLY the value to fill. Do not return any code, functions, or explanations. Just the value as a string.`;
+
+  console.log("Generated prompt:", prompt);
+
+  return prompt;
 }
 
+function getRelevantFieldInfo(fieldInfoString, profileFieldsInfo) {
+  console.log("fieldInfoString:", fieldInfoString);
+  console.log("profileFieldsInfo:", profileFieldsInfo);
+
+  if (!profileFieldsInfo || !profileFieldsInfo.fields) {
+    console.error("profileFieldsInfo or profileFieldsInfo.fields is undefined");
+    return "No relevant field info available";
+  }
+
+  let fieldInfo;
+  try {
+    fieldInfo = JSON.parse(fieldInfoString);
+  } catch (error) {
+    console.error("Error parsing fieldInfoString:", error);
+    return "Error parsing field info";
+  }
+
+  const relevantFields = profileFieldsInfo.fields.filter(field => 
+    field.common_labels?.some(label => 
+      fieldInfo.label?.toLowerCase().includes(label.toLowerCase()) ||
+      fieldInfo.name?.toLowerCase().includes(label.toLowerCase()) ||
+      fieldInfo.id?.toLowerCase().includes(label.toLowerCase())
+    ) ||
+    field.aliases?.some(alias => 
+      fieldInfo.label?.toLowerCase().includes(alias.toLowerCase()) ||
+      fieldInfo.name?.toLowerCase().includes(alias.toLowerCase()) ||
+      fieldInfo.id?.toLowerCase().includes(alias.toLowerCase())
+    )
+  );
+
+  if (relevantFields.length === 0) {
+    return "No matching fields found";
+  }
+
+  return relevantFields.map(field => `
+${field.id}:
+  Label: ${field.label}
+  Common Labels: ${field.common_labels?.join(', ')}
+  Aliases: ${field.aliases?.join(', ')}
+  Description: ${field.description}
+  `).join('\n');
+}
 
 function getAllFormElements(doc = document) {
   return Array.from(doc.querySelectorAll('input:not([type="hidden"]), select, textarea'));
@@ -386,8 +458,8 @@ function simulateMouseClick(element, outsideClick = false) {
 
   if (outsideClick) {
     // Click slightly outside the element
-    centerX = rect.right + 10;
-    centerY = rect.bottom + 10;
+    centerX = rect.right + 1;
+    centerY = rect.bottom + 1;
   } else {
     // Click in the center of the element
     centerX = rect.left + rect.width / 2;
@@ -565,14 +637,16 @@ function getVisibleFormElements(documents) {
 // Main form filling process
 async function fillForm(profile) {
   try {
-    browser.runtime.sendMessage({ action: "fillFormStart" });
+    updateFillProgress(0, 0, "Starting to fill form...");
 
-    const { fields: profileFields } = await loadYaml('profileFields.yaml');
-    const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields);
+    const profileFields = await loadYaml('profileFields.yaml');   
+    const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields.fields);
 
     const formElements = getAllFormElements();
     const totalFields = formElements.length;
     console.log('found formElements on page:', formElements);
+
+    updateFillProgress(0, totalFields, "Starting to fill form... This will take at least a few seconds.");
 
     const formFieldsInfo = formElements.map(getFormFieldInfo);
 
@@ -580,9 +654,9 @@ async function fillForm(profile) {
 
     let filledFields;
     if (config.apiUrl.includes('openrouter.ai')) {
-      filledFields = await fillFormSinglePrompt(formFieldsInfo, cleanProfileFields, cleanProfile);
+      filledFields = await fillFormSinglePrompt(formFieldsInfo, cleanProfileFields, cleanProfile, profileFields);
     } else {
-      filledFields = await fillFormSequential(formFieldsInfo, cleanProfileFields, cleanProfile);
+      filledFields = await fillFormSequential(formFieldsInfo, cleanProfileFields, cleanProfile, profileFields);
     }
     console.log('Fields to fill:', filledFields);
 
@@ -595,60 +669,87 @@ async function fillForm(profile) {
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
         await fillField(element, value, info);
-        filledCount++; // Keep track of how many elements where filled
-        browser.runtime.sendMessage({ 
-          action: "fillFormProgress", 
-          filled: filledCount, 
-          total: totalFields 
-        });
-        // Add a small delay between filling fields
+        filledCount++;
+        updateFillProgress(filledCount, totalFields, `Filled ${filledCount} out of ${totalFields} fields...`);
+        
         await sleep(10);
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
     }
     
-    // Simulate final click outside the form
     simulateMouseClick(document.body, true);
 
-    browser.runtime.sendMessage({ 
-      action: "fillFormComplete",
-      filled: filledCount,
-      total: totalFields
-    });
+    updateFillProgress(filledCount, totalFields, `Completed filling ${filledCount} out of ${totalFields} fields.`);
 
     return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
   } catch (error) {
     console.error("Error filling form:", error);
-    browser.runtime.sendMessage({ 
-      action: "fillFormError",
-      error: error.toString()
-    });
+    updateFillProgress(0, 0, `Error filling form: ${error.toString()}`);
     return { status: "error", message: error.toString() };
   }
 }
 
-function updateFillProgress(filled, total) {
+function updateFillProgress(filled, total, message) {
   browser.runtime.sendMessage({
     action: "fillFormProgress",
     filled: filled,
-    total: total
+    total: total,
+    message: message
   });
+}
+
+function logToUser(message) {
+  browser.runtime.sendMessage({
+    action: "updateProgress", 
+    message: message
+  }); 
 }
 
 /*
 Generates 1 prompt for all fillable elements on the page/form. 
 The LLM should be smart enough to return the correct values for all fields in the form with 1 prompt.
 */
+// async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData) {
+//   const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData);
+//   //console.log('prompt:', prompt);
+//   try {
+//     const response = await promptLLM(prompt);
+//     return JSON.parse(response);
+//   } catch (error) {
+//     console.error("Error in fillFormSinglePrompt:", error);
+//     throw error;
+//   }
+// }
 async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData) {
   const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData);
-  //console.log('prompt:', prompt);
+  let llmContentString = '';
+
   try {
-    const response = await promptLLM(prompt);
-    return JSON.parse(response);
+    // promptLLM now returns the clean, stringified JSON content from the LLM.
+    llmContentString = await promptLLM(prompt);
+
+    // Clean it up just in case the LLM wrapped it in markdown.
+    const cleanedJsonString = llmContentString.replace(/```json\n|```/g, '').trim();
+
+    // Now, parse the LLM's output.
+    return JSON.parse(cleanedJsonString);
+
   } catch (error) {
-    console.error("Error in fillFormSinglePrompt:", error);
-    throw error;
+    if (error.name === 'SyntaxError') {
+      // This catch is now ONLY for when the LLM's output itself is not valid JSON.
+      logToUser(
+        "LLM FORMATTING ERROR: The model did not return a valid JSON string.",
+        "\nLLM's response (first 250 chars):",
+        `\n>>>\n${llmContentString.substring(0, 250)}\n<<<`,
+        "\nFull Error:", error
+      );
+    } else {
+      // This will catch the new, clearer error from handleLlmResponse.
+      console.error("An error occurred in fillFormSinglePrompt:", error);
+    }
+    
+    return {};
   }
 }
 
@@ -705,7 +806,7 @@ function trimAndRemoveQuotes(str) {
 Generates 1 prompt for each fillable element on the page/form. 
 Use this for LLMs that are not as good at handling this type of prompt (e.g. llama3.1 8B and similar models)
 */
-async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
+async function fillFormSequential(formFieldsInfo, profileFields, profileData, profileFieldsInfo) {
   let filledFields = {};
   let filledCount = 0;
   const totalFields = formFieldsInfo.length;
@@ -713,7 +814,7 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
   for (const { element, info } of formFieldsInfo) {
     if (info && Object.values(info).some(value => value)) {
       try {
-        let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, formFieldsInfo);
+        let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, formFieldsInfo, profileFieldsInfo);
         str_to_fill = trimAndRemoveQuotes(str_to_fill);
         if (str_to_fill !== '') {
           filledFields[info.id || info.name] = str_to_fill;
@@ -729,40 +830,67 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData) {
   return filledFields;
 }
 
+// async function fillField(element, value, info) {
+//   const sleep_between_events_ms = 50; 
+//   console.log(`Filling field:`, element, `with value:`, value);
+
+//   if (info.iframeInfo) {
+//     await focusIframeElement(info.iframeInfo);
+//   }
+
+//   // Simulate mouse click on the element
+//   simulateMouseClick(element);
+
+//   // Wait a bit for any click-triggered events to settle
+//   await sleep(sleep_between_events_ms);
+
+//   const win = element.ownerDocument.defaultView;
+
+//   if (element.tagName.toLowerCase() === 'select') {
+//     await fillSelectField(element, value);
+//   } else {
+//     await simulateInput(element, value, win);
+//   }
+
+//   // Trigger additional events
+//   triggerEvents(element, ['input', 'change', 'blur']);
+
+//   // Simulate click outside the form field
+//   simulateMouseClick(element, true);
+
+//   // Wait a bit after filling
+//   await sleep(sleep_between_events_ms);
+// }
+
 async function fillField(element, value, info) {
-  const sleep_between_events_ms = 50; 
+  const sleep_between_events_ms = 50;
   console.log(`Filling field:`, element, `with value:`, value);
 
-  if (info.iframeInfo) {
-    await focusIframeElement(info.iframeInfo);
-  }
-
-  // Simulate mouse click on the element
-  simulateMouseClick(element);
-
-  // Wait a bit for any click-triggered events to settle
+  element.focus(); // Bring the element into focus
   await sleep(sleep_between_events_ms);
 
-  const win = element.ownerDocument.defaultView;
-
   if (element.tagName.toLowerCase() === 'select') {
-    fillSelectField(element, value);
+    await fillSelectField(element, value);
   } else {
-    await simulateInput(element, value, win);
+    // This is often the most reliable method for complex sites.
+    await simulateHumanTyping(element, value);
   }
 
-  // Trigger additional events
-  triggerEvents(element, ['input', 'change', 'blur']);
+  // The blur event is already handled inside simulateHumanTyping and fillSelectField.
+  // element.blur(); // You can add this for extra certainty if needed.
 
-  // Simulate click outside the form field
-  simulateMouseClick(element, true);
-
-  // Wait a bit after filling
   await sleep(sleep_between_events_ms);
 }
 
-function fillSelectField(selectElement, value) {
+async function fillSelectField(selectElement, value) {
   console.log(`Filling select field ${selectElement.name} with value:`, value);
+  
+  // Simulate clicking the select element to open the dropdown
+  simulateMouseClick(selectElement);
+
+  // Wait for the dropdown to open and options to be available
+  await waitForOptions(selectElement);
+
   const options = Array.from(selectElement.options);
   const optionToSelect = options.find(option => 
     option.text.trim().toLowerCase() === value.toString().toLowerCase() || 
@@ -772,10 +900,36 @@ function fillSelectField(selectElement, value) {
   if (optionToSelect) {
     selectElement.value = optionToSelect.value;
     selectElement.dispatchEvent(new Event('change', { bubbles: true }));
+    
+    // Wait for the selection to be applied
+    await waitForSelection(selectElement, optionToSelect.value);
+    
     console.log(`Selected option in ${selectElement.name}:`, optionToSelect.text);
   } else {
     console.warn(`Could not find matching option for ${value} in`, selectElement);
   }
+}
+
+async function waitForOptions(selectElement, timeout = 2000) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeout) {
+    if (selectElement.options.length > 0) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Timeout waiting for select options to load');
+}
+
+async function waitForSelection(selectElement, expectedValue, timeout = 2000) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeout) {
+    if (selectElement.value === expectedValue) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Timeout waiting for select value to be applied');
 }
 
 // Utility functions
