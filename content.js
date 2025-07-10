@@ -1,4 +1,6 @@
 const response_Timeout_ms = 15000;
+let stopFilling = false;
+let abortController = null;
 
 // Event listeners
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -14,6 +16,15 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
 
     return true; // Indicate that we will send a response asynchronously
+  }
+
+  if (message.action === "stopFillForm") {
+    stopFilling = true;
+    if (abortController) {
+      abortController.abort();
+    }
+    sendResponse({ status: "stopped" });
+    return true;
   }
 });
 
@@ -49,12 +60,21 @@ async function promptLLM(prompt) {
   const requestBody = createRequestBody(config, prompt);
   const requestOptions = createRequestOptions(config, requestBody);
 
+  abortController = new AbortController();
+  requestOptions.signal = abortController.signal;
+
   try {
     const response = await fetch(config.apiUrl, requestOptions);
     return handleLlmResponse(response, config);
   } catch (error) {
+    if (error.name === 'AbortError') {
+      console.log("LLM request aborted.");
+      throw new Error("Form filling stopped by user.");
+    }
     console.error("Error interacting with LLM API:", error);
     throw error;
+  } finally {
+    abortController = null;
   }
 }
 
@@ -134,6 +154,11 @@ async function handleStreamingResponse(response) {
   const startTime = Date.now();
 
   while (true) {
+    if (stopFilling) {
+      reader.releaseLock();
+      throw new Error("Form filling stopped by user.");
+    }
+
     const { done, value } = await reader.read();
     if (done) break;
 
@@ -636,17 +661,24 @@ function getVisibleFormElements(documents) {
 
 // Main form filling process
 async function fillForm(profile) {
-  try {
-    updateFillProgress(0, 0, "Starting to fill form...");  // REMOVE THIS LINE
+  stopFilling = false; // Reset at the start of each fill attempt
+  abortController = null; // Ensure abort is reset
 
+  browser.runtime.sendMessage({ action: "fillFormStart" }); // Send start signal
+
+  let filledCount = 0;
+  let processed = 0;
+  let totalFields = 0;
+
+  try {
     const profileFields = await loadYaml('profileFields.yaml');   
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields.fields);
 
     const formElements = getAllFormElements();
-    const totalFields = formElements.length;
+    totalFields = formElements.length;
     console.log('found formElements on page:', formElements);
 
-    updateFillProgress(0, totalFields, "Starting to fill form... This will take at least a few seconds.");
+    updateFillProgress(processed, filledCount, totalFields, "Starting to fill form... This will take at least a few seconds.");
 
     const formFieldsInfo = formElements.map(getFormFieldInfo);
 
@@ -660,51 +692,66 @@ async function fillForm(profile) {
     }
     console.log('Fields to fill:', filledFields);
 
-    let filledCount = 0;
-
     for (const { element, info } of formFieldsInfo) {
+      if (stopFilling) {
+        throw new Error("Form filling stopped by user.");
+      }
+
       const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
       const matchingClass = classes.find(cls => cls in filledFields);
       
+      let matched = false;
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
         await fillField(element, value, info);
         filledCount++;
-        updateFillProgress(filledCount, totalFields, `Filled ${filledCount} out of ${totalFields} fields...`);
-        
-        await sleep(10);
+        matched = true;
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
+      
+      processed++;
+      updateFillProgress(processed, filledCount, totalFields, `Processing ${processed} out of ${totalFields} fields (filled ${filledCount})...`);
+      
+      await sleep(10);
     }
     
     simulateMouseClick(document.body, true);
 
-    // Send completion to background
     browser.runtime.sendMessage({
       action: "fillFormComplete",
       filled: filledCount,
       total: totalFields
     });
 
-    updateFillProgress(filledCount, totalFields, `Completed filling ${filledCount} out of ${totalFields} fields.`);
+    updateFillProgress(processed, filledCount, totalFields, `Completed filling ${filledCount} out of ${totalFields} fields.`);
 
     return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
   } catch (error) {
     console.error("Error filling form:", error);
-    // Send error to background
     browser.runtime.sendMessage({
       action: "fillFormError",
-      error: error.toString()
+      error: error.toString() || "undefined"
     });
-    updateFillProgress(0, 0, `Error filling form: ${error.toString()}`);
+    updateFillProgress(processed, filledCount, totalFields, `Error filling form: ${error.toString() || "undefined"}`);
+    if (error.message === "Form filling stopped by user.") {
+      browser.runtime.sendMessage({
+        action: "fillFormStopped",
+        filled: filledCount,
+        processed: processed,
+        total: totalFields
+      });
+      stopFilling = false; // Reset the stop action
+      updateFillProgress(processed, filledCount, totalFields, "Form filling stopped by user.");
+    }
     return { status: "error", message: error.toString() };
   }
 }
 
-function updateFillProgress(filled, total, message) {
+function updateFillProgress(processed, filled, total, message) {
   browser.runtime.sendMessage({
     action: "fillFormProgress",
+    processed: processed,
     filled: filled,
     total: total,
     message: message
@@ -824,6 +871,9 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
   const totalFields = formFieldsInfo.length;
 
   for (const { element, info } of formFieldsInfo) {
+    if (stopFilling) {
+      throw new Error("Form filling stopped by user."); // Change break to throw to propagate
+    }
     if (info && Object.values(info).some(value => value)) {
       try {
         let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, formFieldsInfo, profileFieldsInfo);
@@ -832,9 +882,12 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
           filledFields[info.id || info.name] = str_to_fill;
           await fillField(element, str_to_fill, info);
           filledCount++;
-          updateFillProgress(filledCount, totalFields);
+          updateFillProgress(filledCount, totalFields); // Adjust if needed for processed
         }
       } catch (fieldError) {
+        if (fieldError.message === "Form filling stopped by user.") {
+          throw fieldError; // Propagate stop
+        }
         console.error("Error processing field:", info, fieldError);
       }
     }

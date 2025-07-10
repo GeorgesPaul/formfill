@@ -128,6 +128,7 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
   
   // Set up event listeners
   document.getElementById('fillForm').addEventListener('click', fillForm);
+  document.getElementById('stopFilling').addEventListener('click', stopFilling);
   document.getElementById('showAddProfileForm').addEventListener('click', addNewProfile);
   document.getElementById('profileSelect').addEventListener('change', e => loadProfile(e.target.value));
   document.getElementById('backupProfile').addEventListener('click', backupProfileToTxt);
@@ -277,6 +278,18 @@ function addNewProfile() {
       updateProfileSelect(profiles, newProfileId);
       loadProfile(newProfileId);
       updateStatusMessage(`Created new profile`);
+    });
+  });
+}
+
+function stopFilling() {
+  browser.tabs.query({active: true, currentWindow: true}).then(tabs => {
+    browser.tabs.sendMessage(tabs[0].id, {
+      action: "stopFillForm"
+    }).then(response => {
+      updateStatusMessage("Form filling stopped.");
+    }).catch(error => {
+      updateStatusMessage(`Error stopping form filling: ${error.toString()}`);
     });
   });
 }
@@ -455,6 +468,9 @@ browser.runtime.onMessage.addListener((message) => {
       break;
     case "updateProgress":
       updateStatusMessage(message.message);
+      break;
+    case "fillFormStopped":
+      updateStatusMessage(message.message || `Form filling stopped. Filled ${message.filled} out of ${message.total} fields.`);
       break;
   }
 });
