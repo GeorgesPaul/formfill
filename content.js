@@ -637,7 +637,7 @@ function getVisibleFormElements(documents) {
 // Main form filling process
 async function fillForm(profile) {
   try {
-    updateFillProgress(0, 0, "Starting to fill form...");
+    updateFillProgress(0, 0, "Starting to fill form...");  // REMOVE THIS LINE
 
     const profileFields = await loadYaml('profileFields.yaml');   
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields.fields);
@@ -680,11 +680,23 @@ async function fillForm(profile) {
     
     simulateMouseClick(document.body, true);
 
+    // Send completion to background
+    browser.runtime.sendMessage({
+      action: "fillFormComplete",
+      filled: filledCount,
+      total: totalFields
+    });
+
     updateFillProgress(filledCount, totalFields, `Completed filling ${filledCount} out of ${totalFields} fields.`);
 
     return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
   } catch (error) {
     console.error("Error filling form:", error);
+    // Send error to background
+    browser.runtime.sendMessage({
+      action: "fillFormError",
+      error: error.toString()
+    });
     updateFillProgress(0, 0, `Error filling form: ${error.toString()}`);
     return { status: "error", message: error.toString() };
   }

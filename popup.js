@@ -160,20 +160,27 @@ function initializeProfileForm() {
     dynamicForm.appendChild(document.createElement('br'));
     
     profileFields.forEach(field => {
-      const input = createInput(field.id, field.label, 'text', e => autoSaveProfile(field.id, e.target.value));
+      const input = createInput(field.id, field.label, field.type, e => autoSaveProfile(field.id, e.target.value));
       dynamicForm.appendChild(input);
     });
   }
 }
 
-function createInput(id, label, type, changeHandler) {
+function createInput(id, labelText, inputType, changeHandler) {
   const container = document.createElement('div');
   const labelElement = document.createElement('label');
   labelElement.htmlFor = id;
-  labelElement.textContent = label;
+  labelElement.textContent = labelText;
   
-  const input = document.createElement('input');
-  input.type = type;
+  let input;
+  if (inputType === 'textarea') {
+    input = document.createElement('textarea');
+    input.rows = 5;  // Set a default number of visible rows (adjust as needed, e.g., 3-10)
+    input.cols = 40; // Optional: Set default width in characters (adjust for your popup's layout)
+  } else {
+    input = document.createElement('input');
+    input.type = inputType || 'text';  // Default to 'text' if no type is specified
+  }
   input.id = id;
   input.addEventListener('input', changeHandler);
   
@@ -247,6 +254,11 @@ function loadProfile(profileId) {
           input.value = profile[field.id] || '';
         }
       });
+      // Apply stored textarea height if present
+      const textarea = document.getElementById('additionalFields');
+      if (textarea && profile.additionalFieldsHeight) {
+        textarea.style.height = profile.additionalFieldsHeight;
+      }
       browser.storage.local.set({ lastLoadedProfileId: profileId });
       updateStatusMessage(`Loaded profile: ${profile.name || '(Unnamed Profile)'}`);
     } else {
@@ -314,9 +326,14 @@ function backupProfileToTxt() {
       return;
     }
 
+    // Capture the current textarea height
+    const textarea = document.getElementById('additionalFields');
+    const additionalFieldsHeight = textarea ? textarea.style.height || `${textarea.clientHeight}px` : '';
+
     const backupData = {
       id: currentProfileId,
-      ...profile
+      ...profile,
+      additionalFieldsHeight: additionalFieldsHeight  // Add the height here
     };
 
     const profileJson = JSON.stringify(backupData, null, 2);
@@ -335,6 +352,7 @@ function backupProfileToTxt() {
     updateStatusMessage(`Profile backed up to ${fileName}`);
   });
 }
+
 
 function loadProfileFromTxt() {
   const input = document.createElement('input');
