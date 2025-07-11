@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.7",
+  "version": "1.9",
   "description": "Intelligently fills forms based on user profiles",
   "permissions": [
     "activeTab",
@@ -44,6 +44,7 @@
     {
       "matches": ["<all_urls>"],
       "js": [
+        "dynamicFormHandler.js",
         "apiUtils.js",
         "content.js",
         "node_modules/js-yaml/dist/js-yaml.min.js"

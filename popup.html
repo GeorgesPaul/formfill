@@ -50,21 +50,44 @@
       font-size: 16px;
       font-weight: bold;
       display: block;
-      width: 200px; /* or whatever width you prefer */
+      width: 200px;
       margin-left: auto;
       margin-right: auto;
-      text-align: center; /* This centers the text within the button */
+      text-align: center;
+      background-color: #28a745; /* Green when enabled */
+      color: #fff;
+    }
+    #fillForm:disabled {
+      background-color: #6c757d; /* Gray when disabled */
+      color: #ccc;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    #fillForm:hover:not(:disabled) {
+      background-color: #218838; /* Darker green on hover */
     }
     #stopFilling {
       height: 20px;
       font-size: 13px;
-      color: #ff0000;
       font-weight: bold;
       display: block;
-      width: 150px; /* or whatever width you prefer */
+      width: 150px;
       margin-left: auto;
       margin-right: auto;
-      text-align: center; /* This centers the text within the button */
+      text-align: center;
+      background-color: #dc3545; /* Red when enabled */
+      color: #fff;
+      border-color: #c82333 #000 #000 #c82333;
+    }
+    #stopFilling:disabled {
+      background-color: #f8d7da; /* Faded red when disabled */
+      color: #721c24;
+      border-color: #7f7f7f #000 #000 #7f7f7f;
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    #stopFilling:hover:not(:disabled) {
+      background-color: #c82333; /* Darker red on hover */
     }
 
     #profileFormButtons {
@@ -218,7 +241,7 @@
   </div>
   <hr>
   <button id="fillForm">Fill Form</button>
-  <button id="stopFilling">Stop Filling</button>
+  <button id="stopFilling" disabled>Stop Filling</button>
   <div id="logLabel">System messages:</div>
   <div id="logMsg"></div>
   <div id="profileForm" style="display: none;">

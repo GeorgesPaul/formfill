@@ -1,6 +1,9 @@
 const response_Timeout_ms = 15000;
+const time_between_dynamic_reload_loops_ms = 5000; 
 let stopFilling = false;
 let abortController = null;
+let currentProfile = null; 
+let formChanged = false; 
 
 // Event listeners
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -23,11 +26,21 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (abortController) {
       abortController.abort();
     }
+    disconnectObserver(); // Stop observer for terrible shitty dynamic forms
     sendResponse({ status: "stopped" });
     return true;
   }
 });
-
+window.addEventListener('load', () => {
+  const lastFillTime = sessionStorage.getItem('lastFillTime');
+  if (lastFillTime && Date.now() - parseInt(lastFillTime) < time_between_dynamic_reload_loops_ms) { // 5s window to avoid loops
+    console.log('Skipping fill to avoid loop on reload');
+    return;
+  }
+  if (currentProfile) {
+    fillForm(currentProfile);
+  }
+});
 
 // LLM Configuration functions
 async function getLlmConfig() {
@@ -661,10 +674,12 @@ function getVisibleFormElements(documents) {
 
 // Main form filling process
 async function fillForm(profile) {
-  stopFilling = false; // Reset at the start of each fill attempt
-  abortController = null; // Ensure abort is reset
+  stopFilling = false;
+  abortController = null;
+  currentProfile = profile;
+  sessionStorage.setItem('lastFillTime', Date.now()); // Mark for reload detection
 
-  browser.runtime.sendMessage({ action: "fillFormStart" }); // Send start signal
+  browser.runtime.sendMessage({ action: "fillFormStart" });
 
   let filledCount = 0;
   let processed = 0;
@@ -684,6 +699,8 @@ async function fillForm(profile) {
 
     const config = await getLlmConfig();
 
+    setupFormObserver(); // Setup before loop to detect during filling
+
     let filledFields;
     if (config.apiUrl.includes('openrouter.ai')) {
       filledFields = await fillFormSinglePrompt(formFieldsInfo, cleanProfileFields, cleanProfile, profileFields);
@@ -696,7 +713,12 @@ async function fillForm(profile) {
       if (stopFilling) {
         throw new Error("Form filling stopped by user.");
       }
-
+      if (element.hasAttribute('data-filled-by-extension')) {
+        console.log('Skipping already filled field:', info.id || info.name);
+        processed++;
+        continue; // Skip marked fields
+      }
+    
       const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
       const matchingClass = classes.find(cls => cls in filledFields);
       
@@ -706,6 +728,11 @@ async function fillForm(profile) {
         await fillField(element, value, info);
         filledCount++;
         matched = true;
+    
+        // Check for dynamic changes after filling
+        if (formChanged) {
+          throw new Error("Form changed dynamically");
+        }
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
@@ -743,8 +770,14 @@ async function fillForm(profile) {
       });
       stopFilling = false; // Reset the stop action
       updateFillProgress(processed, filledCount, totalFields, "Form filling stopped by user.");
+    } else if (error.message === "Form changed dynamically") {
+      formChanged = false; // Reset flag
+      disconnectObserver(); // Clean up old observer
+      return fillForm(profile); // Restart the entire process with updated DOM
     }
     return { status: "error", message: error.toString() };
+  } finally {
+    disconnectObserver(); // Ensure cleanup, but since restart handles it, optional
   }
 }
 
@@ -872,7 +905,11 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
 
   for (const { element, info } of formFieldsInfo) {
     if (stopFilling) {
-      throw new Error("Form filling stopped by user."); // Change break to throw to propagate
+      throw new Error("Form filling stopped by user.");
+    }
+    if (element.hasAttribute('data-filled-by-extension')) {
+      console.log('Skipping already filled field:', info.id || info.name);
+      continue;
     }
     if (info && Object.values(info).some(value => value)) {
       try {
@@ -882,11 +919,11 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
           filledFields[info.id || info.name] = str_to_fill;
           await fillField(element, str_to_fill, info);
           filledCount++;
-          updateFillProgress(filledCount, totalFields); // Adjust if needed for processed
+          updateFillProgress(filledCount, totalFields);
         }
       } catch (fieldError) {
         if (fieldError.message === "Form filling stopped by user.") {
-          throw fieldError; // Propagate stop
+          throw fieldError;
         }
         console.error("Error processing field:", info, fieldError);
       }
@@ -894,38 +931,6 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
   }
   return filledFields;
 }
-
-// async function fillField(element, value, info) {
-//   const sleep_between_events_ms = 50; 
-//   console.log(`Filling field:`, element, `with value:`, value);
-
-//   if (info.iframeInfo) {
-//     await focusIframeElement(info.iframeInfo);
-//   }
-
-//   // Simulate mouse click on the element
-//   simulateMouseClick(element);
-
-//   // Wait a bit for any click-triggered events to settle
-//   await sleep(sleep_between_events_ms);
-
-//   const win = element.ownerDocument.defaultView;
-
-//   if (element.tagName.toLowerCase() === 'select') {
-//     await fillSelectField(element, value);
-//   } else {
-//     await simulateInput(element, value, win);
-//   }
-
-//   // Trigger additional events
-//   triggerEvents(element, ['input', 'change', 'blur']);
-
-//   // Simulate click outside the form field
-//   simulateMouseClick(element, true);
-
-//   // Wait a bit after filling
-//   await sleep(sleep_between_events_ms);
-// }
 
 async function fillField(element, value, info) {
   const sleep_between_events_ms = 50;
@@ -945,6 +950,7 @@ async function fillField(element, value, info) {
   // element.blur(); // You can add this for extra certainty if needed.
 
   await sleep(sleep_between_events_ms);
+  element.setAttribute('data-filled-by-extension', 'true'); // Mark as filled in case of re-filling to avoid filling same element
 }
 
 async function fillSelectField(selectElement, value) {

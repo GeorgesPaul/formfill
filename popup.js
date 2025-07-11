@@ -1,5 +1,6 @@
 let profileFields = [];
-let currentProfileName = '';
+let currentProfileId = '';
+let isFilling = false; // Track filling state
 
 document.addEventListener('DOMContentLoaded', initializeExtension);
 
@@ -146,6 +147,8 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
 }
 
 function handleInitializationError(error) {
+  isFilling = false; // Ensure reset on init error
+  updateButtonStates();
   console.error("Initialization error:", error);
   updateStatusMessage("An error occurred while loading. Please try again later.");
 }
@@ -283,7 +286,13 @@ function addNewProfile() {
 }
 
 function stopFilling() {
+  isFilling = false;
+  updateButtonStates();
   browser.tabs.query({active: true, currentWindow: true}).then(tabs => {
+    if (!tabs || tabs.length === 0) {
+      updateStatusMessage("No active tab to stop.");
+      return;
+    }
     browser.tabs.sendMessage(tabs[0].id, {
       action: "stopFillForm"
     }).then(response => {
@@ -291,39 +300,57 @@ function stopFilling() {
     }).catch(error => {
       updateStatusMessage(`Error stopping form filling: ${error.toString()}`);
     });
+  }).catch(error => {
+    updateStatusMessage(`Error querying tabs: ${error.toString()}`);
   });
 }
 
-function fillForm() {
-  const profileId = document.getElementById('profileSelect').value;
-  if (!profileId) {
-    updateStatusMessage("Please select a profile to fill the form.");
-    return;
-  }
+function handleError(message, error = null) {
+  isFilling = false;
+  updateButtonStates();
+  updateStatusMessage(error ? `${message}: ${error.toString()}` : message);
+}
 
-  browser.storage.local.get('profiles').then(data => {
-    const profile = data.profiles[profileId];
-    if (!profile) {
-      updateStatusMessage("Selected profile not found.");
-      return;
+async function fillForm() {
+  isFilling = true;
+  updateButtonStates();
+  updateStatusMessage("Starting to fill form...");
+
+  try {
+    const profileId = document.getElementById('profileSelect').value;
+    if (!profileId) {
+      throw new Error("Please select a profile to fill the form.");
     }
-    browser.tabs.query({active: true, currentWindow: true}).then(tabs => {
-      updateStatusMessage("Starting to fill form...");
-      browser.tabs.sendMessage(tabs[0].id, {
-        action: "fillForm",
-        profile: profile
-      }).then(response => {
-        if (response && response.status === "success") {
-          updateStatusMessage(`Form filling complete: ${response.message}`);
-        } else {
-          updateStatusMessage(`Error filling form: ${response ? response.message : 'Unknown error'}`);
-        }
-      }).catch(error => {
-        updateStatusMessage(`Error: ${error.toString()}`);
-      });
+
+    const data = await browser.storage.local.get('profiles');
+    const profile = data.profiles?.[profileId];
+    if (!profile) {
+      throw new Error("Selected profile not found.");
+    }
+
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tabs || tabs.length === 0) {
+      throw new Error("No active tab found.");
+    }
+
+    const response = await browser.tabs.sendMessage(tabs[0].id, {
+      action: "fillForm",
+      profile: profile
     });
-  });
+
+    if (response && response.status === "success") {
+      updateStatusMessage(`Form filling complete: ${response.message}`);
+    } else {
+      throw new Error(response ? response.message : "Unknown error");
+    }
+  } catch (error) {
+    handleError("Error filling form", error);
+  } finally {
+    isFilling = false;
+    updateButtonStates();
+  }
 }
+
 
 function backupProfileToTxt() {
   if (!currentProfileId) {
@@ -439,6 +466,13 @@ function openLlmConfig() {
   });
 }
 
+function updateButtonStates() {
+  const fillButton = document.getElementById('fillForm');
+  const stopButton = document.getElementById('stopFilling');
+  fillButton.disabled = isFilling;
+  stopButton.disabled = !isFilling;
+}
+
 let lastUpdateTime = 0;
 const updateInterval = 50; // Minimum time between updates in milliseconds
 
@@ -455,22 +489,30 @@ function updateStatusMessage(message) {
 browser.runtime.onMessage.addListener((message) => {
   switch (message.action) {
     case "fillFormStart":
-      updateStatusMessage("Starting to fill form...");
+      isFilling = true; // Set filling state
+      updateButtonStates();
+      updateStatusMessage(message.message || "Starting to fill form...");
       break;
     case "fillFormProgress":
       updateStatusMessage(message.message || `Filled ${message.filled} out of ${message.total} fields.`);
       break;
     case "fillFormComplete":
+      isFilling = false; // Reset on completion
+      updateButtonStates();
       updateStatusMessage(message.message || `Completed filling ${message.filled} out of ${message.total} fields.`);
       break;
+    case "fillFormStopped":
+      isFilling = false; // Reset on stop
+      updateButtonStates();
+      updateStatusMessage(message.message || `Form filling stopped. Filled ${message.filled} out of ${message.total} fields.`);
+      break;
     case "fillFormError":
-      updateStatusMessage(`Error filling form: ${message.error}`);
+      isFilling = false; // Reset on error
+      updateButtonStates();
+      updateStatusMessage(message.message || `Error filling form: ${message.error}`);
       break;
     case "updateProgress":
       updateStatusMessage(message.message);
-      break;
-    case "fillFormStopped":
-      updateStatusMessage(message.message || `Form filling stopped. Filled ${message.filled} out of ${message.total} fields.`);
       break;
   }
 });
