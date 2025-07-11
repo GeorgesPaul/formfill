@@ -4,6 +4,7 @@ let stopFilling = false;
 let abortController = null;
 let currentProfile = null; 
 let formChanged = false; 
+let pauseFilling = false;
 
 // Event listeners
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -672,6 +673,15 @@ function getVisibleFormElements(documents) {
   return allElements;
 }
 
+function pauseObserver() {
+  if (observer) {
+    observer.disconnect();
+  }
+}
+
+function resumeObserver() {
+  setupFormObserver(); // Re-setup to resume
+}
 // Main form filling process
 async function fillForm(profile) {
   stopFilling = false;
@@ -689,9 +699,10 @@ async function fillForm(profile) {
     const profileFields = await loadYaml('profileFields.yaml');   
     const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields.fields);
 
-    const formElements = getAllFormElements();
+    let formElements = getAllFormElements();
+    formElements = formElements.filter(el => !el.hasAttribute('data-filled-by-extension') || el.value === ''); // Filter marked but re-fill if cleared
     totalFields = formElements.length;
-    console.log('found formElements on page:', formElements);
+    console.log('found formElements on page (filtered):', formElements);
 
     updateFillProgress(processed, filledCount, totalFields, "Starting to fill form... This will take at least a few seconds.");
 
@@ -699,7 +710,7 @@ async function fillForm(profile) {
 
     const config = await getLlmConfig();
 
-    setupFormObserver(); // Setup before loop to detect during filling
+    setupFormObserver(); // Before loop
 
     let filledFields;
     if (config.apiUrl.includes('openrouter.ai')) {
@@ -713,22 +724,30 @@ async function fillForm(profile) {
       if (stopFilling) {
         throw new Error("Form filling stopped by user.");
       }
+      if (pauseFilling) {
+        console.log('Pausing filling due to popup/loading...');
+        await waitForResume(); // New helper to wait for pauseFilling = false
+        // After resume, check if any filled fields were cleared by site
+        checkClearedFields(formElements);
+      }
       if (element.hasAttribute('data-filled-by-extension')) {
         console.log('Skipping already filled field:', info.id || info.name);
         processed++;
-        continue; // Skip marked fields
+        continue;
       }
-    
+
       const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
       const matchingClass = classes.find(cls => cls in filledFields);
       
       let matched = false;
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
+        pauseObserver(); // Pause before fill to ignore own mutations
         await fillField(element, value, info);
+        resumeObserver(); // Resume after
         filledCount++;
         matched = true;
-    
+
         // Check for dynamic changes after filling
         if (formChanged) {
           throw new Error("Form changed dynamically");
@@ -771,13 +790,14 @@ async function fillForm(profile) {
       stopFilling = false; // Reset the stop action
       updateFillProgress(processed, filledCount, totalFields, "Form filling stopped by user.");
     } else if (error.message === "Form changed dynamically") {
-      formChanged = false; // Reset flag
+      formChanged = false;
+      pauseFilling = false; // Reset pause too
       disconnectObserver(); // Clean up old observer
       return fillForm(profile); // Restart the entire process with updated DOM
     }
     return { status: "error", message: error.toString() };
   } finally {
-    disconnectObserver(); // Ensure cleanup, but since restart handles it, optional
+    // No finally disconnect, as we want it active post-fill for future changes
   }
 }
 
@@ -906,10 +926,6 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
   for (const { element, info } of formFieldsInfo) {
     if (stopFilling) {
       throw new Error("Form filling stopped by user.");
-    }
-    if (element.hasAttribute('data-filled-by-extension')) {
-      console.log('Skipping already filled field:', info.id || info.name);
-      continue;
     }
     if (info && Object.values(info).some(value => value)) {
       try {

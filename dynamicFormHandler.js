@@ -1,5 +1,3 @@
-// dynamicFormHandler.js
-
 // Globals (shared with content.js)
 let observer = null;
 let debounceTimer = null;
@@ -29,25 +27,25 @@ function setupFormObserver() {
 }
 
 function hasSignificantFormChange(mutations) {
-    return mutations.some(mutation => {
-      if (mutation.type === 'attributes') {
-        // Ignore value changes, our marking, or on marked elements
-        if (mutation.attributeName === 'value' || mutation.attributeName === 'data-filled-by-extension' || mutation.target.hasAttribute('data-filled-by-extension')) return false;
-        // Check if on form element or affects visibility
-        return mutation.target.matches('input, select, textarea, form') ||
-               (mutation.attributeName === 'style' || mutation.attributeName === 'class' || mutation.attributeName === 'hidden');
-      } else if (mutation.type === 'childList') {
-        // Check added nodes for form elements (recursive), ignore if marked or in marked parent
-        return Array.from(mutation.addedNodes).some(node => 
-          node.nodeType === Node.ELEMENT_NODE &&
-          !node.hasAttribute('data-filled-by-extension') &&
-          !node.closest('[data-filled-by-extension]') &&  // Ignore if inside marked
-          (node.matches('input, select, textarea, form') || node.querySelector('input, select, textarea, form'))
-        );
-      }
-      return false;
-    });
-  }
+  return mutations.some(mutation => {
+    if (mutation.type === 'attributes') {
+      // Ignore value changes, our marking, or on marked elements
+      if (mutation.attributeName === 'value' || mutation.attributeName === 'data-filled-by-extension' || mutation.target.hasAttribute('data-filled-by-extension')) return false;
+      // Check if on form element or affects visibility
+      return mutation.target.matches('input, select, textarea, form') ||
+             (mutation.attributeName === 'style' || mutation.attributeName === 'class' || mutation.attributeName === 'hidden');
+    } else if (mutation.type === 'childList') {
+      // Check added nodes for form elements (recursive), ignore if marked or in marked parent
+      return Array.from(mutation.addedNodes).some(node => 
+        node.nodeType === Node.ELEMENT_NODE &&
+        !node.hasAttribute('data-filled-by-extension') &&
+        !node.closest('[data-filled-by-extension]') &&  // Ignore if inside marked
+        (node.matches('input, select, textarea, form') || node.querySelector('input, select, textarea, form'))
+      );
+    }
+    return false;
+  });
+}
 
 // Disconnect observer
 function disconnectObserver() {
