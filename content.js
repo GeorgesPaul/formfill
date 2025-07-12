@@ -1,5 +1,6 @@
 const response_Timeout_ms = 15000;
-const time_between_dynamic_reload_loops_ms = 5000; 
+const time_between_dynamic_reload_loops_ms = 1000; 
+const delay_after_dropdown_selection_ms = 2000; 
 let stopFilling = false;
 let abortController = null;
 let currentProfile = null; 
@@ -721,6 +722,11 @@ async function fillForm(profile) {
     console.log('Fields to fill:', filledFields);
 
     for (const { element, info } of formFieldsInfo) {
+      // New: Wait for network idle before filling
+      // This blocks form filling until network traffic in the page is idle. 
+      // To handle retarded webforms that randomly reload (parts of) the page while you're trying to use the page. 
+      await waitForIdle();
+
       if (stopFilling) {
         throw new Error("Form filling stopped by user.");
       }
@@ -957,6 +963,7 @@ async function fillField(element, value, info) {
 
   if (element.tagName.toLowerCase() === 'select') {
     await fillSelectField(element, value);
+    await sleep(delay_after_dropdown_selection_ms); // 2-second delay after dropdown selection
   } else {
     // This is often the most reliable method for complex sites.
     await simulateHumanTyping(element, value);
