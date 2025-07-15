@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.9",
+  "version": "1.10",
   "description": "Intelligently fills forms based on user profiles",
   "permissions": [
     "activeTab",
@@ -53,5 +53,15 @@
       "run_at": "document_idle", 
       "all_frames": true
     }
-  ]
+  ],
+  "browser_action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "GeorgesPaul Form Filler",
+    "default_popup": "popup.html"
+  }
 }
