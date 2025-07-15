@@ -215,7 +215,11 @@ function updateProfileName(profileId, newProfileName) {
 
 function updateProfileSelect(profiles, selectedProfileId) {
   const profileSelect = document.getElementById('profileSelect');
-  profileSelect.innerHTML = '';
+  
+  // Safe way to clear children
+  while (profileSelect.firstChild) {
+    profileSelect.removeChild(profileSelect.firstChild);
+  }
   
   Object.entries(profiles).forEach(([id, profile]) => {
     const option = document.createElement('option');

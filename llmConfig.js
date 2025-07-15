@@ -53,7 +53,10 @@ function createDefaultConfig() {
 
 function populateConfigTable(configs) {
   const configTableBody = document.querySelector('#configTable tbody');
-  configTableBody.innerHTML = '';
+  // Safe way to clear children
+  while (configTableBody.firstChild) {
+    configTableBody.removeChild(configTableBody.firstChild);
+  }
   
   for (let name in configs) {
     const config = configs[name];
@@ -64,12 +67,23 @@ function populateConfigTable(configs) {
 
 function createConfigRow(name, config) {
   const row = document.createElement('tr');
-  row.innerHTML = `
-    <td>${name}</td>
-    <td>${config.apiUrl}</td>
-    <td>${config.model}</td>
-    <td>${config.apiKey ? '********' : ''}</td>
-  `;
+  
+  const tdName = document.createElement('td');
+  tdName.textContent = name;
+  row.appendChild(tdName);
+  
+  const tdApiUrl = document.createElement('td');
+  tdApiUrl.textContent = config.apiUrl;
+  row.appendChild(tdApiUrl);
+  
+  const tdModel = document.createElement('td');
+  tdModel.textContent = config.model;
+  row.appendChild(tdModel);
+  
+  const tdApiKey = document.createElement('td');
+  tdApiKey.textContent = config.apiKey ? '********' : '';
+  row.appendChild(tdApiKey);
+  
   row.addEventListener('click', () => selectRow(row, true));
   return row;
 }
