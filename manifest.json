@@ -44,7 +44,6 @@
     {
       "matches": ["<all_urls>"],
       "js": [
-        "dynamicFormHandler.js",
         "idleMonitor.js",
         "apiUtils.js",
         "content.js",

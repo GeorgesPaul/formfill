@@ -1,11 +1,8 @@
 const response_Timeout_ms = 15000;
-const time_between_dynamic_reload_loops_ms = 1000; 
-const delay_after_dropdown_selection_ms = 2000; 
+const delay_after_dropdown_selection_ms = 100; 
 let stopFilling = false;
 let abortController = null;
 let currentProfile = null; 
-let formChanged = false; 
-let pauseFilling = false;
 
 // Event listeners
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -28,21 +25,11 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (abortController) {
       abortController.abort();
     }
-    disconnectObserver(); // Stop observer for terrible shitty dynamic forms
     sendResponse({ status: "stopped" });
     return true;
   }
 });
-window.addEventListener('load', () => {
-  const lastFillTime = sessionStorage.getItem('lastFillTime');
-  if (lastFillTime && Date.now() - parseInt(lastFillTime) < time_between_dynamic_reload_loops_ms) { // 5s window to avoid loops
-    console.log('Skipping fill to avoid loop on reload');
-    return;
-  }
-  if (currentProfile) {
-    fillForm(currentProfile);
-  }
-});
+
 
 // LLM Configuration functions
 async function getLlmConfig() {
@@ -674,21 +661,12 @@ function getVisibleFormElements(documents) {
   return allElements;
 }
 
-function pauseObserver() {
-  if (observer) {
-    observer.disconnect();
-  }
-}
 
-function resumeObserver() {
-  setupFormObserver(); // Re-setup to resume
-}
 // Main form filling process
 async function fillForm(profile) {
   stopFilling = false;
   abortController = null;
   currentProfile = profile;
-  sessionStorage.setItem('lastFillTime', Date.now()); // Mark for reload detection
 
   browser.runtime.sendMessage({ action: "fillFormStart" });
 
@@ -711,7 +689,7 @@ async function fillForm(profile) {
 
     const config = await getLlmConfig();
 
-    setupFormObserver(); // Before loop
+
 
     let filledFields;
     if (config.apiUrl.includes('openrouter.ai')) {
@@ -722,20 +700,11 @@ async function fillForm(profile) {
     console.log('Fields to fill:', filledFields);
 
     for (const { element, info } of formFieldsInfo) {
-      // New: Wait for network idle before filling
-      // This blocks form filling until network traffic in the page is idle. 
-      // To handle retarded webforms that randomly reload (parts of) the page while you're trying to use the page. 
-      await waitForIdle();
 
       if (stopFilling) {
         throw new Error("Form filling stopped by user.");
       }
-      if (pauseFilling) {
-        console.log('Pausing filling due to popup/loading...');
-        await waitForResume(); // New helper to wait for pauseFilling = false
-        // After resume, check if any filled fields were cleared by site
-        checkClearedFields(formElements);
-      }
+
       if (element.hasAttribute('data-filled-by-extension')) {
         console.log('Skipping already filled field:', info.id || info.name);
         processed++;
@@ -748,16 +717,11 @@ async function fillForm(profile) {
       let matched = false;
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
-        pauseObserver(); // Pause before fill to ignore own mutations
+
         await fillField(element, value, info);
-        resumeObserver(); // Resume after
+
         filledCount++;
         matched = true;
-
-        // Check for dynamic changes after filling
-        if (formChanged) {
-          throw new Error("Form changed dynamically");
-        }
       } else {
         console.log('No match found for:', info.id, info.name, classes.join(' '));
       }
@@ -795,11 +759,6 @@ async function fillForm(profile) {
       });
       stopFilling = false; // Reset the stop action
       updateFillProgress(processed, filledCount, totalFields, "Form filling stopped by user.");
-    } else if (error.message === "Form changed dynamically") {
-      formChanged = false;
-      pauseFilling = false; // Reset pause too
-      disconnectObserver(); // Clean up old observer
-      return fillForm(profile); // Restart the entire process with updated DOM
     }
     return { status: "error", message: error.toString() };
   } finally {
