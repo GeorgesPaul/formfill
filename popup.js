@@ -1,14 +1,73 @@
-let profileFields = [];
 let currentProfileId = '';
 let isFilling = false; // Track filling state
+
+// Default text template for profile data
+const DEFAULT_PROFILE_TEXT = `name: Test Profile
+user_name: johndoe123
+given_names: John William
+family_names: Doe Smith
+name_order: Given-Family
+name_infix: van
+name_prefix: de
+title: Dr.
+salutation: Mr.
+name_suffix: Jr.
+preferred_name: Johnny
+full_name: Dr. John William van de Doe Smith Jr.
+email: john.doe@example.com
+linkedIN: https://www.linkedin.com/in/johndoe
+website: www.johndoe.com
+phone: +1 (555) 123-4567
+phone_country_code: +1
+phone_area_code: 555
+phone_local_number: 123-4567
+address_line1: 123 Main Street
+address_line2: Apartment 4B
+address_street: Main Street
+address_house_number: 123
+address_city: Anytown
+address_state: California
+address_postal_code: 12345
+address_country: United States
+date_of_birth_day: 15
+date_of_birth_month: 07
+date_of_birth_year: 1985
+gender: Male
+tax_number: 123-45-6789
+social_security_number: 987-65-4321
+health_insurance_number: 1EG4-TE5-MK72
+nationality: American
+passport_number: A1234567
+passport_expiry_day: 20
+passport_expiry_month: 09
+passport_expiry_year: 2028
+occupation: Software Engineer
+cardholder_name: John W. Doe
+credit_card_number: 4111111111111111
+credit_card_brand: Visa
+credit_card_expiration_month: 12
+credit_card_expiration_year: 2025
+credit_card_security_code: 123`;
+
+// Template for new empty profiles
+const EMPTY_PROFILE_TEXT = `
+name: Your Full Name
+email: your.email@example.com
+phone: +1 (555) 123-4567
+address_line1: 123 Main Street
+address_city: Your City
+address_state: Your State
+address_postal_code: 12345
+address_country: Your Country
+
+`;
 
 document.addEventListener('DOMContentLoaded', initializeExtension);
 
 function initializeExtension() {
   updateStatusMessage("Configure the API (button at bottom) then press Fill Form on a website with forms.");
   
-  loadProfileFields()
-    .then(loadProfiles)
+  loadProfiles()
     .then(initializeUI)
     .catch(handleInitializationError);
 }
@@ -19,15 +78,6 @@ function generateUUID() {
     var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
   });
-}
-
-function loadProfileFields() {
-  return fetch(browser.runtime.getURL('profileFields.yaml'))
-    .then(response => response.text())
-    .then(yamlText => {
-      profileFields = jsyaml.load(yamlText).fields;
-      console.log("Profile fields loaded:", profileFields);
-    });
 }
 
 async function loadProfiles() {
@@ -54,58 +104,12 @@ async function loadProfiles() {
   }
 }
 
-
-
 function createDefaultProfile() {
   const defaultProfileId = generateUUID();
   const defaultProfile = {
     [defaultProfileId]: {
       name: 'Test Profile',
-      user_name: 'johndoe123',
-      given_names: 'John William',
-      family_names: 'Doe Smith',
-      name_order: 'Given-Family',
-      name_infix: 'van',
-      name_prefix: 'de',
-      title: 'Dr.',
-      salutation: 'Mr.',
-      name_suffix: 'Jr.',
-      preferred_name: 'Johnny',
-      full_name: 'Dr. John William van de Doe Smith Jr.',
-      email: 'john.doe@example.com',
-      linkedIN: 'https://www.linkedin.com/in/johndoe',
-      website: 'www.johndoe.com',
-      phone: '+1 (555) 123-4567',
-      phone_country_code: '+1',
-      phone_area_code: '555',
-      phone_local_number: '123-4567',
-      address_line1: '123 Main Street',
-      address_line2: 'Apartment 4B',
-      address_street: 'Main Street',
-      address_house_number: '123',
-      address_city: 'Anytown',
-      address_state: 'California',
-      address_postal_code: '12345',
-      address_country: 'United States',
-      date_of_birth_day: '15',
-      date_of_birth_month: '07',
-      date_of_birth_year: '1985',
-      gender: 'Male',
-      tax_number: '123-45-6789',
-      social_security_number: '987-65-4321',
-      health_insurance_number: '1EG4-TE5-MK72',
-      nationality: 'American',
-      passport_number: 'A1234567',
-      passport_expiry_day: '20',
-      passport_expiry_month: '09',
-      passport_expiry_year: '2028',
-      occupation: 'Software Engineer',
-      cardholder_name: 'John W. Doe',
-      credit_card_number: '4111111111111111',
-      credit_card_brand: 'Visa',
-      credit_card_expiration_month: '12',
-      credit_card_expiration_year: '2025',
-      credit_card_security_code: '123'
+      data: DEFAULT_PROFILE_TEXT
     }
   };
   
@@ -119,14 +123,12 @@ function createDefaultProfile() {
 }
 
 function initializeUI({ profiles, lastLoadedProfileId }) {
-  updateProfileSelect(profiles);
+  console.log('initializeUI called with profiles:', Object.keys(profiles));
+  
+  // Initialize the profile form first
   initializeProfileForm();
   
-  // Load previously selected profiles
-  browser.storage.local.get('selectedProfileIds').then(data => {
-    const selectedIds = data.selectedProfileIds || [];
-    updateProfileSelect(profiles, selectedIds);
-  });
+  updateProfileSelect(profiles);
   
   // Set up event listeners
   document.getElementById('fillForm').addEventListener('click', fillForm);
@@ -146,7 +148,27 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
     window.open(stripePaymentLink, '_blank');
   });
 
+  // Load previously selected profiles and load the first one into the form
+  browser.storage.local.get('selectedProfileIds').then(data => {
+    const selectedIds = data.selectedProfileIds || [];
+    updateProfileSelect(profiles, selectedIds);
+    
+    // Load the first selected profile into the form
+    if (selectedIds.length >= 1) {
+      loadProfileIntoForm(selectedIds[0]);
+    } else if (lastLoadedProfileId && profiles[lastLoadedProfileId]) {
+      // If no profiles are selected but we have a last loaded profile, load it
+      loadProfileIntoForm(lastLoadedProfileId);
+    } else if (Object.keys(profiles).length > 0) {
+      // If no selection and no last loaded, load the first available profile
+      const firstProfileId = Object.keys(profiles)[0];
+      loadProfileIntoForm(firstProfileId);
+    }
+  });
+  
+  // Ensure the profile form is visible
   document.getElementById('profileForm').style.display = 'block';
+  console.log('Profile form should be visible now');
 }
 
 function handleInitializationError(error) {
@@ -157,19 +179,36 @@ function handleInitializationError(error) {
 }
 
 function initializeProfileForm() {
+  console.log('initializeProfileForm called');
   const formDiv = document.getElementById('profileForm');
   const dynamicForm = document.getElementById('dynamicProfileForm');
-  formDiv.style.display = 'block';
   
-  if (dynamicForm.innerHTML === '') {
+  console.log('formDiv:', formDiv);
+  console.log('dynamicForm:', dynamicForm);
+  
+  // Check if the textarea already exists
+  const existingTextarea = document.getElementById('profileData');
+  const existingNameInput = document.getElementById('profileName');
+  
+  console.log('existingTextarea:', existingTextarea);
+  console.log('existingNameInput:', existingNameInput);
+  
+  if (!existingTextarea || !existingNameInput) {
+    // Clear the form and recreate it
+    dynamicForm.innerHTML = '';
+    
     const profileNameInput = createInput('profileName', 'Profile Name:', 'text', handleProfileNameChange);
     dynamicForm.appendChild(profileNameInput);
     dynamicForm.appendChild(document.createElement('br'));
     
-    profileFields.forEach(field => {
-      const input = createInput(field.id, field.label, field.type, e => autoSaveProfile(field.id, e.target.value));
-      dynamicForm.appendChild(input);
-    });
+    // Create the main data textarea
+    const dataInput = createInput('profileData', 'Enter as much data as possible:', 'textarea', handleProfileDataChange);
+    dynamicForm.appendChild(dataInput);
+    
+    console.log('Profile form recreated');
+    console.log('Created elements:', document.getElementById('profileName'), document.getElementById('profileData'));
+  } else {
+    console.log('Profile form already exists');
   }
 }
 
@@ -182,16 +221,20 @@ function createInput(id, labelText, inputType, changeHandler) {
   let input;
   if (inputType === 'textarea') {
     input = document.createElement('textarea');
-    input.rows = 5;  // Set a default number of visible rows (adjust as needed, e.g., 3-10)
-    input.cols = 40; // Optional: Set default width in characters (adjust for your popup's layout)
+    input.rows = 15;
+    input.cols = 40;
+    input.style.width = '100%';
+    input.style.resize = 'vertical';
+    input.placeholder = 'Enter profile data in key: value format, one per line...';
   } else {
     input = document.createElement('input');
-    input.type = inputType || 'text';  // Default to 'text' if no type is specified
+    input.type = inputType || 'text';
   }
   input.id = id;
   input.addEventListener('input', changeHandler);
   
   container.appendChild(labelElement);
+  container.appendChild(document.createElement('br'));
   container.appendChild(input);
   return container;
 }
@@ -213,6 +256,23 @@ function updateProfileName(profileId, newProfileName) {
       });
     }
   });
+}
+
+function handleProfileDataChange(event) {
+  const newData = event.target.value;
+  if (currentProfileId) {
+    browser.storage.local.get('profiles').then(data => {
+      let profiles = data.profiles || {};
+      if (!profiles[currentProfileId]) {
+        profiles[currentProfileId] = { name: '', data: '' };
+      }
+      profiles[currentProfileId].data = newData;
+      browser.storage.local.set({ profiles }).then(() => {
+        console.log(`Profile ${currentProfileId} data auto-saved`);
+        updateStatusMessage(`Profile data saved`);
+      });
+    });
+  }
 }
 
 function updateProfileSelect(profiles, selectedProfileIds = []) {
@@ -238,14 +298,38 @@ function updateSelectedCount() {
   const selectedOptions = Array.from(select.selectedOptions);
   const count = selectedOptions.length;
   
+  console.log('updateSelectedCount called');
+  console.log('Selected options:', selectedOptions.map(opt => ({ value: opt.value, text: opt.textContent })));
+  console.log('Selected count:', count);
+  
   const selectedCount = document.getElementById('selectedCount');
   if (selectedCount) {
     selectedCount.textContent = `${count} profile${count !== 1 ? 's' : ''} selected`;
+    console.log('Updated selectedCount text to:', selectedCount.textContent);
+  } else {
+    console.log('selectedCount element not found');
   }
   
   // Store selected profiles
   const selectedIds = selectedOptions.map(option => option.value);
+  console.log('Selected IDs:', selectedIds);
   browser.storage.local.set({ selectedProfileIds: selectedIds });
+  
+  // Load profile into form if exactly one is selected
+  if (selectedIds.length === 1) {
+    console.log('Loading single profile:', selectedIds[0]);
+    loadProfileIntoForm(selectedIds[0]);
+  } else if (selectedIds.length > 1) {
+    // When multiple profiles are selected, load the first one but don't set currentProfileId
+    console.log('Loading first of multiple profiles:', selectedIds[0]);
+    loadProfileIntoForm(selectedIds[0]);
+  } else {
+    // No profiles selected, clear the form
+    console.log('No profiles selected, clearing form');
+    document.getElementById('profileName').value = '';
+    document.getElementById('profileData').value = EMPTY_PROFILE_TEXT;
+    currentProfileId = '';
+  }
   
   return selectedIds;
 }
@@ -271,14 +355,12 @@ function clearAllProfiles() {
   updateSelectedCount();
 }
 
-
-
 function autoSaveProfile(fieldId, value) {
   if (currentProfileId) {
     browser.storage.local.get('profiles').then(data => {
       let profiles = data.profiles || {};
       if (!profiles[currentProfileId]) {
-        profiles[currentProfileId] = { name: '' };
+        profiles[currentProfileId] = { name: '', data: '' };
       }
       profiles[currentProfileId][fieldId] = value;
       browser.storage.local.set({ profiles }).then(() => {
@@ -289,32 +371,189 @@ function autoSaveProfile(fieldId, value) {
   }
 }
 
-function loadProfile(profileId) {
-  browser.storage.local.get('profiles').then(data => {
-    const profiles = data.profiles || {};
-    const profile = profiles[profileId];
-    if (profile) {
-      currentProfileId = profileId;
-      document.getElementById('profileName').value = profile.name || '';
-      profileFields.forEach(field => {
-        const input = document.getElementById(field.id);
-        if (input) {
-          input.value = profile[field.id] || '';
-        }
-      });
-      // Apply stored textarea height if present
-      const textarea = document.getElementById('additionalFields');
-      if (textarea && profile.additionalFieldsHeight) {
-        textarea.style.height = profile.additionalFieldsHeight;
+// Function to parse text data into profile object
+function parseProfileText(textData) {
+  const profile = {};
+  const lines = textData.split('\n');
+  
+  lines.forEach(line => {
+    const colonIndex = line.indexOf(':');
+    if (colonIndex > 0) {
+      const key = line.substring(0, colonIndex).trim();
+      const value = line.substring(colonIndex + 1).trim();
+      if (key && value) {
+        profile[key] = value;
       }
-      browser.storage.local.set({ lastLoadedProfileId: profileId });
-      updateStatusMessage(`Loaded profile: ${profile.name || '(Unnamed Profile)'}`);
-    } else {
-      updateStatusMessage(`Profile not found`);
+    }
+  });
+  
+  return profile;
+}
+
+// Function to convert profile object back to text
+function profileToText(profile) {
+  const lines = [];
+  Object.entries(profile).forEach(([key, value]) => {
+    if (key !== 'name' && value) {
+      lines.push(`${key}: ${value}`);
+    }
+  });
+  return lines.join('\n');
+}
+
+// Modified fillForm function to work with text-based profiles
+async function fillForm() {
+  const selectedIds = getSelectedProfileIds();
+  if (selectedIds.length === 0) {
+    updateStatusMessage("No profiles selected!");
+    return;
+  }
+
+  isFilling = true;
+  updateButtonStates();
+  updateStatusMessage("Filling form with selected profiles...");
+
+  try {
+    const data = await browser.storage.local.get('profiles');
+    const profiles = data.profiles || {};
+    
+    // Convert text-based profiles to object format for content script
+    const processedProfiles = {};
+    selectedIds.forEach(id => {
+      if (profiles[id] && profiles[id].data) {
+        processedProfiles[id] = {
+          ...parseProfileText(profiles[id].data),
+          name: profiles[id].name
+        };
+      }
+    });
+
+    // Send to content script
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tabs[0]) {
+      await browser.tabs.sendMessage(tabs[0].id, {
+        action: "fillForm",
+        profiles: processedProfiles
+      });
+    }
+  } catch (error) {
+    console.error("Error filling form:", error);
+    updateStatusMessage("Error: " + error.message);
+    isFilling = false;
+    updateButtonStates();
+  }
+}
+
+function stopFilling() {
+  isFilling = false;
+  updateButtonStates();
+  updateStatusMessage("Form filling stopped.");
+  
+  // Send stop message to content script
+  browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
+    if (tabs[0]) {
+      browser.tabs.sendMessage(tabs[0].id, { action: "stopFilling" });
     }
   });
 }
 
+function updateButtonStates() {
+  const fillButton = document.getElementById('fillForm');
+  const stopButton = document.getElementById('stopFilling');
+  
+  if (isFilling) {
+    fillButton.disabled = true;
+    stopButton.disabled = false;
+  } else {
+    fillButton.disabled = false;
+    stopButton.disabled = true;
+  }
+}
+
+function updateStatusMessage(message) {
+  const logMsg = document.getElementById('logMsg');
+  if (logMsg) {
+    logMsg.textContent = message;
+  }
+}
+
+function addNewProfile() {
+  const newProfileId = generateUUID();
+  const newProfileName = prompt('Enter profile name:');
+  if (!newProfileName) return;
+  
+  browser.storage.local.get('profiles').then(data => {
+    let profiles = data.profiles || {};
+    profiles[newProfileId] = {
+      name: newProfileName,
+      data: EMPTY_PROFILE_TEXT
+    };
+    
+    browser.storage.local.set({ 
+      profiles, 
+      lastLoadedProfileId: newProfileId 
+    }).then(() => {
+      refreshProfileList();
+      loadProfileIntoForm(newProfileId);
+      updateStatusMessage(`New profile "${newProfileName}" created`);
+    });
+  });
+}
+
+function loadProfileIntoForm(profileId) {
+  if (!profileId) {
+    console.log('No profileId provided to loadProfileIntoForm');
+    return;
+  }
+  
+  console.log('Loading profile:', profileId);
+  currentProfileId = profileId;
+  
+  browser.storage.local.get('profiles').then(data => {
+    const profiles = data.profiles || {};
+    const profile = profiles[profileId];
+    
+    console.log('All profiles in storage:', profiles);
+    console.log('Profile data for', profileId, ':', profile);
+    
+    if (profile) {
+      const profileNameInput = document.getElementById('profileName');
+      const profileDataInput = document.getElementById('profileData');
+      
+      console.log('Setting profile name to:', profile.name);
+      console.log('Setting profile data to:', profile.data);
+      
+      if (profileNameInput && profileDataInput) {
+        profileNameInput.value = profile.name || '';
+        profileDataInput.value = profile.data || EMPTY_PROFILE_TEXT;
+        updateStatusMessage(`Loaded profile: ${profile.name}`);
+        console.log('Profile loaded successfully:', profile.name);
+        console.log('Form elements updated. Name value:', profileNameInput.value);
+        console.log('Form elements updated. Data value length:', profileDataInput.value.length);
+      } else {
+        console.error('Form elements not found when loading profile');
+        console.log('profileNameInput exists:', !!profileNameInput);
+        console.log('profileDataInput exists:', !!profileDataInput);
+        // Try to reinitialize the form
+        initializeProfileForm();
+        setTimeout(() => {
+          const profileNameInput = document.getElementById('profileName');
+          const profileDataInput = document.getElementById('profileData');
+          if (profileNameInput && profileDataInput) {
+            profileNameInput.value = profile.name || '';
+            profileDataInput.value = profile.data || EMPTY_PROFILE_TEXT;
+            updateStatusMessage(`Loaded profile: ${profile.name}`);
+          }
+        }, 100);
+      }
+    } else {
+      console.error('Profile not found:', profileId);
+      console.log('Available profile IDs:', Object.keys(profiles));
+    }
+  }).catch(error => {
+    console.error('Error loading profile:', error);
+  });
+}
 
 function refreshProfileList() {
   browser.storage.local.get(['profiles', 'selectedProfileIds']).then(data => {
@@ -324,315 +563,116 @@ function refreshProfileList() {
   });
 }
 
-// Call refreshProfileList after profile operations
-function addNewProfile() {
-  const newProfileId = generateUUID();
+function removeSelectedProfile() {
+  const selectedIds = getSelectedProfileIds();
+  if (selectedIds.length === 0) {
+    updateStatusMessage("No profiles selected to remove!");
+    return;
+  }
+  
+  const confirmRemove = confirm(`Remove ${selectedIds.length} selected profile(s)?`);
+  if (!confirmRemove) return;
+  
   browser.storage.local.get('profiles').then(data => {
     let profiles = data.profiles || {};
-    profiles[newProfileId] = { name: '' };
-    browser.storage.local.set({ profiles, lastLoadedProfileId: newProfileId }).then(() => {
+    selectedIds.forEach(id => {
+      delete profiles[id];
+    });
+    
+    browser.storage.local.set({ profiles }).then(() => {
       refreshProfileList();
-      loadProfile(newProfileId);
-      updateStatusMessage(`Created new profile`);
-    });
-  });
-}
-
-function stopFilling() {
-  isFilling = false;
-  updateButtonStates();
-  browser.tabs.query({active: true, currentWindow: true}).then(tabs => {
-    if (!tabs || tabs.length === 0) {
-      updateStatusMessage("No active tab to stop.");
-      return;
-    }
-    browser.tabs.sendMessage(tabs[0].id, {
-      action: "stopFillForm"
-    }).then(response => {
-      updateStatusMessage("Form filling stopped.");
-    }).catch(error => {
-      updateStatusMessage(`Error stopping form filling: ${error.toString()}`);
-    });
-  }).catch(error => {
-    updateStatusMessage(`Error querying tabs: ${error.toString()}`);
-  });
-}
-
-function handleError(message, error = null) {
-  isFilling = false;
-  updateButtonStates();
-  updateStatusMessage(error ? `${message}: ${error.toString()}` : message);
-}
-
-async function fillForm() {
-  isFilling = true;
-  updateButtonStates();
-  updateStatusMessage("Starting to fill form...");
-
-  try {
-    const selectedProfileIds = getSelectedProfileIds();
-    if (selectedProfileIds.length === 0) {
-      throw new Error("Please select at least one profile to fill the form.");
-    }
-
-    const data = await browser.storage.local.get('profiles');
-    const profiles = data.profiles || {};
-    
-    // Get profile names for status message
-    const profileNames = selectedProfileIds.map(id => profiles[id]?.name || '(Unnamed Profile)').join(', ');
-    
-    // Merge selected profiles
-    const mergedProfile = {};
-    selectedProfileIds.forEach(profileId => {
-      const profile = profiles[profileId];
-      if (profile) {
-        // Later profiles override earlier ones for conflicting fields
-        Object.assign(mergedProfile, profile);
+      updateStatusMessage(`${selectedIds.length} profile(s) removed`);
+      
+      // Clear form if current profile was removed
+      if (selectedIds.includes(currentProfileId)) {
+        document.getElementById('profileName').value = '';
+        document.getElementById('profileData').value = EMPTY_PROFILE_TEXT;
+        currentProfileId = '';
       }
     });
-
-    updateStatusMessage(`Filling form with profiles: ${profileNames}`);
-
-    // Get custom prompt from textarea
-    const customPrompt = document.getElementById('userPrompt').value.trim();
-
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (!tabs || tabs.length === 0) {
-      throw new Error("No active tab found.");
-    }
-
-    const response = await browser.tabs.sendMessage(tabs[0].id, {
-      action: "fillForm",
-      profile: mergedProfile,
-      customPrompt: customPrompt
-    });
-
-    if (response && response.status === "success") {
-      updateStatusMessage(`Form filling complete: ${response.message}`);
-    } else {
-      throw new Error(response ? response.message : "Unknown error");
-    }
-  } catch (error) {
-    handleError("Error filling form", error);
-  } finally {
-    isFilling = false;
-    updateButtonStates();
-  }
+  });
 }
 
 function backupProfileToTxt() {
   const selectedIds = getSelectedProfileIds();
-  
   if (selectedIds.length === 0) {
-    updateStatusMessage("Please select profiles to backup.");
+    updateStatusMessage("No profiles selected to backup!");
     return;
   }
-
+  
   browser.storage.local.get('profiles').then(data => {
     const profiles = data.profiles || {};
+    let backupText = '';
     
-    if (selectedIds.length === 1) {
-      // Single profile backup (existing behavior)
-      const profileId = selectedIds[0];
-      const profile = profiles[profileId];
-      if (!profile) {
-        updateStatusMessage("Profile not found.");
-        return;
+    selectedIds.forEach(id => {
+      const profile = profiles[id];
+      if (profile) {
+        backupText += `=== ${profile.name} ===\n`;
+        backupText += profile.data + '\n\n';
       }
-
-      // Capture the current textarea height
-      const textarea = document.getElementById('additionalFields');
-      const additionalFieldsHeight = textarea ? textarea.style.height || `${textarea.clientHeight}px` : '';
-
-      const backupData = {
-        id: profileId,
-        ...profile,
-        additionalFieldsHeight: additionalFieldsHeight
-      };
-
-      const profileJson = JSON.stringify(backupData, null, 2);
-      const blob = new Blob([profileJson], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      
-      const a = document.createElement('a');
-      a.href = url;
-      const fileName = `${profile.name || 'Unnamed_Profile'}_backup.txt`.replace(/\s+/g, '_');
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      updateStatusMessage(`Profile backed up to ${fileName}`);
-    } else {
-      // Multiple profiles backup
-      const backupData = {
-        profiles: {},
-        selectedProfileIds: selectedIds
-      };
-      
-      selectedIds.forEach(profileId => {
-        if (profiles[profileId]) {
-          backupData.profiles[profileId] = profiles[profileId];
-        }
-      });
-
-      const profileJson = JSON.stringify(backupData, null, 2);
-      const blob = new Blob([profileJson], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      
-      const a = document.createElement('a');
-      a.href = url;
-      const fileName = `multiple_profiles_backup.txt`;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      updateStatusMessage(`Multiple profiles backed up to ${fileName}`);
-    }
+    });
+    
+    const blob = new Blob([backupText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'formfill_profiles_backup.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    updateStatusMessage("Backup downloaded");
   });
 }
-
 
 function loadProfileFromTxt() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.txt';
-  input.onchange = e => {
+  input.onchange = function(e) {
     const file = e.target.files[0];
+    if (!file) return;
+    
     const reader = new FileReader();
-    reader.onload = function(event) {
-      try {
-        const backupData = JSON.parse(event.target.result);
-        
-        browser.storage.local.get('profiles').then(data => {
-          const profiles = data.profiles || {};
-          
-          if (backupData.profiles) {
-            // Multiple profiles backup
-            Object.assign(profiles, backupData.profiles);
-            browser.storage.local.set({ profiles }).then(() => {
-              refreshProfileList();
-              updateStatusMessage(`Multiple profiles loaded from txt file and saved`);
-            });
-          } else {
-            // Single profile backup
-            let profileId = backupData.id || generateUUID();
-            let profile = { ...backupData };
-            delete profile.id; // Remove id from the profile object if it exists
-            
-            profiles[profileId] = profile;
-            browser.storage.local.set({ profiles }).then(() => {
-              refreshProfileList();
-              loadProfile(profileId);
-              updateStatusMessage(`Profile "${profile.name || 'Unnamed Profile'}" loaded from txt file and saved`);
-            });
-          }
-        });
-      } catch (error) {
-        updateStatusMessage("Error loading profile: " + error.message);
-      }
+    reader.onload = function(e) {
+      const text = e.target.result;
+      importProfilesFromText(text);
     };
     reader.readAsText(file);
   };
   input.click();
 }
 
-function removeSelectedProfile() {
-  const selectedIds = getSelectedProfileIds();
-
-  if (selectedIds.length === 0) {
-    updateStatusMessage("Please select profiles to remove.");
-    return;
-  }
-
-  // Get profile names for confirmation
+function importProfilesFromText(text) {
+  const sections = text.split('===').filter(section => section.trim());
+  let importedCount = 0;
+  
   browser.storage.local.get('profiles').then(data => {
-    const profiles = data.profiles || {};
-    const profileNames = selectedIds.map(id => profiles[id]?.name || '(Unnamed Profile)').join(', ');
-
-    if (confirm(`Are you sure you want to remove the selected profiles: ${profileNames}?`)) {
-      selectedIds.forEach(id => {
-        if (profiles[id]) {
-          delete profiles[id];
-        }
-      });
-      
-      browser.storage.local.set({ profiles }).then(() => {
-        refreshProfileList();
+    let profiles = data.profiles || {};
+    
+    sections.forEach(section => {
+      const lines = section.trim().split('\n');
+      if (lines.length > 0) {
+        const profileName = lines[0].trim();
+        const profileData = lines.slice(1).join('\n').trim();
         
-        if (Object.keys(profiles).length > 0) {
-          // Load the first remaining profile into the form
-          const firstRemainingId = Object.keys(profiles)[0];
-          loadProfile(firstRemainingId);
-        } else {
-          document.getElementById('profileForm').reset();
-          currentProfileId = '';
+        if (profileName && profileData) {
+          const newProfileId = generateUUID();
+          profiles[newProfileId] = {
+            name: profileName,
+            data: profileData
+          };
+          importedCount++;
         }
-        updateStatusMessage(`Selected profiles have been removed.`);
-      });
-    }
+      }
+    });
+    
+    browser.storage.local.set({ profiles }).then(() => {
+      refreshProfileList();
+      updateStatusMessage(`${importedCount} profile(s) imported`);
+    });
   });
 }
 
 function openLlmConfig() {
-  browser.windows.create({
-    url: 'llmConfig.html',
-    type: 'popup',
-    width: 800,
-    height: 600
-  });
+  browser.tabs.create({ url: browser.runtime.getURL('llmConfig.html') });
 }
-
-function updateButtonStates() {
-  const fillButton = document.getElementById('fillForm');
-  const stopButton = document.getElementById('stopFilling');
-  fillButton.disabled = isFilling;
-  stopButton.disabled = !isFilling;
-}
-
-let lastUpdateTime = 0;
-const updateInterval = 50; // Minimum time between updates in milliseconds
-
-function updateStatusMessage(message) {
-  const logMsg = document.getElementById('logMsg');
-  const timestamp = new Date().toLocaleString();
-  const newMessage = `${timestamp}: ${message}`;
-  const messages = logMsg.textContent.split('\n').filter(msg => msg.trim() !== '');
-  messages.unshift(newMessage);
-  logMsg.textContent = messages.slice(0, 6).join('\n');
-  logMsg.scrollTop = 0;
-}
-
-browser.runtime.onMessage.addListener((message) => {
-  switch (message.action) {
-    case "fillFormStart":
-      isFilling = true; // Set filling state
-      updateButtonStates();
-      updateStatusMessage(message.message || "Starting to fill form...");
-      break;
-    case "fillFormProgress":
-      updateStatusMessage(message.message || `Filled ${message.filled} out of ${message.total} fields.`);
-      break;
-    case "fillFormComplete":
-      isFilling = false; // Reset on completion
-      updateButtonStates();
-      updateStatusMessage(message.message || `Completed filling ${message.filled} out of ${message.total} fields.`);
-      break;
-    case "fillFormStopped":
-      isFilling = false; // Reset on stop
-      updateButtonStates();
-      updateStatusMessage(message.message || `Form filling stopped. Filled ${message.filled} out of ${message.total} fields.`);
-      break;
-    case "fillFormError":
-      isFilling = false; // Reset on error
-      updateButtonStates();
-      updateStatusMessage(message.message || `Error filling form: ${message.error}`);
-      break;
-    case "updateProgress":
-      updateStatusMessage(message.message);
-      break;
-  }
-});
