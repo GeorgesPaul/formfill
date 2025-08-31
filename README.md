@@ -19,7 +19,7 @@ This extension was written for Firefox
 
 **Steps to get it to work with openrouter.ai with Claude Sonnet 3.5:**
 1. Go to https://addons.mozilla.org/en-US/firefox/addon/llm-form-filler/ and install the extension.
-2. Sign up for an account on openrouter.ai to access Claude Sonnet 3.5.
+2. Sign up for an account on openrouter.ai to access Claude Sonnet 3.5 or whatever other LLM you like. 
 3. In the extension configuration, set the API URL and Model to the Claude Sonnet 3.5 endpoint provided by openrouter.ai. This will typically be in the format of `https://openrouter.ai/api/v1/chat/completions`. Under model fill out: anthropic/claude-3.5-sonnet:beta
 4. Ensure you have a valid API key from openrouter.ai. You need to purchase and set this up in the openrouter.ai interface.
 5. In the extension configuration, enter your openrouter.ai API key in the designated field.
