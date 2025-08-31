@@ -119,19 +119,22 @@ function createDefaultProfile() {
 }
 
 function initializeUI({ profiles, lastLoadedProfileId }) {
-  updateProfileSelect(profiles, lastLoadedProfileId);
+  updateProfileSelect(profiles);
   initializeProfileForm();
-  if (lastLoadedProfileId && profiles[lastLoadedProfileId]) {
-    loadProfile(lastLoadedProfileId);
-  } else if (Object.keys(profiles).length > 0) {
-    loadProfile(Object.keys(profiles)[0]);
-  }
+  
+  // Load previously selected profiles
+  browser.storage.local.get('selectedProfileIds').then(data => {
+    const selectedIds = data.selectedProfileIds || [];
+    updateProfileSelect(profiles, selectedIds);
+  });
   
   // Set up event listeners
   document.getElementById('fillForm').addEventListener('click', fillForm);
   document.getElementById('stopFilling').addEventListener('click', stopFilling);
+  document.getElementById('profileSelect').addEventListener('change', updateSelectedCount);
+  document.getElementById('selectAllProfiles').addEventListener('click', selectAllProfiles);
+  document.getElementById('clearAllProfiles').addEventListener('click', clearAllProfiles);
   document.getElementById('showAddProfileForm').addEventListener('click', addNewProfile);
-  document.getElementById('profileSelect').addEventListener('change', e => loadProfile(e.target.value));
   document.getElementById('backupProfile').addEventListener('click', backupProfileToTxt);
   document.getElementById('loadFromTxt').addEventListener('click', loadProfileFromTxt);
   document.getElementById('llmConfigButton').addEventListener('click', openLlmConfig);
@@ -141,7 +144,7 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
     const stripePaymentLink = 'https://donate.stripe.com/cN2dRB4RRcT40OA000';
     // Open the Stripe payment link in a new tab
     window.open(stripePaymentLink, '_blank');
-  } )
+  });
 
   document.getElementById('profileForm').style.display = 'block';
 }
@@ -205,33 +208,70 @@ function updateProfileName(profileId, newProfileName) {
     if (profiles[profileId]) {
       profiles[profileId].name = newProfileName;
       browser.storage.local.set({ profiles, lastLoadedProfileId: profileId }).then(() => {
-        updateProfileSelect(profiles, profileId);
+        refreshProfileList();
         updateStatusMessage(`Profile name updated`);
       });
     }
   });
 }
 
-
-function updateProfileSelect(profiles, selectedProfileId) {
+function updateProfileSelect(profiles, selectedProfileIds = []) {
   const profileSelect = document.getElementById('profileSelect');
   
-  // Safe way to clear children
-  while (profileSelect.firstChild) {
-    profileSelect.removeChild(profileSelect.firstChild);
-  }
+  // Clear existing options
+  profileSelect.innerHTML = '';
   
+  // Add profile options
   Object.entries(profiles).forEach(([id, profile]) => {
     const option = document.createElement('option');
     option.value = id;
     option.textContent = profile.name || '(Unnamed Profile)';
+    option.selected = selectedProfileIds.includes(id);
     profileSelect.appendChild(option);
   });
   
-  if (selectedProfileId && profiles[selectedProfileId]) {
-    profileSelect.value = selectedProfileId;
-  }
+  updateSelectedCount();
 }
+
+function updateSelectedCount() {
+  const select = document.getElementById('profileSelect');
+  const selectedOptions = Array.from(select.selectedOptions);
+  const count = selectedOptions.length;
+  
+  const selectedCount = document.getElementById('selectedCount');
+  if (selectedCount) {
+    selectedCount.textContent = `${count} profile${count !== 1 ? 's' : ''} selected`;
+  }
+  
+  // Store selected profiles
+  const selectedIds = selectedOptions.map(option => option.value);
+  browser.storage.local.set({ selectedProfileIds: selectedIds });
+  
+  return selectedIds;
+}
+
+function getSelectedProfileIds() {
+  const select = document.getElementById('profileSelect');
+  return Array.from(select.selectedOptions).map(option => option.value);
+}
+
+function selectAllProfiles() {
+  const select = document.getElementById('profileSelect');
+  Array.from(select.options).forEach(option => {
+    option.selected = true;
+  });
+  updateSelectedCount();
+}
+
+function clearAllProfiles() {
+  const select = document.getElementById('profileSelect');
+  Array.from(select.options).forEach(option => {
+    option.selected = false;
+  });
+  updateSelectedCount();
+}
+
+
 
 function autoSaveProfile(fieldId, value) {
   if (currentProfileId) {
@@ -276,13 +316,22 @@ function loadProfile(profileId) {
 }
 
 
+function refreshProfileList() {
+  browser.storage.local.get(['profiles', 'selectedProfileIds']).then(data => {
+    const profiles = data.profiles || {};
+    const selectedIds = data.selectedProfileIds || [];
+    updateProfileSelect(profiles, selectedIds);
+  });
+}
+
+// Call refreshProfileList after profile operations
 function addNewProfile() {
   const newProfileId = generateUUID();
   browser.storage.local.get('profiles').then(data => {
     let profiles = data.profiles || {};
     profiles[newProfileId] = { name: '' };
     browser.storage.local.set({ profiles, lastLoadedProfileId: newProfileId }).then(() => {
-      updateProfileSelect(profiles, newProfileId);
+      refreshProfileList();
       loadProfile(newProfileId);
       updateStatusMessage(`Created new profile`);
     });
@@ -321,16 +370,28 @@ async function fillForm() {
   updateStatusMessage("Starting to fill form...");
 
   try {
-    const profileId = document.getElementById('profileSelect').value;
-    if (!profileId) {
-      throw new Error("Please select a profile to fill the form.");
+    const selectedProfileIds = getSelectedProfileIds();
+    if (selectedProfileIds.length === 0) {
+      throw new Error("Please select at least one profile to fill the form.");
     }
 
     const data = await browser.storage.local.get('profiles');
-    const profile = data.profiles?.[profileId];
-    if (!profile) {
-      throw new Error("Selected profile not found.");
-    }
+    const profiles = data.profiles || {};
+    
+    // Get profile names for status message
+    const profileNames = selectedProfileIds.map(id => profiles[id]?.name || '(Unnamed Profile)').join(', ');
+    
+    // Merge selected profiles
+    const mergedProfile = {};
+    selectedProfileIds.forEach(profileId => {
+      const profile = profiles[profileId];
+      if (profile) {
+        // Later profiles override earlier ones for conflicting fields
+        Object.assign(mergedProfile, profile);
+      }
+    });
+
+    updateStatusMessage(`Filling form with profiles: ${profileNames}`);
 
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     if (!tabs || tabs.length === 0) {
@@ -339,7 +400,7 @@ async function fillForm() {
 
     const response = await browser.tabs.sendMessage(tabs[0].id, {
       action: "fillForm",
-      profile: profile
+      profile: mergedProfile
     });
 
     if (response && response.status === "success") {
@@ -355,45 +416,78 @@ async function fillForm() {
   }
 }
 
-
 function backupProfileToTxt() {
-  if (!currentProfileId) {
-    updateStatusMessage("Please select a profile to backup.");
+  const selectedIds = getSelectedProfileIds();
+  
+  if (selectedIds.length === 0) {
+    updateStatusMessage("Please select profiles to backup.");
     return;
   }
 
   browser.storage.local.get('profiles').then(data => {
     const profiles = data.profiles || {};
-    const profile = profiles[currentProfileId];
-    if (!profile) {
-      updateStatusMessage("Profile not found.");
-      return;
-    }
-
-    // Capture the current textarea height
-    const textarea = document.getElementById('additionalFields');
-    const additionalFieldsHeight = textarea ? textarea.style.height || `${textarea.clientHeight}px` : '';
-
-    const backupData = {
-      id: currentProfileId,
-      ...profile,
-      additionalFieldsHeight: additionalFieldsHeight  // Add the height here
-    };
-
-    const profileJson = JSON.stringify(backupData, null, 2);
-    const blob = new Blob([profileJson], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
     
-    const a = document.createElement('a');
-    a.href = url;
-    const fileName = `${profile.name || 'Unnamed_Profile'}_backup.txt`.replace(/\s+/g, '_');
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (selectedIds.length === 1) {
+      // Single profile backup (existing behavior)
+      const profileId = selectedIds[0];
+      const profile = profiles[profileId];
+      if (!profile) {
+        updateStatusMessage("Profile not found.");
+        return;
+      }
 
-    updateStatusMessage(`Profile backed up to ${fileName}`);
+      // Capture the current textarea height
+      const textarea = document.getElementById('additionalFields');
+      const additionalFieldsHeight = textarea ? textarea.style.height || `${textarea.clientHeight}px` : '';
+
+      const backupData = {
+        id: profileId,
+        ...profile,
+        additionalFieldsHeight: additionalFieldsHeight
+      };
+
+      const profileJson = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([profileJson], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      const fileName = `${profile.name || 'Unnamed_Profile'}_backup.txt`.replace(/\s+/g, '_');
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      updateStatusMessage(`Profile backed up to ${fileName}`);
+    } else {
+      // Multiple profiles backup
+      const backupData = {
+        profiles: {},
+        selectedProfileIds: selectedIds
+      };
+      
+      selectedIds.forEach(profileId => {
+        if (profiles[profileId]) {
+          backupData.profiles[profileId] = profiles[profileId];
+        }
+      });
+
+      const profileJson = JSON.stringify(backupData, null, 2);
+      const blob = new Blob([profileJson], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      const fileName = `multiple_profiles_backup.txt`;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      updateStatusMessage(`Multiple profiles backed up to ${fileName}`);
+    }
   });
 }
 
@@ -408,18 +502,30 @@ function loadProfileFromTxt() {
     reader.onload = function(event) {
       try {
         const backupData = JSON.parse(event.target.result);
-        let profileId = backupData.id || generateUUID();
-        let profile = { ...backupData };
-        delete profile.id; // Remove id from the profile object if it exists
-
+        
         browser.storage.local.get('profiles').then(data => {
           const profiles = data.profiles || {};
-          profiles[profileId] = profile;
-          browser.storage.local.set({ profiles, lastLoadedProfile: profileId }).then(() => {
-            updateProfileSelect(profiles, profileId);
-            loadProfile(profileId);
-            updateStatusMessage(`Profile "${profile.name || 'Unnamed Profile'}" loaded from txt file and saved`);
-          });
+          
+          if (backupData.profiles) {
+            // Multiple profiles backup
+            Object.assign(profiles, backupData.profiles);
+            browser.storage.local.set({ profiles }).then(() => {
+              refreshProfileList();
+              updateStatusMessage(`Multiple profiles loaded from txt file and saved`);
+            });
+          } else {
+            // Single profile backup
+            let profileId = backupData.id || generateUUID();
+            let profile = { ...backupData };
+            delete profile.id; // Remove id from the profile object if it exists
+            
+            profiles[profileId] = profile;
+            browser.storage.local.set({ profiles }).then(() => {
+              refreshProfileList();
+              loadProfile(profileId);
+              updateStatusMessage(`Profile "${profile.name || 'Unnamed Profile'}" loaded from txt file and saved`);
+            });
+          }
         });
       } catch (error) {
         updateStatusMessage("Error loading profile: " + error.message);
@@ -431,34 +537,40 @@ function loadProfileFromTxt() {
 }
 
 function removeSelectedProfile() {
-  const profileSelect = document.getElementById('profileSelect');
-  const selectedProfileId = profileSelect.value;
+  const selectedIds = getSelectedProfileIds();
 
-  if (!selectedProfileId) {
-    updateStatusMessage("Please select a profile to remove.");
+  if (selectedIds.length === 0) {
+    updateStatusMessage("Please select profiles to remove.");
     return;
   }
 
-  if (confirm(`Are you sure you want to remove this profile?`)) {
-    browser.storage.local.get('profiles').then(data => {
-      const profiles = data.profiles || {};
-      if (profiles[selectedProfileId]) {
-        delete profiles[selectedProfileId];
-        browser.storage.local.set({ profiles }).then(() => {
-          updateProfileSelect(profiles, Object.keys(profiles)[0]);
-          if (Object.keys(profiles).length > 0) {
-            loadProfile(Object.keys(profiles)[0]);
-          } else {
-            document.getElementById('profileForm').reset();
-            currentProfileId = '';
-          }
-          updateStatusMessage(`Profile has been removed.`);
-        });
-      } else {
-        updateStatusMessage(`Profile not found.`);
-      }
-    });
-  }
+  // Get profile names for confirmation
+  browser.storage.local.get('profiles').then(data => {
+    const profiles = data.profiles || {};
+    const profileNames = selectedIds.map(id => profiles[id]?.name || '(Unnamed Profile)').join(', ');
+
+    if (confirm(`Are you sure you want to remove the selected profiles: ${profileNames}?`)) {
+      selectedIds.forEach(id => {
+        if (profiles[id]) {
+          delete profiles[id];
+        }
+      });
+      
+      browser.storage.local.set({ profiles }).then(() => {
+        refreshProfileList();
+        
+        if (Object.keys(profiles).length > 0) {
+          // Load the first remaining profile into the form
+          const firstRemainingId = Object.keys(profiles)[0];
+          loadProfile(firstRemainingId);
+        } else {
+          document.getElementById('profileForm').reset();
+          currentProfileId = '';
+        }
+        updateStatusMessage(`Selected profiles have been removed.`);
+      });
+    }
+  });
 }
 
 function openLlmConfig() {

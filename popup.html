@@ -123,24 +123,52 @@
     /* Profile select div */
     #profileSelectContainer {
       display: flex;
+      flex-direction: column;
+      margin-bottom: 5px;
+    }
+    #profileListHeader {
+      display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 5px;
+      font-size: 11px;
+      color: #000080;
     }
     #profileSelect {
-      flex-grow: 1;
-      margin-right: 10px;
-      width: auto; 
+      width: 100%;
+      max-height: 120px;
+      overflow-y: auto;
+      border: 1px solid #7f7f7f;
+      background-color: #fff;
+      padding: 5px;
+      font-family: 'MS Sans Serif', Arial, sans-serif;
+      font-size: 12px;
+    }
+    #profileSelect option {
+      padding: 2px 5px;
+    }
+    #profileSelect option:checked {
+      background-color: #c0c0c0;
+    }
+    #profileButtons {
+      display: flex;
+      gap: 3px;
+    }
+    #selectAllProfiles, #clearAllProfiles {
+      font-size: 10px;
+      padding: 2px 4px;
+      min-width: 24px;
     }
     #showAddProfileForm {
-      width: auto;
       white-space: nowrap;
+      font-size: 10px;
+      padding: 2px 4px;
     }
     #removeProfile {
       font-size: 10px;
       color: #ff0000;
-      width: 24px;
-      height: 24px;
+      width: 20px;
+      height: 20px;
       padding: 0;
       text-align: center;
     }
@@ -233,11 +261,18 @@
   <h2>LLM Form Filler by Georges Paul</h2>
 
   <div id="profileSelectContainer">
-    <select id="profileSelect">
-      <option value="">Select a profile</option>
+    <div id="profileListHeader">
+      <span id="selectedCount">0 profiles selected</span>
+      <div id="profileButtons">
+        <button id="selectAllProfiles">All</button>
+        <button id="clearAllProfiles">None</button>
+        <button id="showAddProfileForm">Add</button>
+        <button id="removeProfile">X</button>
+      </div>
+    </div>
+    <select id="profileSelect" multiple size="6">
+      <!-- Profile options will be populated here -->
     </select>
-    <button id="showAddProfileForm">Add Profile</button>
-    <button id="removeProfile">X</button>
   </div>
   <hr>
   <button id="fillForm">Fill Form</button>
