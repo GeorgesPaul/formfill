@@ -728,12 +728,6 @@ async function fillForm(profile) {
         throw new Error("Form filling stopped by user.");
       }
 
-      if (element.hasAttribute('data-filled-by-extension')) {
-        console.log('Skipping already filled field:', info.id || info.name);
-        processed++;
-        continue;
-      }
-
       const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
       const matchingClass = classes.find(cls => cls in filledFields);
       
@@ -741,9 +735,11 @@ async function fillForm(profile) {
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
 
-        // Check if element already has the correct value
+        // Check if element already has the correct value (whether it was previously filled or not)
         if (elementHasCorrectValue(element, value)) {
           console.log('Skipping field with correct value:', info.id || info.name);
+          // Ensure it's marked as filled
+          element.setAttribute('data-filled-by-extension', 'true');
           processed++;
           continue;
         }
