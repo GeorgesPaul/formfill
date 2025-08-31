@@ -445,6 +445,29 @@ function findIframesWithForms() {
   return iframesWithForms.length > 0 ? iframesWithForms : [document];
 }
 
+// Helper function to check if element already has the correct value
+function elementHasCorrectValue(element, expectedValue) {
+  const currentValue = element.value || '';
+  const normalizedExpected = expectedValue.toString().trim();
+  const normalizedCurrent = currentValue.toString().trim();
+  
+  // For select elements, check both the selected option's text and value
+  if (element.tagName.toLowerCase() === 'select') {
+    const selectedOption = element.options[element.selectedIndex];
+    if (selectedOption) {
+      const optionText = selectedOption.text.trim().toLowerCase();
+      const optionValue = selectedOption.value.trim().toLowerCase();
+      const expectedLower = normalizedExpected.toLowerCase();
+      
+      return optionText === expectedLower || optionValue === expectedLower;
+    }
+    return false;
+  }
+  
+  // For other input types, do a direct comparison
+  return normalizedCurrent === normalizedExpected;
+}
+
 // Form filling functions
 function findBestMatch(value, options) {
   if (!value || !options || options.length === 0) return null;
@@ -567,7 +590,7 @@ async function simulateHumanTyping(element, value) {
     element.dispatchEvent(keyupEvent);
 
     // Random delay between keystrokes (50-150ms)
-    await sleep(10 + Math.random() * 50);
+    await sleep(1 + Math.random() * 10);
   }
 
   // Final events
@@ -717,6 +740,13 @@ async function fillForm(profile) {
       let matched = false;
       if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
         const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
+
+        // Check if element already has the correct value
+        if (elementHasCorrectValue(element, value)) {
+          console.log('Skipping field with correct value:', info.id || info.name);
+          processed++;
+          continue;
+        }
 
         await fillField(element, value, info);
 
