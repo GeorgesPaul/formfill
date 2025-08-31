@@ -250,16 +250,42 @@
       margin: 10px 0;
     }
 
-  #qrCodeContainer img {
-    max-width: 100%;
-    height: auto;
-  }
+    #qrCodeContainer img {
+      max-width: 100%;
+      height: auto;
+    }
+    #userPrompt {
+      width: 100%;
+      min-height: 60px;
+      max-height: 120px;
+      resize: vertical;
+      margin-bottom: 10px;
+      font-family: 'MS Sans Serif', Arial, sans-serif;
+      font-size: 12px;
+      background-color: #fff;
+      border: 1px solid #7f7f7f;
+      box-shadow: inset 1px 1px 0 #7f7f7f;
+      padding: 5px;
+    }
+    #userPromptLabel {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 11px;
+      color: #000080;
+      font-weight: bold;
+    }
 
   </style>
 </head>
 <body>
   <h2>LLM Form Filler by Georges Paul</h2>
-
+  <label id="userPromptLabel" for="userPrompt">Custom Prompt:</label>
+  <textarea id="userPrompt" placeholder="Instructions for the AI, for example: Bob is the sender of the parcel and Sandra is the recipient."></textarea>
+  <hr>
+  <button id="fillForm">Fill Form</button>
+  <button id="stopFilling" disabled>Stop Filling</button>
+  <div id="logLabel">System messages:</div>
+  <div id="logMsg"></div>
   <div id="profileSelectContainer">
     <div id="profileListHeader">
       <span id="selectedCount">0 profiles selected</span>
@@ -274,11 +300,6 @@
       <!-- Profile options will be populated here -->
     </select>
   </div>
-  <hr>
-  <button id="fillForm">Fill Form</button>
-  <button id="stopFilling" disabled>Stop Filling</button>
-  <div id="logLabel">System messages:</div>
-  <div id="logMsg"></div>
   <div id="profileForm" style="display: none;">
     <h3 id="formTitle">Add Profile</h3>
     <form id="dynamicProfileForm"></form>

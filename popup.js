@@ -393,6 +393,9 @@ async function fillForm() {
 
     updateStatusMessage(`Filling form with profiles: ${profileNames}`);
 
+    // Get custom prompt from textarea
+    const customPrompt = document.getElementById('userPrompt').value.trim();
+
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     if (!tabs || tabs.length === 0) {
       throw new Error("No active tab found.");
@@ -400,7 +403,8 @@ async function fillForm() {
 
     const response = await browser.tabs.sendMessage(tabs[0].id, {
       action: "fillForm",
-      profile: mergedProfile
+      profile: mergedProfile,
+      customPrompt: customPrompt
     });
 
     if (response && response.status === "success") {
