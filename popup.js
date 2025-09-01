@@ -1,6 +1,21 @@
 let currentProfileId = '';
 let isFilling = false; // Track filling state
 
+// Add message listener to handle messages from background script
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  switch(message.action) {
+    case "fillFormStart":
+    case "fillFormProgress":
+    case "fillFormComplete":
+    case "fillFormStopped":
+    case "fillFormError":
+      if (message.message) {
+        updateStatusMessage(message.message);
+      }
+      break;
+  }
+});
+
 // Default text template for profile data
 const DEFAULT_PROFILE_TEXT = `name: Test Profile
 user_name: johndoe123
@@ -137,10 +152,13 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
   document.getElementById('selectAllProfiles').addEventListener('click', selectAllProfiles);
   document.getElementById('clearAllProfiles').addEventListener('click', clearAllProfiles);
   document.getElementById('showAddProfileForm').addEventListener('click', addNewProfile);
-  document.getElementById('backupProfile').addEventListener('click', backupProfileToTxt);
-  document.getElementById('loadFromTxt').addEventListener('click', loadProfileFromTxt);
+  document.getElementById('backupAllProfiles').addEventListener('click', backupAllProfilesToTxt);
+  document.getElementById('saveSelectedProfile').addEventListener('click', backupProfileToTxt);
+  document.getElementById('backupAllProfiles').addEventListener('click', backupAllProfilesToTxt);
+  document.getElementById('reloadBackup').addEventListener('click', loadCompleteBackupFromTxt);
+  document.getElementById('addProfileFromTxt').addEventListener('click', addProfileFromTxt);
   document.getElementById('llmConfigButton').addEventListener('click', openLlmConfig);
-  document.getElementById('removeProfile').addEventListener('click', removeSelectedProfile);
+  document.getElementById('removeProfile').addEventListener('click', removeSelectedProfile);  
   document.getElementById('profileName').addEventListener('input', handleProfileNameChange);
   document.getElementById('donateButton').addEventListener('click', function() {
     const stripePaymentLink = 'https://donate.stripe.com/cN2dRB4RRcT40OA000';
@@ -371,25 +389,6 @@ function autoSaveProfile(fieldId, value) {
   }
 }
 
-// Function to parse text data into profile object
-function parseProfileText(textData) {
-  const profile = {};
-  const lines = textData.split('\n');
-  
-  lines.forEach(line => {
-    const colonIndex = line.indexOf(':');
-    if (colonIndex > 0) {
-      const key = line.substring(0, colonIndex).trim();
-      const value = line.substring(colonIndex + 1).trim();
-      if (key && value) {
-        profile[key] = value;
-      }
-    }
-  });
-  
-  return profile;
-}
-
 // Function to convert profile object back to text
 function profileToText(profile) {
   const lines = [];
@@ -401,7 +400,7 @@ function profileToText(profile) {
   return lines.join('\n');
 }
 
-// Modified fillForm function to work with text-based profiles
+// Simplified fillForm function - send raw text directly to LLM
 async function fillForm() {
   const selectedIds = getSelectedProfileIds();
   if (selectedIds.length === 0) {
@@ -417,23 +416,38 @@ async function fillForm() {
     const data = await browser.storage.local.get('profiles');
     const profiles = data.profiles || {};
     
-    // Convert text-based profiles to object format for content script
-    const processedProfiles = {};
+    // Send raw profile text directly (no parsing needed)
+    let profileTexts = [];
+    
     selectedIds.forEach(id => {
       if (profiles[id] && profiles[id].data) {
-        processedProfiles[id] = {
-          ...parseProfileText(profiles[id].data),
-          name: profiles[id].name
-        };
+        profileTexts.push({
+          name: profiles[id].name,
+          data: profiles[id].data.trim() // Raw text as-is
+        });
       }
     });
+    
+    // Log the raw profile texts being used
+    console.log('=== RAW PROFILE TEXTS FOR FORM FILLING ===');
+    profileTexts.forEach((profile, index) => {
+      console.log(`Profile ${index + 1}: ${profile.name}`);
+      console.log('Raw text:');
+      console.log(profile.data);
+      console.log('');
+    });
+    console.log('================================');
 
-    // Send to content script
+    // Capture the custom prompt
+    const customPrompt = document.getElementById('userPrompt').value.trim();
+    
+    // Send both profiles AND custom prompt
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]) {
       await browser.tabs.sendMessage(tabs[0].id, {
         action: "fillForm",
-        profiles: processedProfiles
+        profiles: profileTexts,
+        customPrompt: customPrompt // Add this line
       });
     }
   } catch (error) {
@@ -593,6 +607,101 @@ function removeSelectedProfile() {
   });
 }
 
+function addProfileFromTxt() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.txt';
+  input.onchange = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const text = e.target.result;
+      importSingleProfileFromText(text, file);
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+function importSingleProfileFromText(text, file = null) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) {
+    updateStatusMessage("Invalid profile file format");
+    return;
+  }
+  
+  // Check if it starts with === Profile Name ===
+  const firstLine = lines[0].trim();
+  let profileName, profileData;
+  
+  if (firstLine.startsWith('===') && firstLine.endsWith('===')) {
+    profileName = firstLine.slice(3, -3).trim();
+    profileData = lines.slice(1).join('\n').trim();
+  } else {
+    // Fallback: treat whole file as profile data, use filename or ask for name
+    const defaultName = file ? file.name.replace('.txt', '') : 'Imported Profile';
+    profileName = prompt('Enter profile name:', defaultName);
+    if (!profileName) return;
+    profileData = text.trim();
+  }
+  
+  if (!profileName || !profileData) {
+    updateStatusMessage("Profile must have both name and data");
+    return;
+  }
+  
+  browser.storage.local.get('profiles').then(data => {
+    let profiles = data.profiles || {};
+    const newProfileId = generateUUID();
+    profiles[newProfileId] = {
+      name: profileName,
+      data: profileData
+    };
+    
+    browser.storage.local.set({ profiles }).then(() => {
+      refreshProfileList();
+      loadProfileIntoForm(newProfileId);
+      updateStatusMessage(`Profile "${profileName}" imported successfully`);
+    });
+  });
+}
+
+function backupAllProfilesToTxt() {
+  browser.storage.local.get(['profiles', 'lastLoadedProfile', 'selectedProfileIds']).then(data => {
+    const profiles = data.profiles || {};
+    const lastLoadedProfile = data.lastLoadedProfile;
+    const selectedProfileIds = data.selectedProfileIds || [];
+    
+    let backupText = '# FormFill Extension Backup\n';
+    backupText += '# Generated on: ' + new Date().toISOString() + '\n';
+    backupText += '# Number of profiles: ' + Object.keys(profiles).length + '\n\n';
+    
+    // Add metadata
+    backupText += '=== METADATA ===\n';
+    backupText += 'lastLoadedProfile: ' + (lastLoadedProfile || '') + '\n';
+    backupText += 'selectedProfileIds: ' + JSON.stringify(selectedProfileIds) + '\n\n';
+    
+    // Add all profiles with their original UUIDs
+    Object.entries(profiles).forEach(([profileId, profile]) => {
+      backupText += `=== PROFILE:${profileId} ===\n`;
+      backupText += `name: ${profile.name}\n`;
+      backupText += profile.data + '\n\n';
+    });
+    
+    const blob = new Blob([backupText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'formfill_complete_backup.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    updateStatusMessage("Complete backup downloaded with all profiles");
+  });
+}
+
 function backupProfileToTxt() {
   const selectedIds = getSelectedProfileIds();
   if (selectedIds.length === 0) {
@@ -616,12 +725,35 @@ function backupProfileToTxt() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'formfill_profiles_backup.txt';
+    a.download = 'formfill_selected_profiles_backup.txt';
     a.click();
     URL.revokeObjectURL(url);
     
-    updateStatusMessage("Backup downloaded");
+    updateStatusMessage("Selected profiles backup downloaded");
   });
+}
+
+function loadCompleteBackupFromTxt() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.txt';
+  input.onchange = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const text = e.target.result;
+      if (text.startsWith('# FormFill Extension Backup')) {
+        restoreCompleteBackup(text);
+      } else {
+        // Fall back to old format for backwards compatibility
+        importProfilesFromText(text);
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
 }
 
 function loadProfileFromTxt() {
@@ -640,6 +772,76 @@ function loadProfileFromTxt() {
     reader.readAsText(file);
   };
   input.click();
+}
+
+function restoreCompleteBackup(text) {
+  const lines = text.split('\n');
+  let metadata = {};
+  let profiles = {};
+  let currentProfileId = null;
+  let currentProfileData = '';
+  let inMetadata = false;
+  let inProfile = false;
+  
+  lines.forEach(line => {
+    if (line.startsWith('=== METADATA ===')) {
+      inMetadata = true;
+      inProfile = false;
+      return;
+    }
+    
+    if (line.startsWith('=== PROFILE:')) {
+      // Save previous profile if any
+      if (currentProfileId && currentProfileData) {
+        profiles[currentProfileId] = {
+          name: currentProfileData.split('\n')[0].replace('name: ', ''),
+          data: currentProfileData.split('\n').slice(1).join('\n').trim()
+        };
+      }
+      
+      // Start new profile
+      const profileIdMatch = line.match(/=== PROFILE:(.+) ===/);
+      if (profileIdMatch) {
+        currentProfileId = profileIdMatch[1];
+        currentProfileData = '';
+        inMetadata = false;
+        inProfile = true;
+      }
+      return;
+    }
+    
+    if (inMetadata) {
+      if (line.startsWith('lastLoadedProfile:')) {
+        metadata.lastLoadedProfile = line.split(': ')[1];
+      } else if (line.startsWith('selectedProfileIds:')) {
+        try {
+          metadata.selectedProfileIds = JSON.parse(line.split(': ')[1]);
+        } catch (e) {
+          metadata.selectedProfileIds = [];
+        }
+      }
+    } else if (inProfile && currentProfileId) {
+      currentProfileData += line + '\n';
+    }
+  });
+  
+  // Save the last profile
+  if (currentProfileId && currentProfileData) {
+    profiles[currentProfileId] = {
+      name: currentProfileData.split('\n')[0].replace('name: ', ''),
+      data: currentProfileData.split('\n').slice(1).join('\n').trim()
+    };
+  }
+  
+  // Restore everything
+  browser.storage.local.set({
+    profiles: profiles,
+    lastLoadedProfile: metadata.lastLoadedProfile || null,
+    selectedProfileIds: metadata.selectedProfileIds || []
+  }).then(() => {
+    refreshProfileList();
+    updateStatusMessage(`Complete backup restored with ${Object.keys(profiles).length} profiles`);
+  });
 }
 
 function importProfilesFromText(text) {

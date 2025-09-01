@@ -92,32 +92,31 @@
 
     #profileFormButtons {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
+      flex-wrap: wrap;
+      gap: 5px;
       margin-top: 10px;
     }
 
     #profileFormButtons button {
       flex: 1;
-      margin: 0 5px;
+      min-width: 120px;
       padding: 3px 5px;
       height: 24px;
       box-sizing: border-box;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      font-size: 11px;
     }
 
-    #profileFormButtons button:first-child {
+    #profileFormButtons button:nth-child(1),
+    #profileFormButtons button:nth-child(3) {
       margin-left: 0;
     }
 
-    #profileFormButtons button:last-child {
+    #profileFormButtons button:nth-child(2),
+    #profileFormButtons button:nth-child(4) {
       margin-right: 0;
-    }
-
-    #profileFormButtons > div {
-      margin-left: 10px;
     }
 
     /* Profile select div */
@@ -304,8 +303,10 @@
     <h3 id="formTitle">Add Profile</h3>
     <form id="dynamicProfileForm"></form>
     <div id="profileFormButtons">
-      <button id="loadFromTxt">Load from txt file</button>
-      <button id="backupProfile">Backup to txt file</button>
+      <button id="addProfileFromTxt">Add profile from text file</button>
+      <button id="saveSelectedProfile">Save selected profile to text file</button>
+      <button id="backupAllProfiles">Backup everything to text file</button>
+      <button id="reloadBackup">Reload backup from text file</button>
     </div>
     <button id="llmConfigButton">LLM API Config</button>
   </div>

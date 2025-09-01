@@ -9,9 +9,23 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Content script received message:", message);
 
   if (message.action === "fillForm") {
-    console.log("Filling form with profile:", message.profile);
+    console.log("Filling form with profiles:", message.profiles || message.profile);
+    
+    // Handle both new format (profiles array) and old format (single profile)
+    let profilesToUse = [];
+    if (message.profiles) {
+      // New format: array of profiles
+      profilesToUse = message.profiles;
+    } else if (message.profile) {
+      // Old format: single profile, wrap in array for consistency
+      profilesToUse = [message.profile];
+    } else {
+      console.error("No profile data received");
+      sendResponse({ status: "error", message: "No profile data received" });
+      return true;
+    }
 
-    fillForm(message.profile).then(result => {
+    fillForm(profilesToUse, message.customPrompt).then(result => {
       sendResponse(result);
     }).catch(error => {
       sendResponse({ status: "error", message: error.toString() });
@@ -246,10 +260,21 @@ function generateMatchFieldPrompt(fieldInfoString, profileFields) {
   Now, provide the id of the best matching profile field. No other text.`;
 }
 
-async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, profileFieldsInfo) {
+async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, profileFieldsInfo, customPrompt = '') {
   const fieldInfoString = JSON.stringify(fieldInfo, null, 2);
-  const profileDataString = JSON.stringify(profileData, null, 2);
-  const prompt = generateFillFieldPrompt(fieldInfoString, profileDataString, profileFields, profileFieldsInfo);
+  
+  // Use raw profile text directly (no JSON conversion needed)
+  let userDataString = '';
+  if (Array.isArray(profileData)) {
+    profileData.forEach((profile, index) => {
+      userDataString += `\n=== ${profile.name} ===\n`;
+      userDataString += profile.data + '\n'; // Raw text as-is
+    });
+  } else {
+    userDataString = profileData.data || profileData; // Fallback for single profile
+  }
+  
+  const prompt = generateFillFieldPrompt(fieldInfoString, userDataString, profileFields, profileFieldsInfo, customPrompt);
 
   try {
     let str_to_fill = await promptLLM(prompt);
@@ -271,7 +296,7 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, p
   }
 }
 
-function generateFillFieldPrompt(fieldInfoString, profileDataString, profileFields, profileFieldsInfo) {
+function generateFillFieldPrompt(fieldInfoString, profileDataString, profileFields, profileFieldsInfo, customPrompt = '') {
   const relevantFieldInfo = getRelevantFieldInfo(fieldInfoString, profileFieldsInfo);
 
   const prompt = `TASK: Fill a form field with user data.
@@ -282,16 +307,21 @@ ${fieldInfoString}
 USER DATA:
 ${profileDataString}
 
-FIELD INFO:
+${customPrompt ? `CUSTOM INSTRUCTIONS:
+${customPrompt}
+
+` : ''}FIELD INFO:
 ${relevantFieldInfo}
 
 RULES:
-1. Match the form field to the best fitting user data.
-2. Prioritize NearbyText and Label in FORM FIELD.
-3. Use FIELD INFO for additional context if needed.
-4. Return empty string if no match or field is not part of a form.
-5. For addresses, match specific components (city, street, etc.).
-6. Ignore placeholder values unless they match USER DATA.
+1. Parse the USER DATA text format (key: value pairs) to find matching information.
+2. Match the form field to the best fitting user data from any profile section.
+3. Prioritize NearbyText and Label in FORM FIELD.
+4. Use FIELD INFO for additional context if needed.
+5. Return empty string if no match or field is not part of a form.
+6. For addresses, match specific components (city, street, etc.).
+7. When multiple profiles have matching data, use the first profile's data.
+8. Ignore placeholder values unless they match USER DATA.
 
 OUTPUT:
 Return ONLY the value to fill. Do not return any code, functions, or explanations. Just the value as a string.`;
@@ -638,23 +668,6 @@ async function simulateInput(element, value) {
   console.error("Failed to set input value after trying all methods");
 }
 
-function removeEmptyFields(profile, profileFields) {
-  const cleanProfile = {};
-  const cleanProfileFields = [];
-
-  for (const [key, value] of Object.entries(profile)) {
-    if (value !== "" && value !== null && value !== undefined) {
-      cleanProfile[key] = value;
-      const fieldDescription = profileFields.find(field => field.id === key);
-      if (fieldDescription) {
-        cleanProfileFields.push(fieldDescription);
-      }
-    }
-  }
-
-  return { cleanProfile, cleanProfileFields };
-}
-
 function getVisibleFormElements(documents) {
   let allElements = [];
   documents.forEach(doc => {
@@ -684,12 +697,21 @@ function getVisibleFormElements(documents) {
   return allElements;
 }
 
-
-// Main form filling process
-async function fillForm(profile) {
+async function fillForm(profiles, customPrompt = '') {
   stopFilling = false;
   abortController = null;
-  currentProfile = profile;
+  currentProfile = profiles;
+
+  // Validate profiles parameter - now expecting array of text objects
+  if (!Array.isArray(profiles) || profiles.length === 0) {
+    const errorMsg = 'Invalid profiles: profiles should be a non-empty array';
+    console.error(errorMsg);
+    browser.runtime.sendMessage({
+      action: "fillFormError", 
+      error: errorMsg
+    });
+    throw new Error(errorMsg);
+  }
 
   browser.runtime.sendMessage({ action: "fillFormStart" });
 
@@ -699,7 +721,19 @@ async function fillForm(profile) {
 
   try {
     const profileFields = await loadYaml('profileFields.yaml');   
-    const { cleanProfile, cleanProfileFields } = removeEmptyFields(profile, profileFields.fields);
+    
+    // No object processing needed - use raw text directly
+    const profileData = profiles;
+
+    // Log the raw profile texts being used
+    console.log('=== RAW PROFILE TEXTS FOR FORM FILLING ===');
+    profileData.forEach((profile, index) => {
+      console.log(`Profile ${index + 1}: ${profile.name}`);
+      console.log('Raw text:');
+      console.log(profile.data);
+      console.log('');
+    });
+    console.log('=====================================');
 
     let formElements = getAllFormElements();
     formElements = formElements.filter(el => !el.hasAttribute('data-filled-by-extension') || el.value === ''); // Filter marked but re-fill if cleared
@@ -712,13 +746,11 @@ async function fillForm(profile) {
 
     const config = await getLlmConfig();
 
-
-
     let filledFields;
     if (config.apiUrl.includes('openrouter.ai')) {
-      filledFields = await fillFormSinglePrompt(formFieldsInfo, cleanProfileFields, cleanProfile, profileFields);
+      filledFields = await fillFormSinglePrompt(formFieldsInfo, profileFields.fields, profileData, customPrompt);
     } else {
-      filledFields = await fillFormSequential(formFieldsInfo, cleanProfileFields, cleanProfile, profileFields);
+      filledFields = await fillFormSequential(formFieldsInfo, profileFields.fields, profileData, profileFields, customPrompt);
     }
     console.log('Fields to fill:', filledFields);
 
@@ -824,8 +856,14 @@ The LLM should be smart enough to return the correct values for all fields in th
 //     throw error;
 //   }
 // }
-async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData) {
-  const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData);
+async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData, customPrompt = '') {
+  const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData, customPrompt);
+  
+  // Log the final prompt being sent to LLM
+  console.log('=== FINAL PROMPT SENT TO LLM ===');
+  console.log(prompt);
+  console.log('=================================');
+  
   let llmContentString = '';
 
   try {
@@ -856,12 +894,20 @@ async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData) 
   }
 }
 
-function generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData) {
+function generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData, customPrompt = '') {
   const formFieldsString = JSON.stringify(formFieldsInfo, null, 2);
   const profileFieldsString = JSON.stringify(profileFields, null, 2);
-  const profileDataString = JSON.stringify(profileData, null, 2);
-
-  //console.log('formFieldsString:', formFieldsString);
+  
+  // Use raw profile text directly
+  let userDataString = '';
+  if (Array.isArray(profileData)) {
+    profileData.forEach((profile, index) => {
+      userDataString += `\n=== ${profile.name} ===\n`;
+      userDataString += profile.data + '\n'; // Raw text as-is
+    });
+  } else {
+    userDataString = profileData.data || profileData; // Fallback
+  }
 
   return `TASK: Fill out a web form based on given information.
 
@@ -872,12 +918,16 @@ PROFILE FIELDS:
 ${profileFieldsString}
 
 USER DATA:
-${profileDataString}
+${customPrompt ? `CUSTOM INSTRUCTIONS:
+${customPrompt}
+` : ''}
+${userDataString}
 
 INSTRUCTIONS:
-1. Analyze the form fields and match them with the appropriate user data.
-2. Create a JSON object where keys are either the 'id', 'name' or 'class' of the form field (depending on which one is present), and values are the corresponding data to fill.
-3. Follow these rules for matching and filling fields:
+1. Analyze the form fields and match them with the appropriate user data from any of the provided profiles.
+2. Parse the user data text format (key: value pairs) to find matching information.
+3. Create a JSON object where keys are either the 'id', 'name' or 'class' of the form field (depending on which one is present), and values are the corresponding data to fill.
+4. Follow these rules for matching and filling fields:
    a. Do not use placeholder values unless they match USER DATA.
    b. Leave a field empty (do not include in the JSON) if:
       - There is no obvious match
@@ -886,8 +936,8 @@ INSTRUCTIONS:
       - Pay attention to specific components (city, street, house number, etc.)
       - Consider that multiple form fields might map to parts of a single address field in USER DATA
    d. Be aware that some fields might be mislabeled or use non-standard names.
-   e. For select fields, choose the option that best matches the USER DATA.
-4. Return only the JSON object, no additional text.
+   e. For select fields, choose the option that best matches the USER DATA from any profile.
+5. Return only the JSON object, no additional text.
 
 OUTPUT:
 Provide a JSON object with the fields to fill. No explanation or additional text.`;
@@ -909,7 +959,7 @@ function trimAndRemoveQuotes(str) {
 Generates 1 prompt for each fillable element on the page/form. 
 Use this for LLMs that are not as good at handling this type of prompt (e.g. llama3.1 8B and similar models)
 */
-async function fillFormSequential(formFieldsInfo, profileFields, profileData, profileFieldsInfo) {
+async function fillFormSequential(formFieldsInfo, profileFields, profileData, profileFieldsInfo, customPrompt = '') {
   let filledFields = {};
   let filledCount = 0;
   const totalFields = formFieldsInfo.length;
@@ -920,7 +970,7 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
     }
     if (info && Object.values(info).some(value => value)) {
       try {
-        let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, formFieldsInfo, profileFieldsInfo);
+        let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, profileFieldsInfo, customPrompt);
         str_to_fill = trimAndRemoveQuotes(str_to_fill);
         if (str_to_fill !== '') {
           filledFields[info.id || info.name] = str_to_fill;
