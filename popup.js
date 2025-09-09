@@ -12,6 +12,11 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.message) {
         updateStatusMessage(message.message);
       }
+      // Reset isFilling and update button states when form filling is complete or an error occurs
+      if (message.action === "fillFormComplete" || message.action === "fillFormError" || message.action === "fillFormStopped") {
+        isFilling = false;
+        updateButtonStates();
+      }
       break;
   }
 });
