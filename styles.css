@@ -479,3 +479,14 @@ button.llm-config-button:active { /* Added a class for llmConfig buttons */
   user-select: text;
   cursor: text;
 }
+
+#llmConfigButton {
+    text-align: center;
+    font-weight: bold;
+    display: block; /* Ensure it takes full width for centering */
+    margin-left: auto;
+    margin-right: auto;
+    width: 100%; /* Adjust width as needed */
+    height: 30px; /* Added explicit height for consistency */
+    font-size: 14px;
+}

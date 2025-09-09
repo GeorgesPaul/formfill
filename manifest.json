@@ -33,7 +33,6 @@
   },
   "web_accessible_resources": [
     "apiUtils.js",
-    "profileFields.yaml", 
     "llmConfig.html",
     "llmConfig.js", 
     "popup.js",

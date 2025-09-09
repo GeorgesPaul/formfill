@@ -741,7 +741,7 @@ async function fillForm(profiles, customPrompt = '') {
   let totalFields = 0;
 
   try {
-    const profileFields = await loadYaml('profileFields.yaml');   
+    // const profileFields = await loadYaml('profileFields.yaml');   
     
     // No object processing needed - use raw text directly
     const profileData = profiles;
