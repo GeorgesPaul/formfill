@@ -374,8 +374,32 @@ ${field.id}:
   `).join('\n');
 }
 
-function getAllFormElements(doc = document) {
-  return Array.from(doc.querySelectorAll('input:not([type="hidden"]), select, textarea'));
+/*
+Performance note: Traversing * for shadow hosts can be slow on very large pages. If needed, optimize by limiting recursion depth or scoping to known containers (e.g., pass document.getElementById('layout-container') as root if that's where content loads)
+*/
+function getAllFormElements(root = document) {
+  const elements = [];
+  const selectors = 'input:not([type="hidden"]), select, textarea';  // Matches your original selectors
+
+  // Collect from the current root
+  if (root.querySelectorAll) {
+    elements.push(...root.querySelectorAll(selectors));
+  }
+
+  // Recurse into shadow DOM if present
+  if (root.shadowRoot) {
+    elements.push(...getAllFormElements(root.shadowRoot));
+  }
+
+  // Find all potential shadow hosts in this root and recurse
+  const shadowHosts = root.querySelectorAll ? root.querySelectorAll('*') : [];
+  for (const host of shadowHosts) {
+    if (host.shadowRoot) {
+      elements.push(...getAllFormElements(host.shadowRoot));
+    }
+  }
+
+  return elements;
 }
 
 // Form field processing functions
@@ -671,27 +695,24 @@ async function simulateInput(element, value) {
 function getVisibleFormElements(documents) {
   let allElements = [];
   documents.forEach(doc => {
-    const viewport = {
-      width: window.innerWidth || doc.documentElement.clientWidth,
-      height: window.innerHeight || doc.documentElement.clientHeight
-    };
+    // Use the recursive function on each document (main or iframe)
+    const elementsFromDoc = getAllFormElements(doc);
 
-    const elements = Array.from(doc.querySelectorAll('input:not([type="hidden"]), select, textarea'))
-      .filter(el => {
-        const style = window.getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        
-        return style.display !== 'none' && 
-               style.visibility !== 'hidden' && 
-               style.opacity !== '0' &&
-               rect.top < viewport.height &&
-               rect.left < viewport.width &&
-               rect.width > 0 && rect.height > 0 &&
-               rect.bottom > 0 &&
-               rect.right > 0;
-      });
+    // Filter for visibility (update to use doc's window for iframes)
+    const filtered = elementsFromDoc.filter(el => {
+      const win = el.ownerDocument.defaultView || window;  // Use iframe's window if applicable
+      const style = win.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();  // Note: rect is relative to viewport; for iframes, adjust if needed by adding iframe offset
+
+      return style.display !== 'none' && 
+             style.visibility !== 'hidden' && 
+             style.opacity !== '0' &&
+             rect.width > 0 && rect.height > 0 &&
+             rect.bottom > 0 &&
+             rect.right > 0;
+    });
     
-    allElements = allElements.concat(elements);
+    allElements = allElements.concat(filtered);
   });
   
   return allElements;
@@ -735,7 +756,17 @@ async function fillForm(profiles, customPrompt = '') {
     });
     console.log('=====================================');
 
-    let formElements = getAllFormElements();
+    // Wait for full page load if not already complete (handles async JS loading content)
+    await new Promise(resolve => {
+      if (document.readyState === 'complete') {
+        resolve();
+      } else {
+        window.addEventListener('load', resolve, { once: true });
+      }
+    });
+
+    const documents = findIframesWithForms();
+    let formElements = getVisibleFormElements(documents);
     formElements = formElements.filter(el => !el.hasAttribute('data-filled-by-extension') || el.value === ''); // Filter marked but re-fill if cleared
     totalFields = formElements.length;
     console.log('found formElements on page (filtered):', formElements);

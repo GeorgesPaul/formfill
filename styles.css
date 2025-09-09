@@ -4,8 +4,12 @@ body {
     background-color: #c0c0c0;
     color: #000000;
     margin: 0;
-    padding: 16px;
+    padding: 3px; /* Changed from 16px to 3px */
     font-size: 12px;
+    width: 300px; /* Added from popup.html */
+    display: flex; /* Added from popup.html */
+    flex-direction: column; /* Added from popup.html */
+    min-height: 100vh; /* Added from popup.html */
 }
 
 .container {
@@ -15,13 +19,20 @@ body {
     padding: 2px;
 }
 
-h1, h2 {
+h1 { /* Changed from h1, h2 to h1 */
     background-color: #000080;
     color: #ffffff;
     padding: 2px 4px;
     margin: 0 0 10px 0;
     font-size: 14px;
     font-weight: bold;
+}
+
+h2 { /* Added from popup.html */
+    background: linear-gradient(to right, #000080, #1084d0);
+    color: #fff;
+    padding: 3px;
+    margin: 0 0 3px 0;
 }
 
 ul {
@@ -34,20 +45,21 @@ li {
     margin-bottom: 8px;
 }
 
-.button {
-    display: inline-block;
-    background-color: #c0c0c0;
-    color: #000000;
-    padding: 4px 8px;
-    text-decoration: none;
-    border: 2px solid;
-    border-color: #ffffff #808080 #808080 #ffffff;
+button { /* Replaced .button class with button element selector */
+    font-family: 'MS Sans Serif', Arial, sans-serif;
     font-size: 12px;
-    cursor: pointer;
+    background-color: #c0c0c0;
+    border: 1px solid;
+    border-color: #dfdfdf #000 #000 #dfdfdf;
+    padding: 3px 5px;
+    margin: 2px 0;
+    box-shadow: 1px 1px 0 #fff inset, -1px -1px 0 #7f7f7f inset;
+    width: 100%;
 }
 
-.button:active {
-    border-color: #808080 #ffffff #ffffff #808080;
+button:active { /* Replaced .button:active with button:active */
+    border-color: #000 #dfdfdf #dfdfdf #000;
+    box-shadow: -1px -1px 0 #fff inset, 1px 1px 0 #7f7f7f inset;
 }
 
 .donate-button {
@@ -71,22 +83,29 @@ code {
 }
 
 #logMsg {
-    background-color: #ffffff;
-    padding: 8px;
-    border: 1px inset #808080;
-    white-space: pre-wrap;
-    height: 100px;
+    background-color: #1a1a1a; /* Changed from #ffffff to #1a1a1a */
+    color: #39ff14; /* Added from popup.html */
+    border: 1px solid #7f7f7f; /* Changed from 1px inset #808080 to 1px solid #7f7f7f */
+    box-shadow: inset 1px 1px 0 #7f7f7f; /* Added from popup.html */
+    padding: 5px; /* Changed from 8px to 5px */
+    min-height: 40px; /* Changed from height: 100px to min-height: 40px */
     overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word; /* Added from popup.html */
+    font-family: 'Courier New', monospace; /* Added from popup.html */
+    user-select: text; /* Added from popup.html */
+    cursor: text; /* Added from popup.html */
 }
 
-select, input[type="text"] {
-    width: 100%;
-    padding: 2px;
-    margin-bottom: 8px;
-    border: 2px inset #808080;
-    background-color: #ffffff;
-    font-family: 'MS Sans Serif', 'Microsoft Sans Serif', sans-serif;
+select, input, textarea { /* Modified from select, input[type="text"] to include textarea and input */
+    font-family: 'MS Sans Serif', Arial, sans-serif;
     font-size: 12px;
+    background-color: #fff;
+    border: 1px solid #7f7f7f;
+    box-shadow: inset 1px 1px 0 #7f7f7f;
+    padding: 2px;
+    margin: 2px 0;
+    width: calc(100% - 6px);
 }
 
 /* Scrollbar styles */
@@ -124,4 +143,339 @@ select, input[type="text"] {
     background-size: 8px;
     background-repeat: no-repeat;
     background-position: center;
+}
+
+/* Specific Styles for Popup.html */
+#fillForm {
+    height: 40px;
+    font-size: 16px;
+    font-weight: bold;
+    display: block;
+    width: 200px;
+    margin-left: auto;
+    margin-right: auto;
+    text-align: center;
+    background-color: #28a745; /* Green when enabled */
+    color: #fff;
+}
+#fillForm:disabled {
+    background-color: #6c757d; /* Gray when disabled */
+    color: #ccc;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+#fillForm:hover:not(:disabled) {
+    background-color: #218838; /* Darker green on hover */
+}
+#stopFilling {
+    height: 20px;
+    font-size: 13px;
+    font-weight: bold;
+    display: block;
+    width: 150px;
+    margin-left: auto;
+    margin-right: auto;
+    text-align: center;
+    background-color: #dc3545; /* Red when enabled */
+    color: #fff;
+    border-color: #c82333 #000 #000 #c82333;
+}
+#stopFilling:disabled {
+    background-color: #f8d7da; /* Faded red when disabled */
+    color: #721c24;
+    border-color: #7f7f7f #000 #000 #7f7f7f;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+#stopFilling:hover:not(:disabled) {
+    background-color: #c82333; /* Darker red on hover */
+}
+
+#profileFormButtons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 10px;
+}
+
+#profileFormButtons button {
+    flex: 1;
+    min-width: 120px;
+    padding: 3px 5px;
+    height: 24px;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 11px;
+}
+
+#profileFormButtons button:nth-child(1),
+#profileFormButtons button:nth-child(3) {
+    margin-left: 0;
+}
+
+#profileFormButtons button:nth-child(2),
+#profileFormButtons button:nth-child(4) {
+    margin-right: 0;
+}
+
+#profileSelectContainer {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 5px;
+    align-items: start;
+    margin-bottom: 5px;
+}
+#profileListHeader {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+    font-size: 11px;
+    color: #000080;
+}
+#profileSelect {
+    grid-column: 1;
+    width: 100%;
+    max-height: 120px;
+    overflow-y: auto;
+    border: 1px solid #7f7f7f;
+    background-color: #fff;
+    padding: 5px;
+    font-family: 'MS Sans Serif', Arial, sans-serif;
+    font-size: 12px;
+}
+#profileSelect option {
+    padding: 2px 5px;
+}
+#profileSelect option:checked {
+    background-color: #c0c0c0;
+}
+#profileButtons {
+    display: none;
+}
+#profileManagementButtons {
+    grid-column: 2; /* Changed from 1 to 2 */
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-items: flex-end;
+    /* Removed margin-left: auto; */
+}
+#profileManagementButtons button {
+    /* Removed width: auto; to allow it to take full width of its container */
+    font-size: 12px; /* Changed from 10px to 12px */
+    padding: 3px 5px; /* Changed from 2px 4px to 3px 5px */
+    height: 24px; /* Added explicit height for consistency */
+    /* white-space: nowrap; - kept as it might be useful, though with full width and ellipsis it's less critical */
+}
+#profileSelectionButtons {
+    grid-column: 1 / -1; /* Changed from 1 to 1 / -1 */
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 5px;
+    gap: 5px;
+    /* Removed position: relative; */
+}
+#profileSelectionButtons button {
+    width: 100%; /* Changed from auto to 100% */
+    font-size: 12px; /* Changed from 10px to 12px */
+    padding: 3px 5px; /* Changed from 2px 4px to 3px 5px */
+    height: 24px; /* Added explicit height for consistency */
+    /* white-space: nowrap; - kept as it might be useful */
+}
+/* Removed #profileSelectionButtons #clearAllProfiles rule as it's not needed with updated button styles */
+#removeProfile {
+    font-size: 12px;
+    padding: 3px 5px;
+    width: auto;
+    height: auto;
+    color: #ff0000;
+}
+#showAddProfileForm {
+    white-space: nowrap;
+    font-size: 10px;
+    padding: 2px 4px;
+}
+
+#logLabel {
+    margin-top: 10px;
+    margin-bottom: 3px;
+}
+#profileForm {
+    border: 1px solid;
+    border-color: #7f7f7f #fff #fff #7f7f7f;
+    padding: 10px;
+    margin-top: 10px;
+}
+#formTitle {
+    margin-top: 0;
+    font-weight: bold;
+}
+#dynamicProfileForm div {
+    display: flex;
+    flex-direction: column; /* Changed from default flex-direction (row) to column */
+    align-items: flex-start; /* Align items to the start of the cross axis (left for column) */
+    margin-bottom: 5px;
+}
+#dynamicProfileForm label {
+    width: auto; /* Remove fixed width */
+    margin-right: 0; /* Remove right margin */
+    text-align: left; /* Align text to the left */
+    margin-bottom: 3px; /* Add some space below the label */
+}
+#dynamicProfileForm input {
+    flex-grow: 1;
+}
+#submitProfile {
+    margin-top: 10px;
+    width: auto;
+    float: right;
+}
+footer {
+    margin-top: auto;
+    padding: 5px;
+    border-top: 1px solid #7f7f7f;
+    text-align: center;
+}
+footer a {
+    color: #000080;
+    text-decoration: none;
+}
+footer a:hover {
+    text-decoration: underline;
+}
+#additionalFields {
+    min-height: 100px;
+    max-height: 500px;
+    overflow-y: auto;
+    resize: vertical;
+    margin-bottom: 10px;
+}
+#qrCodeContainer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 10px 0;
+}
+
+#qrCodeContainer img {
+    max-width: 100%;
+    height: auto;
+}
+#userPrompt {
+    width: 100%;
+    min-height: 60px;
+    max-height: 120px;
+    resize: vertical;
+    margin-bottom: 10px;
+    font-family: 'MS Sans Serif', Arial, sans-serif;
+    font-size: 12px;
+    background-color: #fff;
+    border: 1px solid #7f7f7f;
+    box-shadow: inset 1px 1px 0 #7f7f7f;
+    padding: 5px;
+}
+#userPromptLabel {
+    display: block;
+    margin-bottom: 3px;
+    font-size: 11px;
+    color: #000080;
+    font-weight: bold;
+}
+
+/* Styles specific to llmConfig.html */
+body.llm-config-body { /* Added a class for llmConfig body */
+    width: 700px;
+    margin: 8px;
+}
+
+h2.llm-config-h2 { /* Added a class for llmConfig h2 */
+    font-size: 14px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 8px;
+    background-color: #fff;
+    border: 2px inset #dfdfdf;
+}
+th, td {
+    border: 1px solid #808080;
+    padding: 2px 4px;
+    font-size: 12px;
+}
+th {
+    background-color: #c0c0c0;
+    font-weight: normal;
+}
+tr.selected {
+    background-color: #000080;
+    color: #fff;
+}
+button.llm-config-button { /* Added a class for llmConfig buttons */
+    background-color: #c0c0c0;
+    border: 2px outset #dfdfdf;
+    color: #000;
+    padding: 2px 6px;
+    font-size: 12px;
+    margin: 2px;
+    cursor: pointer;
+}
+button.llm-config-button:active { /* Added a class for llmConfig buttons */
+    border-style: inset;
+}
+#configForm {
+    display: none;
+    background-color: #c0c0c0;
+    padding: 8px;
+    border: 2px outset #dfdfdf;
+}
+#configForm input {
+    width: calc(100% - 8px);
+    margin: 4px 0;
+    border: 2px inset #dfdfdf;
+    background-color: #fff;
+    font-size: 12px;
+    padding: 2px;
+}
+#statusMessage {
+    margin-top: 8px;
+    font-size: 12px;
+}
+#persistentMessage {
+    display: none;
+    background-color: #c0c0c0;
+    border: 2px outset #dfdfdf;
+    padding: 8px;
+    margin-top: 8px;
+    font-size: 12px;
+}
+#closePersistentMessage {
+    margin-top: 4px;
+}
+#logLabel {
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+#logMsg {
+  background-color: #1a1a1a;
+  color: #39ff14;
+  border: 1px solid #7f7f7f;
+  box-shadow: inset 1px 1px 0 #7f7f7f;
+  padding: 5px;
+  width: calc(100% - 8px);
+  height: 80px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Courier New', monospace;
+  user-select: text;
+  cursor: text;
 }
