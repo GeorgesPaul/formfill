@@ -263,7 +263,7 @@ function createInput(id, labelText, inputType, changeHandler) {
 }
 
 function handleProfileNameChange(event) {
-  const newProfileName = event.target.value.trim();
+  const newProfileName = event.target.value;
   updateProfileName(currentProfileId, newProfileName);
 }
 
