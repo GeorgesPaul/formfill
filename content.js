@@ -228,10 +228,10 @@ function removeEmptyValues(obj) {
 }
 
 // Main functions for field matching and filling
-async function matchFieldWithllama(fieldInfo, profileFields) {
-  const fieldInfoString = generateFieldInfoString(fieldInfo);
-  const prompt = generateMatchFieldPrompt(fieldInfoString, profileFields);
-
+async function matchFieldWithllama(fieldInfo) {
+  const fieldInfoString = JSON.stringify(fieldInfo, null, 2);
+  const prompt = generateMatchFieldPrompt(fieldInfoString);
+  
   try {
     const bestMatchId = await promptLLM(prompt);
     console.log('Best match ID from LLM:', bestMatchId);
@@ -242,28 +242,23 @@ async function matchFieldWithllama(fieldInfo, profileFields) {
   }
 }
 
-function generateMatchFieldPrompt(fieldInfoString, profileFields) {
-  return `TASK: Match form field to profile field.
-
+function generateMatchFieldPrompt(fieldInfoString) {
+  return `TASK: Match form field to a generic concept.
+  
   FORM FIELD:
   ${fieldInfoString}
   
-  PROFILE FIELDS:
-  ${profileFields.map(field => `- ${field.id}: ${field.label}`).join('\n')}
-  
   INSTRUCTIONS:
-  1. Find the profile field that best matches the form field.
-  2. Return ONLY the id of the matching profile field.
-  3. Return empty string if there is no obvious match. 
-  4. Return empty string if the form field is obviously not part of a form. Examples: search, password etc.
+  1. Based on the FORM FIELD, identify if it represents a common data type like 'name', 'email', 'phone', 'address', 'city', 'state', 'zip', 'country', 'company', 'jobTitle', 'website', 'dob', 'gender', 'nationality', 'creditCardNumber', 'creditCardExpiry', 'creditCardCvv'.
+  2. Return ONLY the matched data type string (e.g., 'email').
+  3. Return empty string if there is no obvious match, or if the field is not typically part of a form (e.g., a search box, password field).
   
-  Now, provide the id of the best matching profile field. No other text.`;
+  Now, provide the id of the best matching generic data type. No other text.`;
 }
 
-async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, profileFieldsInfo, customPrompt = '') {
+async function get_str_to_fill_with_LLM(fieldInfo, profileData, customPrompt = '') {
   const fieldInfoString = JSON.stringify(fieldInfo, null, 2);
   
-  // Use raw profile text directly (no JSON conversion needed)
   let userDataString = '';
   if (Array.isArray(profileData)) {
     profileData.forEach((profile, index) => {
@@ -274,8 +269,10 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, p
     userDataString = profileData.data || profileData; // Fallback for single profile
   }
   
-  const prompt = generateFillFieldPrompt(fieldInfoString, userDataString, profileFields, profileFieldsInfo, customPrompt);
-
+  const prompt = generateFillFieldPrompt(fieldInfoString, userDataString, customPrompt);
+  
+  console.log('prompt:', prompt);
+  
   try {
     let str_to_fill = await promptLLM(prompt);
     console.log('Raw LLM response for field:', str_to_fill);
@@ -296,82 +293,36 @@ async function get_str_to_fill_with_LLM(fieldInfo, profileFields, profileData, p
   }
 }
 
-function generateFillFieldPrompt(fieldInfoString, profileDataString, profileFields, profileFieldsInfo, customPrompt = '') {
-  const relevantFieldInfo = getRelevantFieldInfo(fieldInfoString, profileFieldsInfo);
+function generateFillFieldPrompt(fieldInfoString, profileDataString, customPrompt = '') {
+  // Removed getRelevantFieldInfo and profileFieldsInfo
 
   const prompt = `TASK: Fill a form field with user data.
-
-FORM FIELD:
-${fieldInfoString}
-
-USER DATA:
-${profileDataString}
-
-${customPrompt ? `CUSTOM INSTRUCTIONS:
-${customPrompt}
-
-` : ''}FIELD INFO:
-${relevantFieldInfo}
-
-RULES:
-1. Parse the USER DATA text format (key: value pairs) to find matching information.
-2. Match the form field to the best fitting user data from any profile section.
-3. Prioritize NearbyText and Label in FORM FIELD.
-4. Use FIELD INFO for additional context if needed.
-5. Return empty string if no match or field is not part of a form.
-6. For addresses, match specific components (city, street, etc.).
-7. When multiple profiles have matching data, use the first profile's data.
-8. Ignore placeholder values unless they match USER DATA.
-
-OUTPUT:
-Return ONLY the value to fill. Do not return any code, functions, or explanations. Just the value as a string.`;
-
+  
+  FORM FIELD:
+  ${fieldInfoString}
+  
+  USER DATA:
+  ${profileDataString}
+  
+  ${customPrompt ? `CUSTOM INSTRUCTIONS:
+  ${customPrompt}
+  
+  ` : ''}
+  RULES:
+  1. Parse the USER DATA text format (key: value pairs, or just raw text) to find matching information.
+  2. Match the form field to the best fitting user data from any profile section.
+  3. Prioritize NearbyText and Label in FORM FIELD.
+  4. Return empty string if no match or field is not part of a form (e.g., search, password).
+  5. For addresses, match specific components (city, street, etc.).
+  6. When multiple profiles have matching data, use the first profile's data.
+  7. Ignore placeholder values unless they match USER DATA.
+  
+  OUTPUT:
+  Return ONLY the value to fill. Do not return any code, functions, or explanations. Just the value as a string.`;
+  
   console.log("Generated prompt:", prompt);
 
   return prompt;
-}
-
-function getRelevantFieldInfo(fieldInfoString, profileFieldsInfo) {
-  console.log("fieldInfoString:", fieldInfoString);
-  console.log("profileFieldsInfo:", profileFieldsInfo);
-
-  if (!profileFieldsInfo || !profileFieldsInfo.fields) {
-    console.error("profileFieldsInfo or profileFieldsInfo.fields is undefined");
-    return "No relevant field info available";
-  }
-
-  let fieldInfo;
-  try {
-    fieldInfo = JSON.parse(fieldInfoString);
-  } catch (error) {
-    console.error("Error parsing fieldInfoString:", error);
-    return "Error parsing field info";
-  }
-
-  const relevantFields = profileFieldsInfo.fields.filter(field => 
-    field.common_labels?.some(label => 
-      fieldInfo.label?.toLowerCase().includes(label.toLowerCase()) ||
-      fieldInfo.name?.toLowerCase().includes(label.toLowerCase()) ||
-      fieldInfo.id?.toLowerCase().includes(label.toLowerCase())
-    ) ||
-    field.aliases?.some(alias => 
-      fieldInfo.label?.toLowerCase().includes(alias.toLowerCase()) ||
-      fieldInfo.name?.toLowerCase().includes(alias.toLowerCase()) ||
-      fieldInfo.id?.toLowerCase().includes(alias.toLowerCase())
-    )
-  );
-
-  if (relevantFields.length === 0) {
-    return "No matching fields found";
-  }
-
-  return relevantFields.map(field => `
-${field.id}:
-  Label: ${field.label}
-  Common Labels: ${field.common_labels?.join(', ')}
-  Aliases: ${field.aliases?.join(', ')}
-  Description: ${field.description}
-  `).join('\n');
 }
 
 /*
@@ -741,7 +692,7 @@ async function fillForm(profiles, customPrompt = '') {
   let totalFields = 0;
 
   try {
-    // const profileFields = await loadYaml('profileFields.yaml');   
+    const profileFields = ""; 
     
     // No object processing needed - use raw text directly
     const profileData = profiles;
@@ -779,9 +730,9 @@ async function fillForm(profiles, customPrompt = '') {
 
     let filledFields;
     if (config.apiUrl.includes('openrouter.ai')) {
-      filledFields = await fillFormSinglePrompt(formFieldsInfo, profileFields.fields, profileData, customPrompt);
+      filledFields = await fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt);
     } else {
-      filledFields = await fillFormSequential(formFieldsInfo, profileFields.fields, profileData, profileFields, customPrompt);
+      filledFields = await fillFormSequential(formFieldsInfo, profileData, customPrompt);
     }
     console.log('Fields to fill:', filledFields);
 
@@ -887,8 +838,8 @@ The LLM should be smart enough to return the correct values for all fields in th
 //     throw error;
 //   }
 // }
-async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData, customPrompt = '') {
-  const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData, customPrompt);
+async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = '') {
+  const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt);
   
   // Log the final prompt being sent to LLM
   console.log('=== FINAL PROMPT SENT TO LLM ===');
@@ -925,9 +876,8 @@ async function fillFormSinglePrompt(formFieldsInfo, profileFields, profileData, 
   }
 }
 
-function generateSinglePromptForAllFields(formFieldsInfo, profileFields, profileData, customPrompt = '') {
+function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt = '') {
   const formFieldsString = JSON.stringify(formFieldsInfo, null, 2);
-  const profileFieldsString = JSON.stringify(profileFields, null, 2);
   
   // Use raw profile text directly
   let userDataString = '';
@@ -937,41 +887,24 @@ function generateSinglePromptForAllFields(formFieldsInfo, profileFields, profile
       userDataString += profile.data + '\n'; // Raw text as-is
     });
   } else {
-    userDataString = profileData.data || profileData; // Fallback
+    // Handle case where profileData might be a single object or a string directly
+    userDataString = profileData.data || profileData; // Fallback for single profile
   }
+  
+  return `You are an AI assistant specialized in filling out web forms. 
+  Given the following form field information and available user profile data, determine the most appropriate value to fill into the form fields. 
+  The user profile data is provided as raw text, and you need to extract the most relevant information from it.
 
-  return `TASK: Fill out a web form based on given information.
+  Form Fields Info:
+  ${formFieldsString}
 
-FORM FIELDS:
-${formFieldsString}
+  User Profile Data:
+  ${userDataString}
 
-PROFILE FIELDS:
-${profileFieldsString}
-
-USER DATA:
-${customPrompt ? `CUSTOM INSTRUCTIONS:
-${customPrompt}
-` : ''}
-${userDataString}
-
-INSTRUCTIONS:
-1. Analyze the form fields and match them with the appropriate user data from any of the provided profiles.
-2. Parse the user data text format (key: value pairs) to find matching information.
-3. Create a JSON object where keys are either the 'id', 'name' or 'class' of the form field (depending on which one is present), and values are the corresponding data to fill.
-4. Follow these rules for matching and filling fields:
-   a. Do not use placeholder values unless they match USER DATA.
-   b. Leave a field empty (do not include in the JSON) if:
-      - There is no obvious match
-      - The form field is not part of a form (e.g., search, password)
-   c. For address fields:
-      - Pay attention to specific components (city, street, house number, etc.)
-      - Consider that multiple form fields might map to parts of a single address field in USER DATA
-   d. Be aware that some fields might be mislabeled or use non-standard names.
-   e. For select fields, choose the option that best matches the USER DATA from any profile.
-5. Return only the JSON object, no additional text.
-
-OUTPUT:
-Provide a JSON object with the fields to fill. No explanation or additional text.`;
+  Your output should be a JSON object where keys are the 'id' or 'name' of the form fields and values are the extracted data. 
+  Do not include any other text or formatting. If no suitable value can be determined for a field, return an empty string for that field.
+  ${customPrompt ? `\nAdditional instructions from user:\n${customPrompt}` : ''}
+  `;
 }
 
 function trimAndRemoveQuotes(str) {
@@ -990,7 +923,7 @@ function trimAndRemoveQuotes(str) {
 Generates 1 prompt for each fillable element on the page/form. 
 Use this for LLMs that are not as good at handling this type of prompt (e.g. llama3.1 8B and similar models)
 */
-async function fillFormSequential(formFieldsInfo, profileFields, profileData, profileFieldsInfo, customPrompt = '') {
+async function fillFormSequential(formFieldsInfo, profileData, customPrompt = '') {
   let filledFields = {};
   let filledCount = 0;
   const totalFields = formFieldsInfo.length;
@@ -1001,7 +934,7 @@ async function fillFormSequential(formFieldsInfo, profileFields, profileData, pr
     }
     if (info && Object.values(info).some(value => value)) {
       try {
-        let str_to_fill = await get_str_to_fill_with_LLM(info, profileFields, profileData, profileFieldsInfo, customPrompt);
+        let str_to_fill = await get_str_to_fill_with_LLM(info, profileData, customPrompt);
         str_to_fill = trimAndRemoveQuotes(str_to_fill);
         if (str_to_fill !== '') {
           filledFields[info.id || info.name] = str_to_fill;

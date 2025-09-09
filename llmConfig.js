@@ -151,6 +151,11 @@ function showConfigForm(configName = '') {
     populateFormWithConfig(configName);
   } else {
     form.reset();
+    // Pre-fill with Grok-1 OpenRouter config when adding a new configuration
+    document.getElementById('configName').value = 'GROK_CODE_FAST_1';
+    document.getElementById('apiUrl').value = 'https://openrouter.ai/api/v1/chat/completions';
+    document.getElementById('model').value = 'x-ai/grok-code-fast-1';
+    document.getElementById('apiKey').value = ''; // Ensure API key is empty
   }
 }
 

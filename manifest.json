@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.9",
+  "version": "1.10",
   "description": "Intelligently fills forms based on user profiles",
   "permissions": [
     "activeTab",
@@ -43,10 +43,8 @@
     {
       "matches": ["<all_urls>"],
       "js": [
-        "idleMonitor.js",
         "apiUtils.js",
-        "content.js",
-        "lib/js-yaml.min.js"
+        "content.js"
       ],
       "run_at": "document_idle", 
       "all_frames": true
