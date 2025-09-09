@@ -881,5 +881,10 @@ function importProfilesFromText(text) {
 }
 
 function openLlmConfig() {
-  browser.tabs.create({ url: browser.runtime.getURL('llmConfig.html') });
+  browser.windows.create({
+    url: browser.runtime.getURL('llmConfig.html'),
+    type: 'popup',
+    width: 800, // Adjust as needed
+    height: 600 // Adjust as needed
+  });
 }
