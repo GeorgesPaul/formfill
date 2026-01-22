@@ -198,7 +198,7 @@ async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = 
 }
 
 function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt = '') {
-    const formFieldsString = JSON.stringify(formFieldsInfo, null, 2);
+    const formFieldsString = JSON.stringify(formFieldsInfo);
 
     // Use raw profile text directly
     let userDataString = '';

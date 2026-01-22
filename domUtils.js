@@ -1,6 +1,11 @@
 /*
 Performance note: Traversing * for shadow hosts can be slow on very large pages. If needed, optimize by limiting recursion depth or scoping to known containers (e.g., pass document.getElementById('layout-container') as root if that's where content loads)
 */
+function cleanText(text) {
+    if (!text) return '';
+    return text.replace(/\s+/g, ' ').trim();
+}
+
 function getAllFormElements(root = document) {
     const elements = [];
     // Broadened selectors to include semantic roles and contenteditable
@@ -36,7 +41,7 @@ function getFormFieldInfo(input) {
     // Remove the iframeInfo property
 
     if (input.tagName.toLowerCase() === 'select') {
-        info.options = Array.from(input.options).map(option => option.text);
+        info.options = Array.from(input.options).map(option => cleanText(option.text));
     }
 
     // For contenteditable, adding a note
@@ -51,12 +56,13 @@ function getBasicFieldInfo(input) {
     return {
         name: input.name,
         id: input.id,
-        placeholder: input.placeholder,
+        placeholder: cleanText(input.placeholder),
         type: input.type || (input.isContentEditable ? 'contenteditable' : input.getAttribute('role')),
         required: input.required || input.getAttribute('aria-required') === 'true',
         autocomplete: input.autocomplete,
         classes: input.className,
-        value: input.value || input.textContent, // Handle contenteditable
+        // Only use textContent for contenteditable; otherwise trust .value (even if empty)
+        value: input.isContentEditable ? cleanText(input.textContent) : input.value,
         parentElement: {
             tagName: input.parentElement ? input.parentElement.tagName : 'BODY',
             classes: input.parentElement ? input.parentElement.className : ''
@@ -70,7 +76,7 @@ function getAssociatedLabel(input) {
     // Try aria-labelledby
     if (!label && input.getAttribute('aria-labelledby')) {
         const labelledBy = document.getElementById(input.getAttribute('aria-labelledby'));
-        if (labelledBy) return labelledBy.textContent.trim();
+        if (labelledBy) return cleanText(labelledBy.textContent);
     }
 
     // Try aria-label
@@ -94,7 +100,7 @@ function getAssociatedLabel(input) {
         }
     }
 
-    return label ? (label.textContent ? label.textContent.trim() : label) : null;
+    return label ? (label.textContent ? cleanText(label.textContent) : label) : null;
 }
 
 function getNearbyText(element, maxDistance = 100) {
@@ -111,9 +117,9 @@ function getNearbyText(element, maxDistance = 100) {
 
     while (currentNode && distance < maxDistance) {
         if (currentNode.nodeType === Node.TEXT_NODE) {
-            if (!addText(currentNode.textContent.trim())) break;
+            if (!addText(cleanText(currentNode.textContent))) break;
         } else if (currentNode.nodeType === Node.ELEMENT_NODE && currentNode.tagName.toLowerCase() === 'label') {
-            if (!addText(currentNode.textContent.trim())) break;
+            if (!addText(cleanText(currentNode.textContent))) break;
         }
 
         currentNode = currentNode.previousSibling || currentNode.parentNode;
