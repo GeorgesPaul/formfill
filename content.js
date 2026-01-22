@@ -19,7 +19,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    fillForm(profilesToUse, message.customPrompt).then(result => {
+    fillForm(profilesToUse, message.customPrompt, message.sessionId).then(result => {
       sendResponse(result);
     }).catch(error => {
       sendResponse({ status: "error", message: error.toString() });

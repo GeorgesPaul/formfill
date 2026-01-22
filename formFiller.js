@@ -1,6 +1,6 @@
 let currentProfile = null;
 
-async function fillForm(profiles, customPrompt = '') {
+async function fillForm(profiles, customPrompt = '', sessionId = null) {
     window.stopFilling = false;
     window.abortController = null;
     currentProfile = profiles;
@@ -11,16 +11,21 @@ async function fillForm(profiles, customPrompt = '') {
         console.error(errorMsg);
         browser.runtime.sendMessage({
             action: "fillFormError",
-            error: errorMsg
+            error: errorMsg,
+            sessionId: sessionId
         });
         throw new Error(errorMsg);
     }
 
-    browser.runtime.sendMessage({ action: "fillFormStart" });
+    browser.runtime.sendMessage({ action: "fillFormStart", sessionId: sessionId });
 
     let filledCount = 0;
     let processed = 0;
     let totalFields = 0;
+
+    // Safety: Hard timeout to prevent infinite loops (5 minutes)
+    const MAX_EXECUTION_TIME = 5 * 60 * 1000;
+    const processStartTime = Date.now();
 
     try {
         // No object processing needed - use raw text directly
@@ -53,7 +58,7 @@ async function fillForm(profiles, customPrompt = '') {
         totalFields = formElements.length;
         console.log('found formElements on page (filtered):', formElements);
 
-        updateFillProgress(processed, filledCount, totalFields, "Starting to fill form... This will take at least a few seconds.");
+        updateFillProgress(processed, filledCount, totalFields, "Starting to fill form... This will take at least a few seconds.", sessionId);
 
         const formFieldsInfo = formElements.map(getFormFieldInfo);
 
@@ -68,6 +73,11 @@ async function fillForm(profiles, customPrompt = '') {
 
             if (window.stopFilling) {
                 throw new Error("Form filling stopped by user.");
+            }
+
+            // 2. Check Safety Timeout (TTL)
+            if (Date.now() - processStartTime > MAX_EXECUTION_TIME) {
+                throw new Error("Form filling stopped: Safety timeout reached (5 minutes).");
             }
 
             const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
@@ -95,7 +105,7 @@ async function fillForm(profiles, customPrompt = '') {
             }
 
             processed++;
-            updateFillProgress(processed, filledCount, totalFields, `Processing ${processed} out of ${totalFields} fields (filled ${filledCount})...`);
+            updateFillProgress(processed, filledCount, totalFields, `Processing ${processed} out of ${totalFields} fields (filled ${filledCount})...`, sessionId);
 
             await sleep(10);
         }
@@ -103,13 +113,14 @@ async function fillForm(profiles, customPrompt = '') {
         simulateMouseClick(document.body, true);
 
         // Final forced update to ensure 100%
-        updateFillProgress(totalFields, filledCount, totalFields, `Completed filling ${filledCount} out of ${totalFields} fields.`);
+        updateFillProgress(totalFields, filledCount, totalFields, `Completed filling ${filledCount} out of ${totalFields} fields.`, sessionId);
 
         browser.runtime.sendMessage({
             action: "fillFormComplete",
             filled: filledCount,
             total: totalFields,
-            message: `Completed filling ${filledCount} out of ${totalFields} fields.`
+            message: `Completed filling ${filledCount} out of ${totalFields} fields.`,
+            sessionId: sessionId
         });
 
         return { status: "success", message: `Processed ${filledCount} out of ${totalFields} fields.` };
@@ -122,13 +133,15 @@ async function fillForm(profiles, customPrompt = '') {
                 filled: filledCount,
                 processed: processed,
                 total: totalFields,
-                message: "Form filling stopped by user."
+                message: "Form filling stopped by user.",
+                sessionId: sessionId
             });
             window.stopFilling = false; // Reset the stop action
         } else {
             browser.runtime.sendMessage({
                 action: "fillFormError",
-                error: error.toString() || "undefined"
+                error: error.toString() || "undefined",
+                sessionId: sessionId
             });
         }
 

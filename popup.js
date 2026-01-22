@@ -3,6 +3,7 @@ let currentProfileId = '';
 let isFilling = false; // Track filling state
 let timerInterval = null;
 let startTime = null;
+let currentSessionId = null; // Track the current session ID for strict isolation
 
 // Add message listener to handle messages from background script
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -12,6 +13,18 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "fillFormComplete":
     case "fillFormStopped":
     case "fillFormError":
+      // STRICT SESSION CHECK: Ignore messages from stale sessions
+      if (message.sessionId && message.sessionId !== currentSessionId) {
+        console.warn(`[Popup] Ignoring message from stale session: ${message.sessionId} (current: ${currentSessionId})`);
+        return;
+      }
+
+      // STRICT STATE CHECK: If we stopped, ignore progress updates
+      if (!isFilling && message.action === "fillFormProgress") {
+        console.warn(`[Popup] Ignoring progress message while stopped.`);
+        return;
+      }
+
       if (message.message) {
         updateStatusMessage(message.message);
       }
@@ -506,8 +519,13 @@ async function fillForm() {
     });
     console.log('================================');
 
-    // Capture the custom prompt
     const customPrompt = document.getElementById('userPrompt').value.trim();
+
+    // Generate NEW session ID
+    currentSessionId = generateUUID();
+    console.log(`[Popup] Starting new session: ${currentSessionId}`);
+
+    const sessionId = currentSessionId;
 
     // Send both profiles AND custom prompt
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
@@ -515,7 +533,8 @@ async function fillForm() {
       await browser.tabs.sendMessage(tabs[0].id, {
         action: "fillForm",
         profiles: profileTexts,
-        customPrompt: customPrompt // Add this line
+        customPrompt: customPrompt, // Add this line
+        sessionId: sessionId
       });
     }
   } catch (error) {
@@ -527,11 +546,37 @@ async function fillForm() {
 }
 
 function stopFilling() {
-  isFilling = false;
-  updateButtonStates();
-  updateStatusMessage("Form filling stopped.");
+  console.log('[Popup] User clicked Stop. Enforcing immediate shutdown.');
 
-  // Send stop message to content script
+  // 1. IMMEDIATE STATE TRANSITION
+  isFilling = false;
+
+  // 2. INVALIDATE SESSION (Ignore future messages)
+  currentSessionId = null;
+
+  // 3. IMMEDIATE UI UPDATE
+  updateButtonStates();
+  updateStatusMessage("Form filling stopped by user.");
+
+  // Reset progress bar usage immediately
+  const progressContainer = document.getElementById('progressContainer');
+  const progressBarFill = document.getElementById('progressBarFill');
+  const progressLabel = document.getElementById('progressLabel');
+  const elapsedTimeSpan = document.getElementById('elapsedTime');
+
+  if (progressContainer && progressBarFill) {
+    progressContainer.style.opacity = '0.5';
+    progressBarFill.style.width = '0%';
+  }
+  if (progressLabel) {
+    progressLabel.style.color = 'gray';
+  }
+  if (elapsedTimeSpan) {
+    elapsedTimeSpan.style.display = 'none';
+  }
+  stopTimer();
+
+  // 4. SIGNAL WORKER TO DIE
   browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
     if (tabs[0]) {
       browser.tabs.sendMessage(tabs[0].id, { action: "stopFilling" });

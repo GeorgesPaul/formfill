@@ -1,6 +1,8 @@
 let formFillProgress = {};
 let formFillStart = null;
 let totalFields = 0;
+let isFilling = false;
+let currentSessionId = null;
 
 function generateLoadingBar(percentage) {
   const barLength = 20;
@@ -15,21 +17,34 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let totalProcessed = 0;
   let percentage = 0;
 
-  switch(message.action) {
+  // Enforce session ID check for all messages except the start message (which sets it)
+  if (message.action !== "fillFormStart" && message.sessionId && message.sessionId !== currentSessionId) {
+    // Silent drop for stale messages to avoid clogging logs in high-frequency/stress scenarios
+    // console.log(`Ignoring message from stale session: ${message.sessionId} (current: ${currentSessionId})`);
+    return;
+  }
+
+  switch (message.action) {
     case "fillFormStart":
+      isFilling = true;
+      currentSessionId = message.sessionId;
       formFillProgress = {};
       formFillStart = Date.now();
       totalFields = 0;
       computedMessage = "Starting to fill form...\n" + generateLoadingBar(0) + " 0%";
       break;
     case "fillFormStopped":
-        const fill_duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-        totalFilled = message.filled;
-        totalProcessed = message.processed || Object.values(formFillProgress).reduce((sum, progress) => sum + progress.processed, 0);
-        percentage = totalFields > 0 ? totalProcessed / totalFields : 0;
-        computedMessage = `Form filling stopped by user.\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%\nFilled ${totalFilled} out of ${totalFields} fields in ${fill_duration} seconds.`;
+      isFilling = false;
+      // Invalidate session immediately
+      currentSessionId = null;
+      const fill_duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
+      totalFilled = message.filled;
+      totalProcessed = message.processed || Object.values(formFillProgress).reduce((sum, progress) => sum + progress.processed, 0);
+      percentage = totalFields > 0 ? totalProcessed / totalFields : 0;
+      computedMessage = `Form filling stopped by user.\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%\nFilled ${totalFilled} out of ${totalFields} fields in ${fill_duration} seconds.`;
       break;
     case "fillFormProgress":
+      if (!isFilling) return;
       if (!formFillProgress[sender.frameId]) {
         totalFields += message.total;
       } else if (formFillProgress[sender.frameId].total !== message.total) {
@@ -48,6 +63,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case "fillFormComplete":
+      isFilling = false;
       const duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
       totalFilled = message.filled || Object.values(formFillProgress).reduce((sum, progress) => sum + progress.filled, 0);
       percentage = 1;
@@ -55,6 +71,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case "fillFormError":
+      isFilling = false;
       computedMessage = `Error filling form: ${message.error || "undefined"}`;
       break;
   }

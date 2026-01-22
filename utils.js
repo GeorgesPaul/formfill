@@ -29,13 +29,14 @@ function logToUser(message, ...args) {
     });
 }
 
-function updateFillProgress(processed, filled, total, message) {
+function updateFillProgress(processed, filled, total, message, sessionId = null) {
     browser.runtime.sendMessage({
         action: "fillFormProgress",
         processed: processed,
         filled: filled,
         total: total,
-        message: message
+        message: message,
+        sessionId: sessionId
     });
 }
 
