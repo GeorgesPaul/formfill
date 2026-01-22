@@ -17,16 +17,16 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       // Update progress bar
       if (message.action === "fillFormProgress") {
-        const progressBar = document.getElementById('progressBar');
-        if (progressBar) {
-          progressBar.style.opacity = '1';
-          progressBar.removeAttribute('disabled');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBarFill = document.getElementById('progressBarFill');
+        if (progressContainer && progressBarFill) {
+          progressContainer.style.opacity = '1';
           if (message.total > 0) {
-            progressBar.max = message.total;
-            progressBar.value = message.filled;
+            const percentage = Math.min(100, Math.max(0, (message.filled / message.total) * 100));
+            progressBarFill.style.width = percentage + '%';
           } else {
             // Indeterminate or starting state
-            progressBar.removeAttribute('value');
+            progressBarFill.style.width = '0%';
           }
         }
       }
@@ -37,14 +37,14 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         updateButtonStates();
 
         // Reset progress bar usage
-        const progressBar = document.getElementById('progressBar');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBarFill = document.getElementById('progressBarFill');
         const progressLabel = document.getElementById('progressLabel');
         const elapsedTimeSpan = document.getElementById('elapsedTime');
 
-        if (progressBar) {
-          progressBar.style.opacity = '0.5';
-          progressBar.setAttribute('disabled', 'true');
-          progressBar.value = 0;
+        if (progressContainer && progressBarFill) {
+          progressContainer.style.opacity = '0.5';
+          progressBarFill.style.width = '0%';
         }
         if (progressLabel) {
           progressLabel.style.color = 'gray';
@@ -462,14 +462,14 @@ async function fillForm() {
   updateStatusMessage("Filling form with selected profiles...");
 
   // Initialize progress bar
-  const progressBar = document.getElementById('progressBar');
+  const progressContainer = document.getElementById('progressContainer');
+  const progressBarFill = document.getElementById('progressBarFill');
   const progressLabel = document.getElementById('progressLabel');
   const elapsedTimeSpan = document.getElementById('elapsedTime');
 
-  if (progressBar) {
-    progressBar.style.opacity = '1';
-    progressBar.removeAttribute('disabled');
-    progressBar.value = 0;
+  if (progressContainer && progressBarFill) {
+    progressContainer.style.opacity = '1';
+    progressBarFill.style.width = '0%';
   }
   if (progressLabel) {
     progressLabel.style.color = 'black';

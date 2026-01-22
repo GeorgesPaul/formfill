@@ -16,7 +16,9 @@
   <hr>
   <label id="progressLabel" for="progressBar" style="color: gray;">Filling Progress <span id="elapsedTime"
       style="display: none;">(0s)</span>:</label>
-  <progress id="progressBar" value="0" max="100" style="width: 100%; opacity: 0.5;" disabled></progress>
+  <div id="progressContainer" class="windows-95-progress" style="opacity: 0.5;">
+    <div id="progressBarFill"></div>
+  </div>
   <button id="fillForm">Fill Form</button>
   <button id="stopFilling" disabled>Stop Filling</button>
 

@@ -490,3 +490,27 @@ button.llm-config-button:active { /* Added a class for llmConfig buttons */
     height: 30px; /* Added explicit height for consistency */
     font-size: 14px;
 }
+
+/* Windows 95 Progress Bar Styles */
+.windows-95-progress {
+    background-color: #ffffff;
+    border-top: 1px solid #808080;
+    border-left: 1px solid #808080;
+    border-right: 1px solid #ffffff;
+    border-bottom: 1px solid #ffffff;
+    height: 20px;
+    padding: 2px;
+    width: calc(100% - 6px); /* Match other inputs */
+    margin: 2px 0;
+    box-sizing: content-box; /* explicit sizing */
+}
+
+#progressBarFill {
+    height: 100%;
+    width: 0%;
+    /* Distinctive Windows 95 blocky look */
+    background-color: transparent; 
+    background-image: linear-gradient(to right, #000080 0%, #000080 70%, transparent 70%, transparent 100%);
+    background-size: 14px 100%; /* block width + gap */
+    background-repeat: repeat-x;
+}
