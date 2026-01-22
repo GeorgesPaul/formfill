@@ -1,9 +1,12 @@
 let currentProfileId = '';
+
 let isFilling = false; // Track filling state
+let timerInterval = null;
+let startTime = null;
 
 // Add message listener to handle messages from background script
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch(message.action) {
+  switch (message.action) {
     case "fillFormStart":
     case "fillFormProgress":
     case "fillFormComplete":
@@ -12,10 +15,44 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.message) {
         updateStatusMessage(message.message);
       }
+      // Update progress bar
+      if (message.action === "fillFormProgress") {
+        const progressBar = document.getElementById('progressBar');
+        if (progressBar) {
+          progressBar.style.opacity = '1';
+          progressBar.removeAttribute('disabled');
+          if (message.total > 0) {
+            progressBar.max = message.total;
+            progressBar.value = message.filled;
+          } else {
+            // Indeterminate or starting state
+            progressBar.removeAttribute('value');
+          }
+        }
+      }
+
       // Reset isFilling and update button states when form filling is complete or an error occurs
       if (message.action === "fillFormComplete" || message.action === "fillFormError" || message.action === "fillFormStopped") {
         isFilling = false;
         updateButtonStates();
+
+        // Reset progress bar usage
+        const progressBar = document.getElementById('progressBar');
+        const progressLabel = document.getElementById('progressLabel');
+        const elapsedTimeSpan = document.getElementById('elapsedTime');
+
+        if (progressBar) {
+          progressBar.style.opacity = '0.5';
+          progressBar.setAttribute('disabled', 'true');
+          progressBar.value = 0;
+        }
+        if (progressLabel) {
+          progressLabel.style.color = 'gray';
+        }
+        if (elapsedTimeSpan) {
+          elapsedTimeSpan.style.display = 'none';
+        }
+        stopTimer();
       }
       break;
   }
@@ -86,7 +123,7 @@ document.addEventListener('DOMContentLoaded', initializeExtension);
 
 function initializeExtension() {
   updateStatusMessage("Configure the API (button at bottom) then press Fill Form on a website with forms.");
-  
+
   loadProfiles()
     .then(initializeUI)
     .catch(handleInitializationError);
@@ -94,7 +131,7 @@ function initializeExtension() {
 
 // Add this function to generate UUIDs
 function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
     var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
   });
@@ -132,8 +169,8 @@ function createDefaultProfile() {
       data: DEFAULT_PROFILE_TEXT
     }
   };
-  
-  return browser.storage.local.set({ 
+
+  return browser.storage.local.set({
     profiles: defaultProfile,
     lastLoadedProfile: defaultProfileId
   }).then(() => ({
@@ -144,12 +181,12 @@ function createDefaultProfile() {
 
 function initializeUI({ profiles, lastLoadedProfileId }) {
   console.log('initializeUI called with profiles:', Object.keys(profiles));
-  
+
   // Initialize the profile form first
   initializeProfileForm();
-  
+
   updateProfileSelect(profiles);
-  
+
   // Set up event listeners
   document.getElementById('fillForm').addEventListener('click', fillForm);
   document.getElementById('stopFilling').addEventListener('click', stopFilling);
@@ -163,32 +200,39 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
   document.getElementById('reloadBackup').addEventListener('click', loadCompleteBackupFromTxt);
   document.getElementById('addProfileFromTxt').addEventListener('click', addProfileFromTxt);
   document.getElementById('llmConfigButton').addEventListener('click', openLlmConfig);
-  document.getElementById('removeProfile').addEventListener('click', removeSelectedProfile);  
+  document.getElementById('removeProfile').addEventListener('click', removeSelectedProfile);
   document.getElementById('profileName').addEventListener('input', handleProfileNameChange);
-  document.getElementById('donateButton').addEventListener('click', function() {
+  document.getElementById('donateButton').addEventListener('click', function () {
     const stripePaymentLink = 'https://donate.stripe.com/cN2dRB4RRcT40OA000';
     // Open the Stripe payment link in a new tab
     window.open(stripePaymentLink, '_blank');
   });
 
   // Load previously selected profiles and load the first one into the form
-  browser.storage.local.get('selectedProfileIds').then(data => {
-    const selectedIds = data.selectedProfileIds || [];
+  browser.storage.local.get(['selectedProfileIds', 'lastLoadedProfile']).then(data => {
+    let selectedIds = data.selectedProfileIds || [];
+    const lastLoadedProfile = data.lastLoadedProfile;
+    const profileIds = Object.keys(profiles);
+
+    // FIX: If no profiles are explicitly selected, fall back to last loaded or first available
+    if (selectedIds.length === 0) {
+      if (lastLoadedProfile && profiles[lastLoadedProfile]) {
+        selectedIds = [lastLoadedProfile];
+      } else if (profileIds.length > 0) {
+        selectedIds = [profileIds[0]];
+      }
+      // Save this auto-selection so it persists
+      browser.storage.local.set({ selectedProfileIds: selectedIds });
+    }
+
     updateProfileSelect(profiles, selectedIds);
-    
+
     // Load the first selected profile into the form
     if (selectedIds.length >= 1) {
       loadProfileIntoForm(selectedIds[0]);
-    } else if (lastLoadedProfileId && profiles[lastLoadedProfileId]) {
-      // If no profiles are selected but we have a last loaded profile, load it
-      loadProfileIntoForm(lastLoadedProfileId);
-    } else if (Object.keys(profiles).length > 0) {
-      // If no selection and no last loaded, load the first available profile
-      const firstProfileId = Object.keys(profiles)[0];
-      loadProfileIntoForm(firstProfileId);
     }
   });
-  
+
   // Ensure the profile form is visible
   document.getElementById('profileForm').style.display = 'block';
   console.log('Profile form should be visible now');
@@ -205,29 +249,29 @@ function initializeProfileForm() {
   console.log('initializeProfileForm called');
   const formDiv = document.getElementById('profileForm');
   const dynamicForm = document.getElementById('dynamicProfileForm');
-  
+
   console.log('formDiv:', formDiv);
   console.log('dynamicForm:', dynamicForm);
-  
+
   // Check if the textarea already exists
   const existingTextarea = document.getElementById('profileData');
   const existingNameInput = document.getElementById('profileName');
-  
+
   console.log('existingTextarea:', existingTextarea);
   console.log('existingNameInput:', existingNameInput);
-  
+
   if (!existingTextarea || !existingNameInput) {
     // Clear the form and recreate it
     dynamicForm.innerHTML = '';
-    
+
     const profileNameInput = createInput('profileName', 'Profile Name:', 'text', handleProfileNameChange);
     dynamicForm.appendChild(profileNameInput);
     dynamicForm.appendChild(document.createElement('br'));
-    
+
     // Create the main data textarea
     const dataInput = createInput('profileData', 'Enter as much data as possible:', 'textarea', handleProfileDataChange);
     dynamicForm.appendChild(dataInput);
-    
+
     console.log('Profile form recreated');
     console.log('Created elements:', document.getElementById('profileName'), document.getElementById('profileData'));
   } else {
@@ -240,7 +284,7 @@ function createInput(id, labelText, inputType, changeHandler) {
   const labelElement = document.createElement('label');
   labelElement.htmlFor = id;
   labelElement.textContent = labelText;
-  
+
   let input;
   if (inputType === 'textarea') {
     input = document.createElement('textarea');
@@ -255,7 +299,7 @@ function createInput(id, labelText, inputType, changeHandler) {
   }
   input.id = id;
   input.addEventListener('input', changeHandler);
-  
+
   container.appendChild(labelElement);
   container.appendChild(document.createElement('br'));
   container.appendChild(input);
@@ -270,7 +314,7 @@ function handleProfileNameChange(event) {
 function updateProfileName(profileId, newProfileName) {
   browser.storage.local.get('profiles').then(data => {
     let profiles = data.profiles || {};
-    
+
     if (profiles[profileId]) {
       profiles[profileId].name = newProfileName;
       browser.storage.local.set({ profiles, lastLoadedProfileId: profileId }).then(() => {
@@ -300,10 +344,10 @@ function handleProfileDataChange(event) {
 
 function updateProfileSelect(profiles, selectedProfileIds = []) {
   const profileSelect = document.getElementById('profileSelect');
-  
+
   // Clear existing options
   profileSelect.innerHTML = '';
-  
+
   // Add profile options
   Object.entries(profiles).forEach(([id, profile]) => {
     const option = document.createElement('option');
@@ -312,7 +356,7 @@ function updateProfileSelect(profiles, selectedProfileIds = []) {
     option.selected = selectedProfileIds.includes(id);
     profileSelect.appendChild(option);
   });
-  
+
   updateSelectedCount();
 }
 
@@ -320,11 +364,11 @@ function updateSelectedCount() {
   const select = document.getElementById('profileSelect');
   const selectedOptions = Array.from(select.selectedOptions);
   const count = selectedOptions.length;
-  
+
   console.log('updateSelectedCount called');
   console.log('Selected options:', selectedOptions.map(opt => ({ value: opt.value, text: opt.textContent })));
   console.log('Selected count:', count);
-  
+
   const selectedCount = document.getElementById('selectedCount');
   if (selectedCount) {
     selectedCount.textContent = `${count} profile${count !== 1 ? 's' : ''} selected`;
@@ -332,12 +376,12 @@ function updateSelectedCount() {
   } else {
     console.log('selectedCount element not found');
   }
-  
+
   // Store selected profiles
   const selectedIds = selectedOptions.map(option => option.value);
   console.log('Selected IDs:', selectedIds);
   browser.storage.local.set({ selectedProfileIds: selectedIds });
-  
+
   // Load profile into form if exactly one is selected
   if (selectedIds.length === 1) {
     console.log('Loading single profile:', selectedIds[0]);
@@ -353,7 +397,7 @@ function updateSelectedCount() {
     document.getElementById('profileData').value = EMPTY_PROFILE_TEXT;
     currentProfileId = '';
   }
-  
+
   return selectedIds;
 }
 
@@ -417,13 +461,32 @@ async function fillForm() {
   updateButtonStates();
   updateStatusMessage("Filling form with selected profiles...");
 
+  // Initialize progress bar
+  const progressBar = document.getElementById('progressBar');
+  const progressLabel = document.getElementById('progressLabel');
+  const elapsedTimeSpan = document.getElementById('elapsedTime');
+
+  if (progressBar) {
+    progressBar.style.opacity = '1';
+    progressBar.removeAttribute('disabled');
+    progressBar.value = 0;
+  }
+  if (progressLabel) {
+    progressLabel.style.color = 'black';
+  }
+  if (elapsedTimeSpan) {
+    elapsedTimeSpan.style.display = 'inline';
+    elapsedTimeSpan.textContent = '(0.0s)';
+  }
+  startTimer();
+
   try {
     const data = await browser.storage.local.get('profiles');
     const profiles = data.profiles || {};
-    
+
     // Send raw profile text directly (no parsing needed)
     let profileTexts = [];
-    
+
     selectedIds.forEach(id => {
       if (profiles[id] && profiles[id].data) {
         profileTexts.push({
@@ -432,7 +495,7 @@ async function fillForm() {
         });
       }
     });
-    
+
     // Log the raw profile texts being used
     console.log('=== RAW PROFILE TEXTS FOR FORM FILLING ===');
     profileTexts.forEach((profile, index) => {
@@ -445,7 +508,7 @@ async function fillForm() {
 
     // Capture the custom prompt
     const customPrompt = document.getElementById('userPrompt').value.trim();
-    
+
     // Send both profiles AND custom prompt
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]) {
@@ -467,7 +530,7 @@ function stopFilling() {
   isFilling = false;
   updateButtonStates();
   updateStatusMessage("Form filling stopped.");
-  
+
   // Send stop message to content script
   browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
     if (tabs[0]) {
@@ -476,10 +539,31 @@ function stopFilling() {
   });
 }
 
+function startTimer() {
+  stopTimer(); // Clear any existing
+  startTime = Date.now();
+  const elapsedTimeSpan = document.getElementById('elapsedTime');
+
+  timerInterval = setInterval(() => {
+    if (!startTime) return;
+    const elapsed = (Date.now() - startTime) / 1000;
+    if (elapsedTimeSpan) {
+      elapsedTimeSpan.textContent = `(${elapsed.toFixed(1)}s)`;
+    }
+  }, 100);
+}
+
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+}
+
 function updateButtonStates() {
   const fillButton = document.getElementById('fillForm');
   const stopButton = document.getElementById('stopFilling');
-  
+
   if (isFilling) {
     fillButton.disabled = true;
     stopButton.disabled = false;
@@ -500,17 +584,17 @@ function addNewProfile() {
   const newProfileId = generateUUID();
   const newProfileName = prompt('Enter profile name:');
   if (!newProfileName) return;
-  
+
   browser.storage.local.get('profiles').then(data => {
     let profiles = data.profiles || {};
     profiles[newProfileId] = {
       name: newProfileName,
       data: EMPTY_PROFILE_TEXT
     };
-    
-    browser.storage.local.set({ 
-      profiles, 
-      lastLoadedProfileId: newProfileId 
+
+    browser.storage.local.set({
+      profiles,
+      lastLoadedProfileId: newProfileId
     }).then(() => {
       refreshProfileList();
       loadProfileIntoForm(newProfileId);
@@ -524,24 +608,24 @@ function loadProfileIntoForm(profileId) {
     console.log('No profileId provided to loadProfileIntoForm');
     return;
   }
-  
+
   console.log('Loading profile:', profileId);
   currentProfileId = profileId;
-  
+
   browser.storage.local.get('profiles').then(data => {
     const profiles = data.profiles || {};
     const profile = profiles[profileId];
-    
+
     console.log('All profiles in storage:', profiles);
     console.log('Profile data for', profileId, ':', profile);
-    
+
     if (profile) {
       const profileNameInput = document.getElementById('profileName');
       const profileDataInput = document.getElementById('profileData');
-      
+
       console.log('Setting profile name to:', profile.name);
       console.log('Setting profile data to:', profile.data);
-      
+
       if (profileNameInput && profileDataInput) {
         profileNameInput.value = profile.name || '';
         profileDataInput.value = profile.data || EMPTY_PROFILE_TEXT;
@@ -588,20 +672,20 @@ function removeSelectedProfile() {
     updateStatusMessage("No profiles selected to remove!");
     return;
   }
-  
+
   const confirmRemove = confirm(`Remove ${selectedIds.length} selected profile(s)?`);
   if (!confirmRemove) return;
-  
+
   browser.storage.local.get('profiles').then(data => {
     let profiles = data.profiles || {};
     selectedIds.forEach(id => {
       delete profiles[id];
     });
-    
+
     browser.storage.local.set({ profiles }).then(() => {
       refreshProfileList();
       updateStatusMessage(`${selectedIds.length} profile(s) removed`);
-      
+
       // Clear form if current profile was removed
       if (selectedIds.includes(currentProfileId)) {
         document.getElementById('profileName').value = '';
@@ -616,12 +700,12 @@ function addProfileFromTxt() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.txt';
-  input.onchange = function(e) {
+  input.onchange = function (e) {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = function (e) {
       const text = e.target.result;
       importSingleProfileFromText(text, file);
     };
@@ -636,11 +720,11 @@ function importSingleProfileFromText(text, file = null) {
     updateStatusMessage("Invalid profile file format");
     return;
   }
-  
+
   // Check if it starts with === Profile Name ===
   const firstLine = lines[0].trim();
   let profileName, profileData;
-  
+
   if (firstLine.startsWith('===') && firstLine.endsWith('===')) {
     profileName = firstLine.slice(3, -3).trim();
     profileData = lines.slice(1).join('\n').trim();
@@ -651,12 +735,12 @@ function importSingleProfileFromText(text, file = null) {
     if (!profileName) return;
     profileData = text.trim();
   }
-  
+
   if (!profileName || !profileData) {
     updateStatusMessage("Profile must have both name and data");
     return;
   }
-  
+
   browser.storage.local.get('profiles').then(data => {
     let profiles = data.profiles || {};
     const newProfileId = generateUUID();
@@ -664,7 +748,7 @@ function importSingleProfileFromText(text, file = null) {
       name: profileName,
       data: profileData
     };
-    
+
     browser.storage.local.set({ profiles }).then(() => {
       refreshProfileList();
       loadProfileIntoForm(newProfileId);
@@ -678,23 +762,23 @@ function backupAllProfilesToTxt() {
     const profiles = data.profiles || {};
     const lastLoadedProfile = data.lastLoadedProfile;
     const selectedProfileIds = data.selectedProfileIds || [];
-    
+
     let backupText = '# FormFill Extension Backup\n';
     backupText += '# Generated on: ' + new Date().toISOString() + '\n';
     backupText += '# Number of profiles: ' + Object.keys(profiles).length + '\n\n';
-    
+
     // Add metadata
     backupText += '=== METADATA ===\n';
     backupText += 'lastLoadedProfile: ' + (lastLoadedProfile || '') + '\n';
     backupText += 'selectedProfileIds: ' + JSON.stringify(selectedProfileIds) + '\n\n';
-    
+
     // Add all profiles with their original UUIDs
     Object.entries(profiles).forEach(([profileId, profile]) => {
       backupText += `=== PROFILE:${profileId} ===\n`;
       backupText += `name: ${profile.name}\n`;
       backupText += profile.data + '\n\n';
     });
-    
+
     const blob = new Blob([backupText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -702,7 +786,7 @@ function backupAllProfilesToTxt() {
     a.download = 'formfill_complete_backup.txt';
     a.click();
     URL.revokeObjectURL(url);
-    
+
     updateStatusMessage("Complete backup downloaded with all profiles");
   });
 }
@@ -713,11 +797,11 @@ function backupProfileToTxt() {
     updateStatusMessage("No profiles selected to backup!");
     return;
   }
-  
+
   browser.storage.local.get('profiles').then(data => {
     const profiles = data.profiles || {};
     let backupText = '';
-    
+
     selectedIds.forEach(id => {
       const profile = profiles[id];
       if (profile) {
@@ -725,7 +809,7 @@ function backupProfileToTxt() {
         backupText += profile.data + '\n\n';
       }
     });
-    
+
     const blob = new Blob([backupText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -733,7 +817,7 @@ function backupProfileToTxt() {
     a.download = 'formfill_selected_profiles_backup.txt';
     a.click();
     URL.revokeObjectURL(url);
-    
+
     updateStatusMessage("Selected profiles backup downloaded");
   });
 }
@@ -742,12 +826,12 @@ function loadCompleteBackupFromTxt() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.txt';
-  input.onchange = function(e) {
+  input.onchange = function (e) {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = function (e) {
       const text = e.target.result;
       if (text.startsWith('# FormFill Extension Backup')) {
         restoreCompleteBackup(text);
@@ -765,12 +849,12 @@ function loadProfileFromTxt() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.txt';
-  input.onchange = function(e) {
+  input.onchange = function (e) {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = function (e) {
       const text = e.target.result;
       importProfilesFromText(text);
     };
@@ -787,14 +871,14 @@ function restoreCompleteBackup(text) {
   let currentProfileData = '';
   let inMetadata = false;
   let inProfile = false;
-  
+
   lines.forEach(line => {
     if (line.startsWith('=== METADATA ===')) {
       inMetadata = true;
       inProfile = false;
       return;
     }
-    
+
     if (line.startsWith('=== PROFILE:')) {
       // Save previous profile if any
       if (currentProfileId && currentProfileData) {
@@ -803,7 +887,7 @@ function restoreCompleteBackup(text) {
           data: currentProfileData.split('\n').slice(1).join('\n').trim()
         };
       }
-      
+
       // Start new profile
       const profileIdMatch = line.match(/=== PROFILE:(.+) ===/);
       if (profileIdMatch) {
@@ -814,7 +898,7 @@ function restoreCompleteBackup(text) {
       }
       return;
     }
-    
+
     if (inMetadata) {
       if (line.startsWith('lastLoadedProfile:')) {
         metadata.lastLoadedProfile = line.split(': ')[1];
@@ -829,7 +913,7 @@ function restoreCompleteBackup(text) {
       currentProfileData += line + '\n';
     }
   });
-  
+
   // Save the last profile
   if (currentProfileId && currentProfileData) {
     profiles[currentProfileId] = {
@@ -837,7 +921,7 @@ function restoreCompleteBackup(text) {
       data: currentProfileData.split('\n').slice(1).join('\n').trim()
     };
   }
-  
+
   // Restore everything
   browser.storage.local.set({
     profiles: profiles,
@@ -852,16 +936,16 @@ function restoreCompleteBackup(text) {
 function importProfilesFromText(text) {
   const sections = text.split('===').filter(section => section.trim());
   let importedCount = 0;
-  
+
   browser.storage.local.get('profiles').then(data => {
     let profiles = data.profiles || {};
-    
+
     sections.forEach(section => {
       const lines = section.trim().split('\n');
       if (lines.length > 0) {
         const profileName = lines[0].trim();
         const profileData = lines.slice(1).join('\n').trim();
-        
+
         if (profileName && profileData) {
           const newProfileId = generateUUID();
           profiles[newProfileId] = {
@@ -872,7 +956,7 @@ function importProfilesFromText(text) {
         }
       }
     });
-    
+
     browser.storage.local.set({ profiles }).then(() => {
       refreshProfileList();
       updateStatusMessage(`${importedCount} profile(s) imported`);

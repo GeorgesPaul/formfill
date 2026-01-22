@@ -1,16 +1,22 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Smart Form Filler</title>
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <h2>LLM Form Filler by Georges Paul</h2>
   <label id="userPromptLabel" for="userPrompt">Custom Prompt:</label>
-  <textarea id="userPrompt" placeholder="Instructions for the AI, for example: Bob is the sender of the parcel and Sandra is the recipient."></textarea>
+  <textarea id="userPrompt"
+    placeholder="Instructions for the AI, for example: Bob is the sender of the parcel and Sandra is the recipient."></textarea>
   <hr>
+  <label id="progressLabel" for="progressBar" style="color: gray;">Filling Progress <span id="elapsedTime"
+      style="display: none;">(0s)</span>:</label>
+  <progress id="progressBar" value="0" max="100" style="width: 100%; opacity: 0.5;" disabled></progress>
   <button id="fillForm">Fill Form</button>
   <button id="stopFilling" disabled>Stop Filling</button>
 

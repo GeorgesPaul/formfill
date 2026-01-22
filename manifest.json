@@ -28,25 +28,34 @@
     "default_panel": "popup.html"
   },
   "background": {
-    "scripts": ["apiUtils.js", "background.js"], 
+    "scripts": [
+      "apiUtils.js",
+      "background.js"
+    ],
     "persistent": true
   },
   "web_accessible_resources": [
     "apiUtils.js",
     "llmConfig.html",
-    "llmConfig.js", 
+    "llmConfig.js",
     "popup.js",
     "donation/donation.html",
     "styles.css"
   ],
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "<all_urls>"
+      ],
       "js": [
         "apiUtils.js",
+        "utils.js",
+        "domUtils.js",
+        "llmClient.js",
+        "formFiller.js",
         "content.js"
       ],
-      "run_at": "document_idle", 
+      "run_at": "document_idle",
       "all_frames": true
     }
   ],
