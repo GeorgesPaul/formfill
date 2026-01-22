@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.11",
+  "version": "1.12",
   "description": "Intelligently fills forms based on user profiles",
   "permissions": [
     "activeTab",
@@ -39,7 +39,6 @@
     "llmConfig.html",
     "llmConfig.js",
     "popup.js",
-    "donation/donation.html",
     "styles.css"
   ],
   "content_scripts": [
