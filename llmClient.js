@@ -22,10 +22,10 @@ function getDefaultLlmConfig() {
 }
 
 // LLM API interaction functions
-async function promptLLM(prompt) {
+async function promptLLM(prompt, staticContext = null) {
     const config = await getLlmConfig();
     console.log("Using LLM model: " + config.model);
-    const requestBody = createRequestBody(config, prompt);
+    const requestBody = createRequestBody(config, prompt, staticContext);
     const requestOptions = createRequestOptions(config, requestBody);
 
     window.abortController = new AbortController();
@@ -46,17 +46,43 @@ async function promptLLM(prompt) {
     }
 }
 
-function createRequestBody(config, prompt) {
+function createRequestBody(config, prompt, staticContext = null) {
     if (config.apiUrl.includes('openrouter.ai')) {
+        let messages = [];
+
+        if (staticContext) {
+            // Use Anthropic-style prompt caching if staticContext is provided
+            messages.push({
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: staticContext,
+                        cache_control: { type: "ephemeral" }
+                    },
+                    {
+                        type: "text",
+                        text: prompt
+                    }
+                ]
+            });
+        } else {
+            // Standard format
+            messages.push({ role: "user", content: prompt });
+        }
+
         return {
             model: config.model,
-            messages: [{ role: "user", content: prompt }],
+            messages: messages,
             stream: false
         };
     } else {
+        // Legacy/Ollama format (simple concatenation if staticContext exists)
+        const fullPrompt = staticContext ? `${staticContext}\n\n${prompt}` : prompt;
+
         return {
             model: config.model,
-            prompt: prompt,
+            prompt: fullPrompt,
             stream: false,
             options: {
                 seed: 123,

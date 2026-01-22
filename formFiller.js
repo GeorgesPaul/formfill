@@ -139,11 +139,13 @@ async function fillForm(profiles, customPrompt = '') {
 }
 
 async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = '') {
-    const prompt = generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt);
+    const { staticPart, dynamicPart } = generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt);
 
-    // Log the final prompt being sent to LLM
-    console.log('=== FINAL PROMPT SENT TO LLM ===');
-    console.log(prompt);
+    // Log the prompt components
+    console.log('=== STATIC PROMPT PART (Cacheable) ===');
+    console.log(staticPart);
+    console.log('=== DYNAMIC PROMPT PART ===');
+    console.log(dynamicPart);
     console.log('=================================');
 
     let llmContentString = '';
@@ -151,8 +153,8 @@ async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = 
     try {
         if (window.stopFilling) throw new Error("Form filling stopped by user.");
 
-        // promptLLM now returns the clean, stringified JSON content from the LLM.
-        llmContentString = await promptLLM(prompt);
+        // promptLLM now takes (dynamicPrompt, staticPrompt) to enable caching
+        llmContentString = await promptLLM(dynamicPart, staticPart);
 
         if (window.stopFilling) throw new Error("Form filling stopped by user.");
 
@@ -197,20 +199,23 @@ function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPro
         userDataString = profileData.data || profileData; // Fallback for single profile
     }
 
-    return `You are an AI assistant specialized in filling out web forms. 
-  Given the following form field information and available user profile data, determine the most appropriate value to fill into the form fields. 
+    const staticPart = `You are an AI assistant specialized in filling out web forms. 
+  Given the available user profile data and the following form field information, determine the most appropriate value to fill into the form fields. 
   The user profile data is provided as raw text, and you need to extract the most relevant information from it.
 
+  User Profile Data:
+  ${userDataString}`;
+
+    const dynamicPart = `
   Form Fields Info:
   ${formFieldsString}
-
-  User Profile Data:
-  ${userDataString}
 
   Your output should be a JSON object where keys are the 'id' or 'name' of the form fields and values are the extracted data. 
   Do not include any other text or formatting. If no suitable value can be determined for a field, return an empty string for that field.
   ${customPrompt ? `\nAdditional instructions from user:\n${customPrompt}` : ''}
   `;
+
+    return { staticPart, dynamicPart };
 }
 
 

@@ -3,7 +3,8 @@ Performance note: Traversing * for shadow hosts can be slow on very large pages.
 */
 function getAllFormElements(root = document) {
     const elements = [];
-    const selectors = 'input:not([type="hidden"]), select, textarea';  // Matches your original selectors
+    // Broadened selectors to include semantic roles and contenteditable
+    const selectors = 'input:not([type="hidden"]), select, textarea, [contenteditable="true"], [role="textbox"], [role="combobox"], [role="listbox"]';
 
     // Collect from the current root
     if (root.querySelectorAll) {
@@ -30,12 +31,17 @@ function getAllFormElements(root = document) {
 function getFormFieldInfo(input) {
     const info = getBasicFieldInfo(input);
     info.label = getAssociatedLabel(input);
-    info.nearbyText = getNearbyText(input);
+    info.nearbyText = getNearbyText(input); // Now internally truncated
     info.attributes = getElementAttributes(input);
     // Remove the iframeInfo property
 
     if (input.tagName.toLowerCase() === 'select') {
         info.options = Array.from(input.options).map(option => option.text);
+    }
+
+    // For contenteditable, adding a note
+    if (input.isContentEditable) {
+        info.type = 'contenteditable';
     }
 
     return { element: input, info: info };
@@ -46,20 +52,31 @@ function getBasicFieldInfo(input) {
         name: input.name,
         id: input.id,
         placeholder: input.placeholder,
-        type: input.type,
-        required: input.required,
+        type: input.type || (input.isContentEditable ? 'contenteditable' : input.getAttribute('role')),
+        required: input.required || input.getAttribute('aria-required') === 'true',
         autocomplete: input.autocomplete,
         classes: input.className,
-        value: input.value,
+        value: input.value || input.textContent, // Handle contenteditable
         parentElement: {
-            tagName: input.parentElement.tagName,
-            classes: input.parentElement.className
+            tagName: input.parentElement ? input.parentElement.tagName : 'BODY',
+            classes: input.parentElement ? input.parentElement.className : ''
         }
     };
 }
 
 function getAssociatedLabel(input) {
     let label = document.querySelector(`label[for="${input.id}"]`);
+
+    // Try aria-labelledby
+    if (!label && input.getAttribute('aria-labelledby')) {
+        const labelledBy = document.getElementById(input.getAttribute('aria-labelledby'));
+        if (labelledBy) return labelledBy.textContent.trim();
+    }
+
+    // Try aria-label
+    if (!label && input.getAttribute('aria-label')) {
+        return input.getAttribute('aria-label');
+    }
 
     if (!label) {
         let element = input;
@@ -77,7 +94,7 @@ function getAssociatedLabel(input) {
         }
     }
 
-    return label ? label.textContent.trim() : null;
+    return label ? (label.textContent ? label.textContent.trim() : label) : null;
 }
 
 function getNearbyText(element, maxDistance = 100) {
@@ -85,24 +102,38 @@ function getNearbyText(element, maxDistance = 100) {
     let currentNode = element;
     let distance = 0;
 
+    // Helper to add text if not too long
+    const addText = (t) => {
+        if (text.length + t.length > 200) return false; // Hard truncate limit
+        text += t + ' ';
+        return true;
+    };
+
     while (currentNode && distance < maxDistance) {
         if (currentNode.nodeType === Node.TEXT_NODE) {
-            text += currentNode.textContent.trim() + ' ';
+            if (!addText(currentNode.textContent.trim())) break;
         } else if (currentNode.nodeType === Node.ELEMENT_NODE && currentNode.tagName.toLowerCase() === 'label') {
-            text += currentNode.textContent.trim() + ' ';
+            if (!addText(currentNode.textContent.trim())) break;
         }
 
         currentNode = currentNode.previousSibling || currentNode.parentNode;
         distance++;
     }
 
-    return text.trim();
+    return text.trim().substring(0, 200); // Ensure final limit
 }
 
 function getElementAttributes(element) {
     const attributes = {};
+    const whitelist = [
+        'id', 'name', 'type', 'placeholder', 'required', 'pattern', 'min', 'max', 'step',
+        'aria-label', 'aria-description', 'aria-required', 'role', 'title', 'class'
+    ];
+
     for (let attr of element.attributes) {
-        attributes[attr.name] = attr.value;
+        if (whitelist.includes(attr.name) || attr.name.startsWith('aria-')) {
+            attributes[attr.name] = attr.value;
+        }
     }
     return attributes;
 }
@@ -113,7 +144,8 @@ function findIframesWithForms() {
     for (const iframe of iframes) {
         try {
             const iframeDocument = iframe.contentDocument || iframe.contentWindow.document;
-            if (iframeDocument.querySelector('input, select, textarea')) {
+            // Relaxed check for iframes too
+            if (getAllFormElements(iframeDocument).length > 0) {
                 iframesWithForms.push(iframeDocument);
             }
         } catch (e) {
@@ -125,7 +157,9 @@ function findIframesWithForms() {
 
 // Helper function to check if element already has the correct value
 function elementHasCorrectValue(element, expectedValue) {
-    const currentValue = element.value || '';
+    let currentValue = element.value || '';
+    if (element.isContentEditable) currentValue = element.textContent;
+
     const normalizedExpected = expectedValue.toString().trim();
     const normalizedCurrent = currentValue.toString().trim();
 
@@ -158,12 +192,23 @@ function getVisibleFormElements(documents) {
             const style = win.getComputedStyle(el);
             const rect = el.getBoundingClientRect();  // Note: rect is relative to viewport; for iframes, adjust if needed by adding iframe offset
 
-            return style.display !== 'none' &&
-                style.visibility !== 'hidden' &&
-                style.opacity !== '0' &&
-                rect.width > 0 && rect.height > 0 &&
-                rect.bottom > 0 &&
-                rect.right > 0;
+            // Relaxed visibility checks
+            // We allow opacity 0 if it's an input (some file inputs or stylized inputs do this)
+            // We allow small size if it's likely a custom control
+
+            const isHidden = style.display === 'none' || style.visibility === 'hidden';
+            // Exception: If it has opacity 0 but is an input, it might be a stylized overlay. 
+            // Better to rely on display/visibility checks primarily.
+
+            // However, truly hidden elements (display:none) are usually not interactable.
+            // But we must catch elements that are technically visible but maybe transparent or clipped.
+
+            if (isHidden) return false;
+
+            // Size check: Relaxed to allow smaller hit targets (e.g. custom checkboxes)
+            const hasSize = (rect.width > 0 && rect.height > 0) || (el.offsetWidth > 0 && el.offsetHeight > 0);
+
+            return hasSize;
         });
 
         allElements = allElements.concat(filtered);
