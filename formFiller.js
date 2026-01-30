@@ -1,9 +1,20 @@
 let currentProfile = null;
 
 async function fillForm(profiles, customPrompt = '', sessionId = null) {
-    window.stopFilling = false;
-    window.abortController = null;
+    // Abort any in-flight LLM request from a previous fill
+    if (window.abortController) {
+        window.abortController.abort();
+        window.abortController = null;
+    }
+
+    // Take ownership of the fill session - automatically invalidates any concurrent fill
+    window.currentFillSessionId = sessionId;
     currentProfile = profiles;
+
+    // Helper: check if this fill has been cancelled (by user stop OR by a newer fill)
+    function isCancelled() {
+        return window.stopFilling || window.currentFillSessionId !== sessionId;
+    }
 
     // Validate profiles parameter - now expecting array of text objects
     if (!Array.isArray(profiles) || profiles.length === 0) {
@@ -16,8 +27,6 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
         });
         throw new Error(errorMsg);
     }
-
-    browser.runtime.sendMessage({ action: "fillFormStart", sessionId: sessionId });
 
     let filledCount = 0;
     let processed = 0;
@@ -50,7 +59,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
             }
         });
 
-        if (window.stopFilling) throw new Error("Form filling stopped by user.");
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
 
         const documents = findIframesWithForms();
         let formElements = getVisibleFormElements(documents);
@@ -58,20 +67,30 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
         totalFields = formElements.length;
         console.log('found formElements on page (filtered):', formElements);
 
+        // If no form elements found in this frame, skip silently
+        if (totalFields === 0) {
+            console.log("No form elements found in this frame, skipping.");
+            return { status: "success", message: "No form elements found." };
+        }
+
+        // Only register with background AFTER confirming we have elements to fill
+        window.stopFilling = false;
+        browser.runtime.sendMessage({ action: "fillFormStart", sessionId: sessionId });
+
         updateFillProgress(processed, filledCount, totalFields, "Starting to fill form... This will take at least a few seconds.", sessionId);
 
         const formFieldsInfo = formElements.map(getFormFieldInfo);
 
         // Always use Single Prompt Strategy
-        const filledFields = await fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt);
+        const filledFields = await fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt, sessionId);
 
         console.log('Fields to fill:', filledFields);
 
-        if (window.stopFilling) throw new Error("Form filling stopped by user.");
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
 
         for (const { element, info } of formFieldsInfo) {
 
-            if (window.stopFilling) {
+            if (isCancelled()) {
                 throw new Error("Form filling stopped by user.");
             }
 
@@ -151,7 +170,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
     }
 }
 
-async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = '') {
+async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = '', sessionId = null) {
     const { staticPart, dynamicPart } = generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt);
 
     // Log the prompt components
@@ -164,12 +183,12 @@ async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = 
     let llmContentString = '';
 
     try {
-        if (window.stopFilling) throw new Error("Form filling stopped by user.");
+        if (window.stopFilling || window.currentFillSessionId !== sessionId) throw new Error("Form filling stopped by user.");
 
         // promptLLM now takes (dynamicPrompt, staticPrompt) to enable caching
         llmContentString = await promptLLM(dynamicPart, staticPart);
 
-        if (window.stopFilling) throw new Error("Form filling stopped by user.");
+        if (window.stopFilling || window.currentFillSessionId !== sessionId) throw new Error("Form filling stopped by user.");
 
         // Clean it up just in case the LLM wrapped it in markdown.
         const cleanedJsonString = llmContentString.replace(/```json\n|```/g, '').trim();

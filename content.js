@@ -31,6 +31,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "stopFilling") {
     console.log("Stopping form filling...");
     window.stopFilling = true;
+    window.currentFillSessionId = null; // Invalidate session so isCancelled() triggers
     if (window.abortController) {
       window.abortController.abort();
     }

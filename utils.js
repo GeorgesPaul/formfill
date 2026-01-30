@@ -1,6 +1,7 @@
 // Global State
 window.stopFilling = false;
 window.abortController = null;
+window.currentFillSessionId = null;
 
 // Constants
 var response_Timeout_ms = 15000;

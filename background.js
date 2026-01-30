@@ -3,6 +3,7 @@ let formFillStart = null;
 let totalFields = 0;
 let isFilling = false;
 let currentSessionId = null;
+let activeFrames = new Set(); // Track frames that are actively filling
 
 function generateLoadingBar(percentage) {
   const barLength = 20;
@@ -19,30 +20,43 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Enforce session ID check for all messages except the start message (which sets it)
   if (message.action !== "fillFormStart" && message.sessionId && message.sessionId !== currentSessionId) {
-    // Silent drop for stale messages to avoid clogging logs in high-frequency/stress scenarios
-    // console.log(`Ignoring message from stale session: ${message.sessionId} (current: ${currentSessionId})`);
     return;
   }
 
   switch (message.action) {
     case "fillFormStart":
+      if (message.sessionId !== currentSessionId) {
+        // New session - reset all tracking state
+        currentSessionId = message.sessionId;
+        formFillProgress = {};
+        formFillStart = Date.now();
+        totalFields = 0;
+        activeFrames = new Set();
+      }
       isFilling = true;
-      currentSessionId = message.sessionId;
-      formFillProgress = {};
-      formFillStart = Date.now();
-      totalFields = 0;
+      activeFrames.add(sender.frameId);
       computedMessage = "Starting to fill form...\n" + generateLoadingBar(0) + " 0%";
       break;
-    case "fillFormStopped":
+
+    case "fillFormStopped": {
+      activeFrames.delete(sender.frameId);
+      // Update this frame's final state
+      formFillProgress[sender.frameId] = {
+        processed: message.processed || (formFillProgress[sender.frameId] || {}).processed || 0,
+        filled: message.filled || (formFillProgress[sender.frameId] || {}).filled || 0,
+        total: message.total || (formFillProgress[sender.frameId] || {}).total || 0
+      };
+      if (activeFrames.size > 0) return; // Wait for other frames to finish
       isFilling = false;
-      // Invalidate session immediately
       currentSessionId = null;
       const fill_duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-      totalFilled = message.filled;
-      totalProcessed = message.processed || Object.values(formFillProgress).reduce((sum, progress) => sum + progress.processed, 0);
+      totalFilled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
+      totalProcessed = Object.values(formFillProgress).reduce((sum, p) => sum + (p.processed || 0), 0);
       percentage = totalFields > 0 ? totalProcessed / totalFields : 0;
       computedMessage = `Form filling stopped by user.\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%\nFilled ${totalFilled} out of ${totalFields} fields in ${fill_duration} seconds.`;
       break;
+    }
+
     case "fillFormProgress":
       if (!isFilling) return;
       if (!formFillProgress[sender.frameId]) {
@@ -62,15 +76,26 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       computedMessage = `Processing form...\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%`;
       break;
 
-    case "fillFormComplete":
+    case "fillFormComplete": {
+      activeFrames.delete(sender.frameId);
+      // Update this frame's final state
+      formFillProgress[sender.frameId] = {
+        processed: message.total || (formFillProgress[sender.frameId] || {}).processed || 0,
+        filled: message.filled || (formFillProgress[sender.frameId] || {}).filled || 0,
+        total: message.total || (formFillProgress[sender.frameId] || {}).total || 0
+      };
+      if (activeFrames.size > 0) return; // Wait for other frames to finish
       isFilling = false;
       const duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-      totalFilled = message.filled || Object.values(formFillProgress).reduce((sum, progress) => sum + progress.filled, 0);
+      totalFilled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
       percentage = 1;
-      computedMessage = `Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${totalFilled} out of ${message.total || totalFields} fields in ${duration} seconds.`;
+      computedMessage = `Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${totalFilled} out of ${totalFields} fields in ${duration} seconds.`;
       break;
+    }
 
     case "fillFormError":
+      activeFrames.delete(sender.frameId);
+      if (activeFrames.size > 0) return; // Wait for other frames to finish
       isFilling = false;
       computedMessage = `Error filling form: ${message.error || "undefined"}`;
       break;
@@ -81,7 +106,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       action: message.action,
       filled: totalFilled,
       total: totalFields,
-      message: computedMessage || message.message
+      message: computedMessage || message.message,
+      sessionId: currentSessionId
     }).catch(error => {
       console.error("Error sending message to popup:", error);
     });
