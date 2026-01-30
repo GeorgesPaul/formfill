@@ -200,9 +200,15 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
 
   updateProfileSelect(profiles);
 
+  // Load visual processing checkbox state
+  loadVisualProcessingSettings();
+
   // Set up event listeners
   document.getElementById('fillForm').addEventListener('click', fillForm);
   document.getElementById('stopFilling').addEventListener('click', stopFilling);
+  document.getElementById('useVisualProcessing').addEventListener('change', function () {
+    browser.storage.local.set({ useVisualProcessing: this.checked });
+  });
   document.getElementById('profileSelect').addEventListener('change', updateSelectedCount);
   document.getElementById('selectAllProfiles').addEventListener('click', selectAllProfiles);
   document.getElementById('clearAllProfiles').addEventListener('click', clearAllProfiles);
@@ -527,15 +533,36 @@ async function fillForm() {
 
     const sessionId = currentSessionId;
 
-    // Send both profiles AND custom prompt
+    // Check if visual processing is enabled
+    const useVisualProcessing = document.getElementById('useVisualProcessing').checked;
+
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]) {
-      await browser.tabs.sendMessage(tabs[0].id, {
+      const messagePayload = {
         action: "fillForm",
         profiles: profileTexts,
-        customPrompt: customPrompt, // Add this line
+        customPrompt: customPrompt,
         sessionId: sessionId
-      });
+      };
+
+      if (useVisualProcessing) {
+        // Capture screenshot of the visible tab
+        updateStatusMessage("Capturing screenshot...");
+        try {
+          const screenshotDataUrl = await browser.tabs.captureVisibleTab(null, { format: 'png' });
+          console.log('[Popup] Screenshot captured, length:', screenshotDataUrl.length);
+          messagePayload.useVisualProcessing = true;
+          messagePayload.screenshot = screenshotDataUrl;
+        } catch (screenshotError) {
+          console.error('[Popup] Screenshot capture failed:', screenshotError);
+          updateStatusMessage("Screenshot capture failed: " + screenshotError.message);
+          isFilling = false;
+          updateButtonStates();
+          return;
+        }
+      }
+
+      await browser.tabs.sendMessage(tabs[0].id, messagePayload);
     }
   } catch (error) {
     console.error("Error filling form:", error);
@@ -1006,6 +1033,15 @@ function importProfilesFromText(text) {
       refreshProfileList();
       updateStatusMessage(`${importedCount} profile(s) imported`);
     });
+  });
+}
+
+function loadVisualProcessingSettings() {
+  browser.storage.local.get('useVisualProcessing').then(data => {
+    const checkbox = document.getElementById('useVisualProcessing');
+    if (checkbox) {
+      checkbox.checked = !!data.useVisualProcessing;
+    }
   });
 }
 

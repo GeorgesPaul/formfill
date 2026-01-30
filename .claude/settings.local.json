@@ -6,7 +6,11 @@
       "Bash(git push)",
       "Bash(cmd /c create_Firefox_extension_zip.bat)",
       "Bash(where:*)",
-      "Bash(./create_Firefox_extension_zip.bat)"
+      "Bash(./create_Firefox_extension_zip.bat)",
+      "Bash(git checkout:*)",
+      "WebSearch",
+      "WebFetch(domain:replicate.com)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

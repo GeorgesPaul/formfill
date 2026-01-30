@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', initializePage);
 
 function initializePage() {
   loadConfigurations().then(selectActiveConfig);
+  loadReplicateApiKey();
   setupEventListeners();
 }
 
@@ -14,7 +15,21 @@ function setupEventListeners() {
   document.getElementById('deleteConfig').addEventListener('click', deleteSelectedConfig);
   document.getElementById('testApi').addEventListener('click', initiateAPITest);
   document.getElementById('cancelEdit').addEventListener('click', hideConfigForm);
-  document.getElementById('closePersistentMessage').addEventListener('click', hidePersistentMessage);
+  const closePersistentMsg = document.getElementById('closePersistentMessage');
+  if (closePersistentMsg) {
+    closePersistentMsg.addEventListener('click', hidePersistentMessage);
+  }
+
+  // Replicate API key
+  document.getElementById('replicateApiKey').addEventListener('input', function () {
+    browser.storage.local.set({ replicateApiKey: this.value });
+  });
+  document.getElementById('testReplicateApi').addEventListener('click', testReplicateApi);
+
+  // OmniParser parameter sliders
+  setupOmniSlider('omniBoxThreshold', 'omniBoxThresholdVal', v => parseFloat(v).toFixed(2));
+  setupOmniSlider('omniIouThreshold', 'omniIouThresholdVal', v => parseFloat(v).toFixed(2));
+  loadOmniParserSettings();
 }
 
 function hideConfigForm() {
@@ -329,6 +344,47 @@ function updateStatusMessage(message) {
 // // Run once when popup opens
 // runPopupTest();
 
+function loadReplicateApiKey() {
+  browser.storage.local.get('replicateApiKey').then(data => {
+    const input = document.getElementById('replicateApiKey');
+    if (input && data.replicateApiKey) {
+      input.value = data.replicateApiKey;
+    }
+  });
+}
+
+async function testReplicateApi() {
+  const apiKey = document.getElementById('replicateApiKey').value.trim();
+  if (!apiKey) {
+    updateStatusMessage("Please enter a Replicate API key first.");
+    return;
+  }
+
+  updateStatusMessage("Testing Replicate API key...");
+
+  try {
+    const response = await fetch('https://api.replicate.com/v1/account', {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + apiKey
+      }
+    });
+
+    if (response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const username = data.username || 'unknown';
+      updateStatusMessage("Replicate API key is valid! Account: " + username);
+    } else if (response.status === 401) {
+      updateStatusMessage("Replicate API test failed: Invalid API key.");
+    } else {
+      const errorData = await response.json().catch(() => ({}));
+      updateStatusMessage("Replicate API test failed: " + (errorData.detail || response.statusText));
+    }
+  } catch (error) {
+    updateStatusMessage("Replicate API test error: " + error.message);
+  }
+}
+
 function selectConfigByName(configName) {
   const rows = document.querySelectorAll('#configTable tbody tr');
   for (let row of rows) {
@@ -337,4 +393,39 @@ function selectConfigByName(configName) {
       break;
     }
   }
+}
+
+function setupOmniSlider(sliderId, displayId, formatFn) {
+  const slider = document.getElementById(sliderId);
+  const display = document.getElementById(displayId);
+  if (!slider || !display) return;
+
+  slider.addEventListener('input', function () {
+    display.textContent = formatFn(this.value);
+    saveOmniParserSettings();
+  });
+}
+
+function saveOmniParserSettings() {
+  const settings = {
+    omniBoxThreshold: parseFloat(document.getElementById('omniBoxThreshold').value),
+    omniIouThreshold: parseFloat(document.getElementById('omniIouThreshold').value)
+  };
+  browser.storage.local.set({ omniParserSettings: settings });
+}
+
+function loadOmniParserSettings() {
+  browser.storage.local.get('omniParserSettings').then(data => {
+    const s = data.omniParserSettings;
+    if (!s) return;
+
+    if (s.omniBoxThreshold != null) {
+      document.getElementById('omniBoxThreshold').value = s.omniBoxThreshold;
+      document.getElementById('omniBoxThresholdVal').textContent = s.omniBoxThreshold.toFixed(2);
+    }
+    if (s.omniIouThreshold != null) {
+      document.getElementById('omniIouThreshold').value = s.omniIouThreshold;
+      document.getElementById('omniIouThresholdVal').textContent = s.omniIouThreshold.toFixed(2);
+    }
+  });
 }

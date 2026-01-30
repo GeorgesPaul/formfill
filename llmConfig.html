@@ -38,6 +38,29 @@
 
     <div id="statusMessage"></div>
 
+    <hr>
+    <div id="replicateApiSection">
+      <label for="replicateApiKey">Replicate API Key:</label>
+      <div id="replicateApiRow">
+        <input type="password" id="replicateApiKey" placeholder="Enter Replicate API key">
+        <button id="testReplicateApi" type="button" class="llm-config-button">Test</button>
+      </div>
+
+      <div id="omniParserSettings">
+        <label class="omni-section-label">OmniParser v2 Settings:</label>
+        <div class="omni-param-row">
+          <label for="omniBoxThreshold">Box threshold:</label>
+          <input type="range" id="omniBoxThreshold" min="0.01" max="1" step="0.01" value="0.50">
+          <span id="omniBoxThresholdVal" class="omni-param-value">0.50</span>
+        </div>
+        <div class="omni-param-row">
+          <label for="omniIouThreshold">IOU threshold:</label>
+          <input type="range" id="omniIouThreshold" min="0.01" max="1" step="0.01" value="0.10">
+          <span id="omniIouThresholdVal" class="omni-param-value">0.10</span>
+        </div>
+      </div>
+    </div>
+
     <div id="logLabel">System messages:</div>
     <div id="logMsg"></div>
     <script src="apiUtils.js"></script>

@@ -19,11 +19,20 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    fillForm(profilesToUse, message.customPrompt, message.sessionId).then(result => {
-      sendResponse(result);
-    }).catch(error => {
-      sendResponse({ status: "error", message: error.toString() });
-    });
+    if (message.useVisualProcessing && message.screenshot) {
+      console.log("Using visual form processing pipeline...");
+      visualFillForm(message.screenshot, profilesToUse, message.customPrompt, message.sessionId).then(result => {
+        sendResponse(result);
+      }).catch(error => {
+        sendResponse({ status: "error", message: error.toString() });
+      });
+    } else {
+      fillForm(profilesToUse, message.customPrompt, message.sessionId).then(result => {
+        sendResponse(result);
+      }).catch(error => {
+        sendResponse({ status: "error", message: error.toString() });
+      });
+    }
 
     return true; // Indicate that we will send a response asynchronously
   }
@@ -34,6 +43,10 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     window.currentFillSessionId = null; // Invalidate session so isCancelled() triggers
     if (window.abortController) {
       window.abortController.abort();
+    }
+    // Clean up visual processor overlay if present
+    if (typeof removeOverlay === 'function') {
+      removeOverlay();
     }
     sendResponse({ status: "stopped" });
     return true;

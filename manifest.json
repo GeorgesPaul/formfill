@@ -52,6 +52,7 @@
         "domUtils.js",
         "llmClient.js",
         "formFiller.js",
+        "visualProcessor.js",
         "content.js"
       ],
       "run_at": "document_idle",
