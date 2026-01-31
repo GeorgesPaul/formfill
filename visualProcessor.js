@@ -72,30 +72,72 @@ async function visualFillForm(screenshotDataUrl, profiles, customPrompt, session
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 
-        // Step 5: Build LLM-ready data and draw overlay
+        // Step 5: Filter to fillable elements only (remove buttons, links, tabs, etc.)
+        const fillableElements = filterToFillableElements(interactiveElements);
+        console.log(`[VisualProcessor] Fillable elements: ${fillableElements.length} (filtered out ${interactiveElements.length - fillableElements.length} non-fillable)`);
+
         browser.runtime.sendMessage({
             action: "fillFormProgress",
             processed: 3, filled: 0, total: 5,
-            message: `Drawing overlay for ${interactiveElements.length} interactive elements...`,
+            message: `Drawing overlay for ${fillableElements.length} fillable elements...`,
             sessionId: sessionId
         });
 
-        // Store the structured element data for later LLM consumption
-        window.visualProcessorData = buildLlmData(interactiveElements);
-        console.log('[VisualProcessor] LLM-ready data:', window.visualProcessorData);
+        // Build the structured element data for the LLM
+        const llmData = buildLlmData(fillableElements);
+        window.visualProcessorData = llmData;
+        console.log('[VisualProcessor] LLM-ready data:', llmData);
 
-        drawBoundingBoxOverlay(interactiveElements, viewportWidth, viewportHeight);
+        drawBoundingBoxOverlay(fillableElements, viewportWidth, viewportHeight);
 
-        // Done
+        if (fillableElements.length === 0) {
+            browser.runtime.sendMessage({
+                action: "fillFormComplete",
+                filled: 0, total: 0,
+                message: "No fillable elements found on page.",
+                sessionId: sessionId
+            });
+            return { status: "success", message: "No fillable elements found." };
+        }
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        // Step 6: Ask the LLM what values to fill
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 4, filled: 0, total: fillableElements.length + 5,
+            message: "Asking LLM for fill values...",
+            sessionId: sessionId
+        });
+
+        const fillInstructions = await visualPromptLlm(llmData, profiles, customPrompt, sessionId);
+        console.log('[VisualProcessor] LLM fill instructions:', fillInstructions);
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        // Step 7: Fill each field using DOM interaction
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 5, filled: 0, total: fillableElements.length + 5,
+            message: "Filling form fields...",
+            sessionId: sessionId
+        });
+
+        const filledCount = await visualFillFields(fillableElements, fillInstructions, sessionId, isCancelled);
+
+        // Clean up overlay and click outside to dismiss dropdowns / trigger validation
+        removeOverlay();
+        simulateMouseClick(document.body, true);
+
         browser.runtime.sendMessage({
             action: "fillFormComplete",
-            filled: interactiveElements.length,
-            total: interactiveElements.length,
-            message: `Visual processing complete. Found ${interactiveElements.length} interactive elements.`,
+            filled: filledCount,
+            total: fillableElements.length,
+            message: `Visual processing complete. Filled ${filledCount} of ${fillableElements.length} fields.`,
             sessionId: sessionId
         });
 
-        return { status: "success", message: `Found ${interactiveElements.length} interactive elements.` };
+        return { status: "success", message: `Filled ${filledCount} of ${fillableElements.length} fields.` };
 
     } catch (error) {
         console.error('[VisualProcessor] Error:', error);
@@ -419,16 +461,21 @@ function probeDomElements(elements, viewportWidth, viewportHeight) {
         const role = domEl.getAttribute('role') || '';
 
         el.domInfo = {
-            tagName: tag,
-            inputType: inputType,
             id: domEl.id || '',
             name: domEl.name || domEl.getAttribute('name') || '',
             placeholder: domEl.placeholder || domEl.getAttribute('placeholder') || '',
-            role: role,
-            ariaLabel: domEl.getAttribute('aria-label') || '',
-            value: domEl.value || '',
-            className: domEl.className || ''
         };
+
+        // Validation constraints
+        if (domEl.required) el.domInfo.required = true;
+        if (domEl.readOnly) el.domInfo.readOnly = true;
+        if (domEl.disabled) el.domInfo.disabled = true;
+        const maxLength = domEl.getAttribute('maxlength');
+        if (maxLength) el.domInfo.maxLength = parseInt(maxLength);
+        const pattern = domEl.getAttribute('pattern');
+        if (pattern) el.domInfo.pattern = pattern;
+        const autocomplete = domEl.getAttribute('autocomplete');
+        if (autocomplete && autocomplete !== 'off') el.domInfo.autocomplete = autocomplete;
 
         // For select elements, capture available options
         if (tag === 'select') {
@@ -442,6 +489,26 @@ function probeDomElements(elements, viewportWidth, viewportHeight) {
         // For checkboxes/radios, capture checked state
         if (inputType === 'checkbox' || inputType === 'radio') {
             el.domInfo.checked = domEl.checked;
+        }
+
+        // For radios, capture all options in the group
+        if (inputType === 'radio' && el.domInfo.name) {
+            const radios = document.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.domInfo.name)}"]`);
+            el.domInfo.groupOptions = Array.from(radios).map(r => ({
+                value: r.value,
+                label: getDomLabel(r) || r.value,
+                checked: r.checked
+            }));
+        }
+
+        // For number/range inputs, capture min/max/step
+        if (inputType === 'number' || inputType === 'range') {
+            const min = domEl.getAttribute('min');
+            const max = domEl.getAttribute('max');
+            const step = domEl.getAttribute('step');
+            if (min) el.domInfo.min = min;
+            if (max) el.domInfo.max = max;
+            if (step) el.domInfo.step = step;
         }
 
         // Infer a human-readable element type
@@ -464,6 +531,34 @@ function probeDomElements(elements, viewportWidth, viewportHeight) {
     console.log('[VisualProcessor] DOM probe results:', elements.map(el =>
         `[${el.index}] ${el.elementType} | label="${el.fieldLabel || ''}" | dom-id="${el.domInfo?.id || ''}" dom-name="${el.domInfo?.name || ''}"`
     ));
+}
+
+function filterToFillableElements(elements) {
+    // Keep only elements that can be filled/changed: text inputs, textareas,
+    // dropdowns, checkboxes, radio buttons, date pickers, etc.
+    // Remove buttons, links, tabs, menu items, and other non-fillable controls.
+    const nonFillableTypes = new Set([
+        'button', 'submit button', 'reset button', 'link',
+        'tab', 'menu item', 'hidden', 'file upload', 'element'
+    ]);
+
+    return elements.filter(el => {
+        // If we have DOM-based type info, use it (most reliable)
+        if (el.elementType && el.elementType !== 'unknown') {
+            if (nonFillableTypes.has(el.elementType)) return false;
+            return true;
+        }
+
+        // Fallback for non-DOM elements (canvas, etc.): use OmniParser label heuristics
+        const label = (el.currentValue || '').toLowerCase();
+        const buttonKeywords = ['submit', 'cancel', 'close', 'back', 'next', 'sign in',
+            'log in', 'login', 'register', 'sign up', 'pay', 'save', 'send', 'ok'];
+        for (const kw of buttonKeywords) {
+            if (label === kw || label === kw + ' ') return false;
+        }
+
+        return true;
+    });
 }
 
 function inferElementType(tag, inputType, role) {
@@ -563,43 +658,246 @@ function getDomLabel(domEl) {
 }
 
 function buildLlmData(elements) {
-    // Build a structured array that the LLM will consume to decide how to fill each field.
-    // Each entry contains everything we know about the element from both OmniParser and the DOM.
+    // Build a structured array for LLM consumption.
+    // Flat, no redundancy, only actionable info.
     return elements.map((el, index) => {
         const entry = {
             index: index,
-            fieldLabel: el.fieldLabel || null,
-            currentValue: el.currentValue || null,
-            elementType: el.elementType || 'unknown',
-            bbox: el.bbox
+            type: el.elementType || 'unknown',
+            label: el.fieldLabel || null,
+            value: el.currentValue || null,
         };
 
+        // Position as percentage of viewport (top-left corner + size) so the LLM
+        // can reason about spatial layout ("field below X", "group of fields on the right")
+        if (el.bbox) {
+            const [x1, y1, x2, y2] = el.bbox;
+            const isNorm = (x1 <= 1 && y1 <= 1 && x2 <= 1 && y2 <= 1);
+            if (isNorm) {
+                entry.position = {
+                    x: Math.round(x1 * 100) + '%',
+                    y: Math.round(y1 * 100) + '%',
+                    width: Math.round((x2 - x1) * 100) + '%',
+                    height: Math.round((y2 - y1) * 100) + '%'
+                };
+            }
+        }
+
         if (el.domInfo) {
-            entry.dom = {
-                tagName: el.domInfo.tagName,
-                inputType: el.domInfo.inputType || undefined,
-                id: el.domInfo.id || undefined,
-                name: el.domInfo.name || undefined,
-                placeholder: el.domInfo.placeholder || undefined,
-                ariaLabel: el.domInfo.ariaLabel || undefined,
-                value: el.domInfo.value || undefined
-            };
-            // Include select options if present
-            if (el.domInfo.options) {
-                entry.dom.options = el.domInfo.options;
-            }
-            // Include checked state if relevant
-            if (el.domInfo.checked !== undefined) {
-                entry.dom.checked = el.domInfo.checked;
-            }
-            // Clean out undefined keys
-            Object.keys(entry.dom).forEach(k => {
-                if (entry.dom[k] === undefined) delete entry.dom[k];
-            });
+            if (el.domInfo.id) entry.id = el.domInfo.id;
+            if (el.domInfo.name) entry.name = el.domInfo.name;
+            if (el.domInfo.placeholder) entry.placeholder = el.domInfo.placeholder;
+            if (el.domInfo.autocomplete) entry.autocomplete = el.domInfo.autocomplete;
+            if (el.domInfo.required) entry.required = true;
+            if (el.domInfo.readOnly) entry.readOnly = true;
+            if (el.domInfo.disabled) entry.disabled = true;
+            if (el.domInfo.maxLength) entry.maxLength = el.domInfo.maxLength;
+            if (el.domInfo.pattern) entry.pattern = el.domInfo.pattern;
+            if (el.domInfo.min) entry.min = el.domInfo.min;
+            if (el.domInfo.max) entry.max = el.domInfo.max;
+            if (el.domInfo.step) entry.step = el.domInfo.step;
+            if (el.domInfo.options) entry.options = el.domInfo.options;
+            if (el.domInfo.checked !== undefined) entry.checked = el.domInfo.checked;
+            if (el.domInfo.groupOptions) entry.groupOptions = el.domInfo.groupOptions;
         }
 
         return entry;
     });
+}
+
+async function visualPromptLlm(llmData, profiles, customPrompt, sessionId) {
+    // Build profile text
+    let profileText = '';
+    if (Array.isArray(profiles)) {
+        profiles.forEach(profile => {
+            profileText += `\n=== ${profile.name} ===\n${profile.data}\n`;
+        });
+    }
+
+    // Build the fields description, including dropdown options inline
+    const fieldsJson = JSON.stringify(llmData, null, 2);
+
+    const staticPart = `You are an AI assistant that fills web forms based on user profile data.
+
+User Profile Data:
+${profileText}`;
+
+    const dynamicPart = `Below are the detected form fields from a screenshot of the page. Each field has an index, type, label, current value, and position on the page. For dropdowns, the available options are listed.
+
+Form Fields:
+${fieldsJson}
+
+Instructions:
+- Return a JSON object mapping field index (as string) to the value to fill.
+- For text inputs: provide the appropriate text value from the user profile.
+- For dropdowns: provide the exact text of the option to select (must match one of the listed options).
+- For checkboxes: provide true or false.
+- For radio buttons: provide the value of the option to select.
+- Skip fields that are disabled, readOnly, or where no suitable value exists (omit them from the output).
+- If a field already has the correct value, omit it from the output.
+- Use field labels, names, ids, placeholders, and autocomplete hints to determine what data goes where.
+- Use position info to understand layout context (fields near each other likely belong to the same section).
+${customPrompt ? `\nAdditional user instructions:\n${customPrompt}` : ''}
+
+Return ONLY a JSON object, no markdown, no explanation. Example:
+{"0": "John", "1": "Doe", "3": "johndoe@email.com", "5": "January"}`;
+
+    console.log('[VisualProcessor] LLM prompt (static):', staticPart);
+    console.log('[VisualProcessor] LLM prompt (dynamic):', dynamicPart);
+
+    let llmResponse = '';
+    try {
+        llmResponse = await promptLLM(dynamicPart, staticPart);
+
+        if (window.stopFilling || window.currentFillSessionId !== sessionId) {
+            throw new Error("Form filling stopped by user.");
+        }
+
+        const cleaned = llmResponse.replace(/```json\n?|```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        return parsed;
+    } catch (error) {
+        if (error.message === "Form filling stopped by user.") throw error;
+
+        if (error instanceof SyntaxError) {
+            console.error('[VisualProcessor] LLM returned invalid JSON:', llmResponse.substring(0, 500));
+            logToUser("LLM returned invalid JSON. First 250 chars: " + llmResponse.substring(0, 250));
+        } else {
+            console.error('[VisualProcessor] LLM error:', error);
+        }
+        return {};
+    }
+}
+
+async function visualFillFields(elements, fillInstructions, sessionId, isCancelled) {
+    let filledCount = 0;
+    const totalFields = elements.length;
+
+    for (let i = 0; i < elements.length; i++) {
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        const el = elements[i];
+        const instruction = fillInstructions[String(i)] ?? fillInstructions[String(el.index)];
+
+        if (instruction === undefined || instruction === null || instruction === '') continue;
+
+        // Find the DOM element at this bounding box center
+        const domEl = getDomElementForVisualElement(el);
+        if (!domEl) {
+            console.warn(`[VisualProcessor] Could not find DOM element for field [${i}]`, el.fieldLabel);
+            continue;
+        }
+
+        const tag = domEl.tagName.toLowerCase();
+        const inputType = (domEl.getAttribute('type') || '').toLowerCase();
+
+        try {
+            if (tag === 'select') {
+                await fillSelectField(domEl, String(instruction));
+            } else if (inputType === 'checkbox') {
+                const shouldCheck = instruction === true || instruction === 'true';
+                if (domEl.checked !== shouldCheck) {
+                    simulateMouseClick(domEl);
+                    await sleep(50);
+                }
+            } else if (inputType === 'radio') {
+                // Find the radio in the group that matches the instruction value
+                const groupName = domEl.getAttribute('name');
+                if (groupName) {
+                    const targetRadio = document.querySelector(
+                        `input[type="radio"][name="${CSS.escape(groupName)}"][value="${CSS.escape(String(instruction))}"]`
+                    );
+                    if (targetRadio && !targetRadio.checked) {
+                        simulateMouseClick(targetRadio);
+                        await sleep(50);
+                    }
+                }
+            } else if (domEl.isContentEditable) {
+                // Contenteditable elements
+                domEl.focus();
+                domEl.textContent = '';
+                document.execCommand('insertText', false, String(instruction));
+                domEl.dispatchEvent(new Event('input', { bubbles: true }));
+                domEl.dispatchEvent(new Event('change', { bubbles: true }));
+            } else {
+                // Text inputs, textareas, etc.
+                await simulateHumanTyping(domEl, String(instruction));
+            }
+
+            domEl.setAttribute('data-filled-by-extension', 'true');
+            filledCount++;
+
+            console.log(`[VisualProcessor] Filled [${i}] "${el.fieldLabel || '(unlabeled)'}" with "${String(instruction).substring(0, 50)}"`);
+        } catch (err) {
+            if (err.message === "Form filling stopped by user.") throw err;
+            console.error(`[VisualProcessor] Error filling field [${i}]:`, err);
+        }
+
+        // Update progress
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 5 + i + 1,
+            filled: filledCount,
+            total: totalFields + 5,
+            message: `Filling fields... ${filledCount} of ${totalFields}`,
+            sessionId: sessionId
+        });
+
+        await sleep(50);
+    }
+
+    return filledCount;
+}
+
+function getDomElementForVisualElement(el) {
+    // Re-probe the DOM element at the bounding box center
+    if (!el.bbox) return null;
+
+    const [bx1, by1, bx2, by2] = el.bbox;
+    const isNormalized = (bx1 <= 1 && by1 <= 1 && bx2 <= 1 && by2 <= 1);
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let cx, cy;
+    if (isNormalized) {
+        cx = ((bx1 + bx2) / 2) * vw;
+        cy = ((by1 + by2) / 2) * vh;
+    } else {
+        cx = (bx1 + bx2) / 2;
+        cy = (by1 + by2) / 2;
+    }
+
+    // Hide overlay so we hit the actual page element
+    const overlay = document.getElementById('visual-processor-overlay');
+    if (overlay) overlay.style.display = 'none';
+
+    let domEl = document.elementFromPoint(cx, cy);
+
+    if (overlay) overlay.style.display = '';
+
+    // If we hit a label or wrapper, try to find the actual input inside
+    if (domEl) {
+        const tag = domEl.tagName.toLowerCase();
+        if (tag !== 'input' && tag !== 'select' && tag !== 'textarea' && !domEl.isContentEditable) {
+            // Check for a form control inside
+            const inner = domEl.querySelector('input, select, textarea, [contenteditable="true"]');
+            if (inner) domEl = inner;
+
+            // Check if it's a label pointing to an input
+            if (tag === 'label') {
+                const forId = domEl.getAttribute('for');
+                if (forId) {
+                    const target = document.getElementById(forId);
+                    if (target) domEl = target;
+                } else {
+                    const innerInput = domEl.querySelector('input, select, textarea');
+                    if (innerInput) domEl = innerInput;
+                }
+            }
+        }
+    }
+
+    return domEl;
 }
 
 function drawBoundingBoxOverlay(interactiveElements, viewportWidth, viewportHeight) {

@@ -427,6 +427,21 @@ footer a:hover {
     font-size: 11px;
     height: 22px;
 }
+.config-help {
+    font-size: 11px;
+    color: #333;
+    margin: 4px 0 6px 0;
+    line-height: 1.4;
+}
+.config-help p {
+    margin: 2px 0;
+}
+.config-help a {
+    color: #000080;
+}
+.config-help code {
+    font-size: 10px;
+}
 #omniParserSettings {
     margin-top: 8px;
     padding-top: 6px;

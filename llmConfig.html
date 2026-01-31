@@ -9,6 +9,13 @@
 <body class="llm-config-body">
     <h2 class="llm-config-h2">LLM API Configuration</h2>
 
+    <div class="config-help">
+      <p>Configure an LLM to power form filling. Use any OpenAI-compatible API, or a local model via Ollama.</p>
+      <p><b>OpenRouter</b> provides access to many models (GPT-4o, Claude, Grok, Llama, etc.) through a single API.
+        Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> and use
+        <code>https://openrouter.ai/api/v1/chat/completions</code> as the API URL.</p>
+    </div>
+
     <table id="configTable">
         <thead>
             <tr>
@@ -40,6 +47,11 @@
 
     <hr>
     <div id="replicateApiSection">
+      <div class="config-help">
+        <p><b>Replicate</b> is used for visual form processing (OmniParser v2 screen analysis).
+          Get a key at <a href="https://replicate.com/account/api-tokens" target="_blank">replicate.com/account/api-tokens</a>.
+          Only needed if "Use visual form processing" is enabled.</p>
+      </div>
       <label for="replicateApiKey">Replicate API Key:</label>
       <div id="replicateApiRow">
         <input type="password" id="replicateApiKey" placeholder="Enter Replicate API key">
