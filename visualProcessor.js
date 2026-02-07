@@ -90,7 +90,10 @@ async function mergedFillForm(screenshotDataUrl, profiles, customPrompt, session
                 const viewportHeight = window.innerHeight;
                 probeDomElements(interactiveElements, viewportWidth, viewportHeight);
                 visualElements = filterToFillableElements(interactiveElements);
-                console.log(`[MergedProcessor] Visual analysis found ${visualElements.length} fillable elements`);
+
+                // Add any dropdowns that OmniParser missed
+                visualElements = addMissedDropdowns(visualElements, viewportWidth, viewportHeight);
+                console.log(`[MergedProcessor] Visual analysis found ${visualElements.length} fillable elements (including dropdown fallback)`);
 
                 // Draw overlay for visual elements
                 drawBoundingBoxOverlay(visualElements, viewportWidth, viewportHeight);
@@ -385,9 +388,17 @@ function getElementKey(element) {
 function buildMergedLlmData(elements) {
     return elements.map((item, index) => {
         // Visual data takes precedence when available (more accurate for what user sees)
-        const visualLabel = item.visualData?.fieldLabel || null;
+        let visualLabel = item.visualData?.fieldLabel || null;
         const visualType = item.visualData?.elementType || null;
-        const domLabel = item.info.label || null;
+        let domLabel = item.info.label || null;
+
+        // Ensure labels are strings (could be objects/arrays in edge cases)
+        if (visualLabel && typeof visualLabel !== 'string') {
+            visualLabel = String(visualLabel);
+        }
+        if (domLabel && typeof domLabel !== 'string') {
+            domLabel = String(domLabel);
+        }
 
         // Determine final label: visual takes precedence, but only if visual element was matched
         const finalLabel = visualLabel || domLabel;
@@ -560,7 +571,10 @@ async function visualFillForm(screenshotDataUrl, profiles, customPrompt, session
 
         // Step 5: Filter to fillable elements only (remove buttons, links, tabs, etc.)
         let fillableElements = filterToFillableElements(interactiveElements);
-        console.log(`[VisualProcessor] Fillable elements: ${fillableElements.length} (filtered out ${interactiveElements.length - fillableElements.length} non-fillable)`);
+
+        // Add any dropdowns that OmniParser missed (common issue - selects look like text)
+        fillableElements = addMissedDropdowns(fillableElements, viewportWidth, viewportHeight);
+        console.log(`[VisualProcessor] Fillable elements: ${fillableElements.length} (filtered out ${interactiveElements.length - fillableElements.length} non-fillable, added dropdown fallback)`);
 
         // --- KeePass credential filling for visual pipeline ---
         let keepassFilledCount = 0;
@@ -1190,6 +1204,100 @@ function filterToFillableElements(elements) {
 
         return true;
     });
+}
+
+function addMissedDropdowns(visualElements, viewportWidth, viewportHeight) {
+    // OmniParser often misses <select> dropdowns because they look like plain text
+    // or closed dropdown buttons. Find any DOM selects not covered by visual elements
+    // and add them to the list.
+
+    // Get all visible <select> elements on the page
+    const allSelects = Array.from(document.querySelectorAll('select')).filter(sel => {
+        // Must be visible
+        const style = window.getComputedStyle(sel);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        // Must be in viewport
+        const rect = sel.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return false;
+        if (rect.bottom < 0 || rect.top > viewportHeight) return false;
+        if (rect.right < 0 || rect.left > viewportWidth) return false;
+        // Skip disabled or already filled
+        if (sel.disabled) return false;
+        if (sel.hasAttribute('data-filled-by-extension') && sel.value) return false;
+        return true;
+    });
+
+    if (allSelects.length === 0) {
+        console.log('[VisualProcessor] No additional dropdowns found on page.');
+        return visualElements;
+    }
+
+    console.log(`[VisualProcessor] Found ${allSelects.length} <select> elements on page, checking for missed ones...`);
+
+    // Build a set of DOM elements already covered by visual analysis
+    const coveredElements = new Set();
+    for (const ve of visualElements) {
+        if (ve.bbox) {
+            const domEl = getDomElementForVisualElement(ve);
+            if (domEl) coveredElements.add(domEl);
+        }
+    }
+
+    let addedCount = 0;
+    for (const sel of allSelects) {
+        if (coveredElements.has(sel)) {
+            console.log(`[VisualProcessor] Select id="${sel.id}" name="${sel.name}" already covered by visual analysis`);
+            continue;
+        }
+
+        // This select was missed by OmniParser - create a synthetic visual element for it
+        const rect = sel.getBoundingClientRect();
+        const normBbox = [
+            rect.left / viewportWidth,
+            rect.top / viewportHeight,
+            rect.right / viewportWidth,
+            rect.bottom / viewportHeight
+        ];
+
+        // Get the label for this select
+        const label = getDomLabel(sel);
+
+        // Get options
+        const options = Array.from(sel.options).map(opt => ({
+            value: opt.value,
+            text: opt.textContent.trim(),
+            selected: opt.selected
+        }));
+
+        const syntheticElement = {
+            index: visualElements.length + addedCount,
+            label: label || sel.name || sel.id || 'Dropdown',
+            type: 'icon',
+            bbox: normBbox,
+            interactivity: true,
+            fieldLabel: label,
+            currentValue: sel.options[sel.selectedIndex]?.text || '',
+            elementType: 'dropdown',
+            domInfo: {
+                id: sel.id || '',
+                name: sel.name || '',
+                required: sel.required,
+                disabled: sel.disabled,
+                options: options
+            },
+            _addedByDropdownFallback: true
+        };
+
+        visualElements.push(syntheticElement);
+        addedCount++;
+        console.log(`[VisualProcessor] Added missed dropdown: id="${sel.id}" name="${sel.name}" label="${label}"`);
+    }
+
+    if (addedCount > 0) {
+        console.log(`[VisualProcessor] Added ${addedCount} dropdowns that OmniParser missed.`);
+    }
+
+    return visualElements;
 }
 
 function inferElementType(tag, inputType, role) {
