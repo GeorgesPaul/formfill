@@ -1,6 +1,492 @@
 // Visual Form Processing Pipeline
 // Captures screenshot → OmniParser v2 → Filter interactive elements → Draw overlay
 
+// Merged pipeline: combines visual (OmniParser) + source (DOM) analysis for maximum coverage
+async function mergedFillForm(screenshotDataUrl, profiles, customPrompt, sessionId) {
+    console.log('[MergedProcessor] Starting merged visual + source analysis...');
+
+    window.currentFillSessionId = sessionId;
+    window.stopFilling = false;
+
+    function isCancelled() {
+        return window.stopFilling || window.currentFillSessionId !== sessionId;
+    }
+
+    let filledCount = 0;
+    let totalFields = 0;
+
+    try {
+        // Notify background that we're starting
+        browser.runtime.sendMessage({ action: "fillFormStart", sessionId: sessionId });
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 0, filled: 0, total: 1,
+            message: "Starting merged visual + source analysis...",
+            sessionId: sessionId
+        });
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        // === Run both analyses in parallel ===
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 0, filled: 0, total: 6,
+            message: "Running visual + source analysis in parallel...",
+            sessionId: sessionId
+        });
+
+        // Source analysis (fast) - get DOM elements directly
+        const documents = findIframesWithForms();
+        let sourceElements = getVisibleFormElements(documents);
+        sourceElements = sourceElements.filter(el => !el.hasAttribute('data-filled-by-extension') || el.value === '');
+
+        // Assign unique IDs to each DOM element for robust deduplication and tracking
+        // This handles the same element appearing multiple times (from iframes or page quirks)
+        sourceElements.forEach((el, i) => {
+            if (!el.dataset.formfillerUid) {
+                el.dataset.formfillerUid = `ff-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 9)}`;
+            }
+        });
+
+        // Deduplicate by unique ID (handles same element appearing multiple times)
+        // NOTE: We do NOT deduplicate by id/name because some forms intentionally have
+        // multiple elements with the same id/name (e.g., test forms, multi-step forms)
+        const seenUids = new Set();
+        sourceElements = sourceElements.filter(el => {
+            const uid = el.dataset.formfillerUid;
+            if (seenUids.has(uid)) {
+                console.log(`[MergedProcessor] Removed duplicate element (same UID): id="${el.id}" name="${el.name}"`);
+                return false;
+            }
+            seenUids.add(uid);
+            return true;
+        });
+
+        console.log(`[MergedProcessor] After dedup: ${sourceElements.length} unique DOM elements`);
+
+        const sourceFieldsInfo = sourceElements.map(getFormFieldInfo);
+        console.log(`[MergedProcessor] Source analysis found ${sourceFieldsInfo.length} elements`);
+
+        // Visual analysis (slow) - OmniParser
+        let visualElements = [];
+        try {
+            const storageData = await browser.storage.local.get(['replicateApiKey', 'omniParserSettings']);
+            const apiKey = storageData.replicateApiKey;
+            if (apiKey) {
+                browser.runtime.sendMessage({
+                    action: "fillFormProgress",
+                    processed: 1, filled: 0, total: 6,
+                    message: "Sending screenshot to OmniParser v2...",
+                    sessionId: sessionId
+                });
+
+                const omniSettings = storageData.omniParserSettings || {};
+                const omniParserResults = await callOmniParser(screenshotDataUrl, apiKey, omniSettings, isCancelled);
+
+                if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+                const interactiveElements = filterInteractiveElements(omniParserResults);
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+                probeDomElements(interactiveElements, viewportWidth, viewportHeight);
+                visualElements = filterToFillableElements(interactiveElements);
+                console.log(`[MergedProcessor] Visual analysis found ${visualElements.length} fillable elements`);
+
+                // Draw overlay for visual elements
+                drawBoundingBoxOverlay(visualElements, viewportWidth, viewportHeight);
+            } else {
+                console.log('[MergedProcessor] No Replicate API key, skipping visual analysis');
+            }
+        } catch (visualErr) {
+            console.warn('[MergedProcessor] Visual analysis failed, continuing with source only:', visualErr.message);
+        }
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 2, filled: 0, total: 6,
+            message: "Merging element data...",
+            sessionId: sessionId
+        });
+
+        // === Merge the two element sets ===
+        // NEW STRATEGY: Use DOM element UIDs for exact matching instead of IoU approximation
+        // 1. For each visual element → probe DOM at center → get actual DOM element → assign UID
+        // 2. For each source element → assign UID
+        // 3. Match by UID (exact match based on actual DOM element identity)
+
+        console.log(`[MergedProcessor] Starting UID-based merge: ${sourceFieldsInfo.length} source elements, ${visualElements.length} visual elements`);
+
+        // Step 1: Assign UIDs to all source elements
+        let uidCounter = 0;
+        const getNextUid = () => `ff-${Date.now()}-${uidCounter++}-${Math.random().toString(36).substr(2, 5)}`;
+
+        for (const fieldObj of sourceFieldsInfo) {
+            if (!fieldObj.element.dataset.formfillerUid) {
+                fieldObj.element.dataset.formfillerUid = getNextUid();
+            }
+        }
+
+        // Step 2: For each visual element, probe DOM at its center to get the actual DOM element
+        // This gives us the REAL element under each visual label, not an IoU approximation
+        const visualToUidAndDom = new Map(); // visual element index → { uid, domEl }
+        for (let i = 0; i < visualElements.length; i++) {
+            const visualEl = visualElements[i];
+            const domEl = getDomElementForVisualElement(visualEl);
+            if (domEl) {
+                if (!domEl.dataset.formfillerUid) {
+                    domEl.dataset.formfillerUid = getNextUid();
+                }
+                visualToUidAndDom.set(i, { uid: domEl.dataset.formfillerUid, domEl });
+                console.log(`[MergedProcessor] Visual [${i}] "${visualEl.fieldLabel || '(unlabeled)'}" → DOM UID=${domEl.dataset.formfillerUid.slice(-10)} id="${domEl.id}" name="${domEl.name}"`);
+            } else {
+                console.log(`[MergedProcessor] Visual [${i}] "${visualEl.fieldLabel || '(unlabeled)'}" → no DOM element found`);
+            }
+        }
+
+        // Step 3: Build merged list - start with all unique source elements (by UID)
+        const mergedElements = [];
+        const uidToMergedIndex = new Map(); // UID → index in mergedElements
+
+        for (const fieldObj of sourceFieldsInfo) {
+            const uid = fieldObj.element.dataset.formfillerUid;
+
+            // Check if already added (dedup by UID = same actual DOM element)
+            if (uidToMergedIndex.has(uid)) {
+                console.log(`[MergedProcessor] Skipping duplicate source (same DOM element): UID=${uid.slice(-10)} id="${fieldObj.info.id}"`);
+                continue;
+            }
+
+            const idx = mergedElements.length;
+            mergedElements.push({
+                element: fieldObj.element,
+                info: fieldObj.info,
+                source: 'dom',
+                visualData: null,
+                uid: uid
+            });
+            uidToMergedIndex.set(uid, idx);
+        }
+
+        console.log(`[MergedProcessor] Unique source elements: ${mergedElements.length}`);
+        console.log('[MergedProcessor] Source elements:', mergedElements.map(m =>
+            `UID:${m.uid.slice(-6)}→id="${m.info.id}" name="${m.info.name}"`
+        ).join(' | '));
+
+        // Step 4: Match visual elements to source elements by UID
+        // This is an EXACT match - visual element's DOM probe found the same element as source
+        for (let vIdx = 0; vIdx < visualElements.length; vIdx++) {
+            const visualEl = visualElements[vIdx];
+            const mapping = visualToUidAndDom.get(vIdx);
+            if (!mapping) continue;
+
+            const { uid, domEl } = mapping;
+
+            if (uidToMergedIndex.has(uid)) {
+                // Found matching source element by UID
+                const mIdx = uidToMergedIndex.get(uid);
+                const merged = mergedElements[mIdx];
+
+                if (!merged.visualData) {
+                    // First visual element to claim this source element
+                    merged.visualData = visualEl;
+                    merged.source = 'both';
+                    console.log(`[MergedProcessor] UID match: visual "${visualEl.fieldLabel || '(unlabeled)'}" → source id="${merged.info.id}" name="${merged.info.name}"`);
+                } else {
+                    // Source element already has visual data - this is a second visual pointing to same DOM
+                    console.log(`[MergedProcessor] Source id="${merged.info.id}" already has visual "${merged.visualData.fieldLabel}", skipping visual "${visualEl.fieldLabel}"`);
+                }
+            } else {
+                // Visual element points to DOM element NOT in source list
+                // This could be an element missed by source analysis - add it
+                if (visualEl.fieldLabel) {
+                    const newIdx = mergedElements.length;
+                    mergedElements.push({
+                        element: domEl,
+                        info: getFormFieldInfo(domEl).info,
+                        source: 'visual',
+                        visualData: visualEl,
+                        uid: uid
+                    });
+                    uidToMergedIndex.set(uid, newIdx);
+                    console.log(`[MergedProcessor] Added visual-only element: "${visualEl.fieldLabel}" id="${domEl.id}" name="${domEl.name}"`);
+                }
+            }
+        }
+
+        totalFields = mergedElements.length;
+        console.log(`[MergedProcessor] Merged total: ${totalFields} unique elements (source: ${sourceFieldsInfo.length}, visual: ${visualElements.length})`);
+
+        if (totalFields === 0) {
+            removeOverlay();
+            browser.runtime.sendMessage({
+                action: "fillFormComplete",
+                filled: 0, total: 0,
+                message: "No fillable elements found on page.",
+                sessionId: sessionId
+            });
+            return { status: "success", message: "No fillable elements found." };
+        }
+
+        // === KeePass credential filling ===
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 3, filled: 0, total: 6,
+            message: "Checking KeePass for credentials...",
+            sessionId: sessionId
+        });
+
+        let keepassFilledCount = 0;
+        try {
+            const keepassStatus = await browser.runtime.sendMessage({ action: "keepass-status" });
+            if (keepassStatus && keepassStatus.connected && keepassStatus.associated) {
+                const keepassResult = await browser.runtime.sendMessage({
+                    action: "keepass-get-logins",
+                    url: window.location.href
+                });
+
+                if (keepassResult.success && keepassResult.entries && keepassResult.entries.length > 0) {
+                    const entry = keepassResult.entries[0];
+                    console.log('[MergedProcessor][KeePass] Found credentials for', entry.name);
+
+                    for (const item of mergedElements) {
+                        if (isPasswordField(item.info) && entry.password) {
+                            await fillField(item.element, entry.password, item.info);
+                            keepassFilledCount++;
+                            item._keepassFilled = true;
+                        } else if (isUsernameField(item.info) && entry.login) {
+                            await fillField(item.element, entry.login, item.info);
+                            keepassFilledCount++;
+                            item._keepassFilled = true;
+                        }
+                    }
+
+                    mergedElements = mergedElements.filter(item => !item._keepassFilled);
+                    filledCount += keepassFilledCount;
+                    console.log(`[MergedProcessor][KeePass] Filled ${keepassFilledCount} credential fields.`);
+                } else {
+                    // No KeePass entries - handle signup vs login
+                    if (isSignupPage()) {
+                        mergedElements = mergedElements.filter(item => !isPasswordField(item.info));
+                    } else {
+                        mergedElements = mergedElements.filter(item => !isPasswordField(item.info) && !isUsernameField(item.info));
+                    }
+                }
+            }
+        } catch (keepassErr) {
+            console.log('[MergedProcessor][KeePass] Not available:', keepassErr ? keepassErr.message : 'unknown');
+        }
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        if (mergedElements.length === 0) {
+            removeOverlay();
+            simulateMouseClick(document.body, true);
+            browser.runtime.sendMessage({
+                action: "fillFormComplete",
+                filled: filledCount, total: totalFields,
+                message: `Filled ${filledCount} of ${totalFields} fields (credentials from KeePass).`,
+                sessionId: sessionId
+            });
+            return { status: "success", message: `Filled ${filledCount} of ${totalFields} fields.` };
+        }
+
+        // === Build merged LLM prompt ===
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 4, filled: filledCount, total: 6,
+            message: "Asking LLM for fill values...",
+            sessionId: sessionId
+        });
+
+        const llmData = buildMergedLlmData(mergedElements);
+        console.log('[MergedProcessor] LLM-ready data:', llmData);
+
+        const fillInstructions = await mergedPromptLlm(llmData, profiles, customPrompt, sessionId);
+        console.log('[MergedProcessor] LLM fill instructions:', fillInstructions);
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        // === Fill fields ===
+        browser.runtime.sendMessage({
+            action: "fillFormProgress",
+            processed: 5, filled: filledCount, total: 6,
+            message: "Filling form fields...",
+            sessionId: sessionId
+        });
+
+        for (let i = 0; i < mergedElements.length; i++) {
+            if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+            const item = mergedElements[i];
+            const instruction = fillInstructions[item.info.id] ||
+                                fillInstructions[item.info.name] ||
+                                fillInstructions[String(i)];
+
+            if (instruction !== undefined && instruction !== null && instruction !== '') {
+                await fillField(item.element, instruction, item.info);
+                filledCount++;
+            }
+        }
+
+        // Clean up
+        removeOverlay();
+        simulateMouseClick(document.body, true);
+
+        browser.runtime.sendMessage({
+            action: "fillFormComplete",
+            filled: filledCount, total: totalFields,
+            message: `Merged processing complete. Filled ${filledCount} of ${totalFields} fields.`,
+            sessionId: sessionId
+        });
+
+        return { status: "success", message: `Filled ${filledCount} of ${totalFields} fields.` };
+
+    } catch (error) {
+        console.error('[MergedProcessor] Error:', error);
+        removeOverlay();
+
+        if (error.message === "Form filling stopped by user.") {
+            browser.runtime.sendMessage({
+                action: "fillFormStopped",
+                processed: 0, filled: filledCount, total: totalFields,
+                message: "Form filling stopped by user.",
+                sessionId: sessionId
+            });
+            window.stopFilling = false;
+        } else {
+            browser.runtime.sendMessage({
+                action: "fillFormError",
+                error: error.toString(),
+                sessionId: sessionId
+            });
+        }
+
+        return { status: "error", message: error.toString() };
+    }
+}
+
+function getElementKey(element) {
+    // Create a unique key for an element to detect duplicates
+    if (element.id) return `id:${element.id}`;
+    if (element.name) return `name:${element.name}`;
+    // Fallback: use position in DOM
+    const path = [];
+    let el = element;
+    while (el && el !== document.body) {
+        const idx = Array.from(el.parentNode?.children || []).indexOf(el);
+        path.unshift(`${el.tagName}[${idx}]`);
+        el = el.parentNode;
+    }
+    return `path:${path.join('>')}`;
+}
+
+function buildMergedLlmData(elements) {
+    return elements.map((item, index) => {
+        // Visual data takes precedence when available (more accurate for what user sees)
+        const visualLabel = item.visualData?.fieldLabel || null;
+        const visualType = item.visualData?.elementType || null;
+        const domLabel = item.info.label || null;
+
+        // Determine final label: visual takes precedence, but only if visual element was matched
+        const finalLabel = visualLabel || domLabel;
+
+        // Debug: detailed logging of label resolution
+        const fieldId = item.info.id || item.info.name || `[${index}]`;
+        if (item.visualData) {
+            if (visualLabel && domLabel && visualLabel.toLowerCase() !== domLabel.toLowerCase()) {
+                console.log(`[MergedProcessor] Field ${fieldId}: Visual label "${visualLabel}" overrides DOM label "${domLabel}"`);
+            } else if (visualLabel) {
+                console.log(`[MergedProcessor] Field ${fieldId}: Using visual label "${visualLabel}"`);
+            } else {
+                console.log(`[MergedProcessor] Field ${fieldId}: Visual matched but no visual label, using DOM label "${domLabel || '(none)'}"`);
+            }
+        } else {
+            console.log(`[MergedProcessor] Field ${fieldId}: No visual match, using DOM label "${domLabel || '(none)'}"`);
+        }
+
+        const entry = {
+            index: index,
+            id: item.info.id || null,
+            name: item.info.name || null,
+            // Prefer visual type if available, fall back to DOM type
+            type: visualType || item.info.type || 'text',
+            // Prefer visual label if available, fall back to DOM label
+            label: finalLabel,
+            placeholder: item.info.placeholder || null,
+            value: item.info.value || null,
+            required: item.info.required || false,
+            autocomplete: item.info.autocomplete || null,
+        };
+
+        // Add options for select elements
+        if (item.info.options) {
+            entry.options = item.info.options;
+        }
+
+        // Log final entry for debugging
+        console.log(`[MergedProcessor] LLM entry ${index}: id="${entry.id}" name="${entry.name}" label="${entry.label}" hasVisualData=${!!item.visualData}`);
+
+        return entry;
+    });
+}
+
+async function mergedPromptLlm(llmData, profiles, customPrompt, sessionId) {
+    // Build profile text
+    let profileText = '';
+    if (Array.isArray(profiles)) {
+        profiles.forEach(profile => {
+            profileText += `\n=== ${profile.name} ===\n${profile.data}\n`;
+        });
+    }
+
+    const fieldsJson = JSON.stringify(llmData, null, 2);
+
+    const staticPart = `You are an AI assistant that fills web forms based on user profile data.
+
+User Profile Data:
+${profileText}`;
+
+    const dynamicPart = `Below are the detected form fields from the page, found using both DOM analysis and visual screen analysis. Each field has an index, id, name, type, label, and other attributes.
+
+Form Fields:
+${fieldsJson}
+
+Instructions:
+- Return a JSON object mapping field identifier (id, name, or index as string) to the value to fill.
+- For text inputs: provide the appropriate text value from the user profile.
+- For dropdowns/selects: provide the exact text of the option to select.
+- For checkboxes: provide true or false.
+- Skip fields where no suitable value exists (omit them from the output).
+- Use field labels, names, ids, placeholders, and autocomplete hints to determine what data goes where.
+${customPrompt ? `\nAdditional user instructions:\n${customPrompt}` : ''}
+
+Return ONLY a JSON object, no markdown, no explanation. Example:
+{"username": "johndoe", "email": "john@example.com", "country": "United States"}`;
+
+    let llmResponse = '';
+    try {
+        llmResponse = await promptLLM(dynamicPart, staticPart);
+
+        if (window.stopFilling || window.currentFillSessionId !== sessionId) {
+            throw new Error("Form filling stopped by user.");
+        }
+
+        const cleaned = llmResponse.replace(/```json\n?|```/g, '').trim();
+        return JSON.parse(cleaned);
+    } catch (error) {
+        if (error.message === "Form filling stopped by user.") throw error;
+
+        if (error instanceof SyntaxError) {
+            console.error('[MergedProcessor] LLM returned invalid JSON:', llmResponse.substring(0, 500));
+        } else {
+            console.error('[MergedProcessor] LLM error:', error);
+        }
+        return {};
+    }
+}
+
 async function visualFillForm(screenshotDataUrl, profiles, customPrompt, sessionId) {
     console.log('[VisualProcessor] Starting visual form processing...');
 
@@ -73,12 +559,85 @@ async function visualFillForm(screenshotDataUrl, profiles, customPrompt, session
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 
         // Step 5: Filter to fillable elements only (remove buttons, links, tabs, etc.)
-        const fillableElements = filterToFillableElements(interactiveElements);
+        let fillableElements = filterToFillableElements(interactiveElements);
         console.log(`[VisualProcessor] Fillable elements: ${fillableElements.length} (filtered out ${interactiveElements.length - fillableElements.length} non-fillable)`);
+
+        // --- KeePass credential filling for visual pipeline ---
+        let keepassFilledCount = 0;
+        try {
+            const keepassStatus = await browser.runtime.sendMessage({ action: "keepass-status" });
+            console.log('[VisualProcessor][KeePass] Status:', keepassStatus);
+            if (keepassStatus && keepassStatus.connected && keepassStatus.associated) {
+                const keepassResult = await browser.runtime.sendMessage({
+                    action: "keepass-get-logins",
+                    url: window.location.href
+                });
+
+                if (keepassResult.success && keepassResult.entries && keepassResult.entries.length > 0) {
+                    const entry = keepassResult.entries[0];
+                    console.log('[VisualProcessor][KeePass] Found credentials for', entry.name);
+
+                    for (const el of fillableElements) {
+                        const isPassword = el.elementType === 'password input' ||
+                            (el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
+                        const isUsername = el.elementType === 'email input' ||
+                            (el.domInfo && (el.domInfo.autocomplete === 'username' || el.domInfo.autocomplete === 'email')) ||
+                            (el.domInfo && /username|user.?name|login|userid|user.?id|email|e.?mail/i.test(
+                                (el.domInfo.name || '') + (el.domInfo.id || '') + (el.domInfo.placeholder || '')));
+
+                        if (isPassword && entry.password) {
+                            const domEl = getDomElementForVisualElement(el);
+                            if (domEl) {
+                                await simulateHumanTyping(domEl, entry.password);
+                                domEl.setAttribute('data-filled-by-extension', 'true');
+                                keepassFilledCount++;
+                                el._keepassFilled = true;
+                            }
+                        } else if (isUsername && entry.login) {
+                            const domEl = getDomElementForVisualElement(el);
+                            if (domEl) {
+                                await simulateHumanTyping(domEl, entry.login);
+                                domEl.setAttribute('data-filled-by-extension', 'true');
+                                keepassFilledCount++;
+                                el._keepassFilled = true;
+                            }
+                        }
+                    }
+
+                    // Remove KeePassXC-filled fields from LLM list
+                    fillableElements = fillableElements.filter(el => !el._keepassFilled);
+                    console.log(`[VisualProcessor][KeePass] Filled ${keepassFilledCount} credential fields. ${fillableElements.length} remain for LLM.`);
+                } else {
+                    // No KeePassXC entries
+                    const isSignup = isVisualSignupPage();
+                    if (isSignup) {
+                        fillableElements = fillableElements.filter(el => {
+                            return el.elementType !== 'password input' &&
+                                !(el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
+                        });
+                        console.log('[VisualProcessor][KeePass] Signup page, no entries. Removed password fields.');
+                    } else {
+                        fillableElements = fillableElements.filter(el => {
+                            const isPassword = el.elementType === 'password input' ||
+                                (el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
+                            const isUsername = el.elementType === 'email input' ||
+                                (el.domInfo && /username|user.?name|login|userid|user.?id|email|e.?mail/i.test(
+                                    (el.domInfo.name || '') + (el.domInfo.id || '') + (el.domInfo.placeholder || '')));
+                            return !isPassword && !isUsername;
+                        });
+                        console.log('[VisualProcessor][KeePass] Login page, no entries. Removed all credential fields.');
+                    }
+                }
+            }
+        } catch (keepassErr) {
+            console.log('[VisualProcessor][KeePass] Not available, skipping:', keepassErr ? keepassErr.message : 'unknown error');
+        }
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
 
         browser.runtime.sendMessage({
             action: "fillFormProgress",
-            processed: 3, filled: 0, total: 5,
+            processed: 3, filled: keepassFilledCount, total: 5,
             message: `Drawing overlay for ${fillableElements.length} fillable elements...`,
             sessionId: sessionId
         });
@@ -91,13 +650,17 @@ async function visualFillForm(screenshotDataUrl, profiles, customPrompt, session
         drawBoundingBoxOverlay(fillableElements, viewportWidth, viewportHeight);
 
         if (fillableElements.length === 0) {
+            removeOverlay();
+            const msg = keepassFilledCount > 0
+                ? `Filled ${keepassFilledCount} credential fields from KeePassXC. No remaining fields for LLM.`
+                : "No fillable elements found on page.";
             browser.runtime.sendMessage({
                 action: "fillFormComplete",
-                filled: 0, total: 0,
-                message: "No fillable elements found on page.",
+                filled: keepassFilledCount, total: keepassFilledCount,
+                message: msg,
                 sessionId: sessionId
             });
-            return { status: "success", message: "No fillable elements found." };
+            return { status: "success", message: msg };
         }
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
@@ -197,7 +760,39 @@ async function callOmniParser(screenshotDataUrl, apiKey, omniSettings, isCancell
         throw new Error(`OmniParser API error (${response.status}): ${errorData.detail || response.statusText}`);
     }
 
-    const result = await response.json();
+    let result = await response.json();
+    console.log('[VisualProcessor] OmniParser initial response status:', result.status);
+
+    // Poll for completion if not done yet (cold start or timeout on Prefer: wait)
+    if (result.status === 'starting' || result.status === 'processing') {
+        console.log('[VisualProcessor] OmniParser still processing, polling for completion...');
+        const pollUrl = result.urls?.get || `https://api.replicate.com/v1/predictions/${result.id}`;
+        const maxPolls = 60; // Max 60 polls (2 minutes with 2s intervals)
+
+        for (let i = 0; i < maxPolls; i++) {
+            if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+
+            const pollResponse = await fetch(pollUrl, {
+                headers: { 'Authorization': 'Bearer ' + apiKey }
+            });
+
+            if (!pollResponse.ok) {
+                throw new Error(`OmniParser poll error (${pollResponse.status})`);
+            }
+
+            result = await pollResponse.json();
+            console.log(`[VisualProcessor] Poll ${i + 1}: status=${result.status}`);
+
+            if (result.status === 'succeeded') {
+                break;
+            } else if (result.status === 'failed' || result.status === 'canceled') {
+                throw new Error(`OmniParser prediction ${result.status}: ${result.error || 'Unknown error'}`);
+            }
+        }
+    }
+
     console.log('[VisualProcessor] OmniParser raw response:', JSON.stringify(result, null, 2));
 
     // Parse the output - OmniParser v2 returns output with parsed_content_list and/or label_coordinates
@@ -302,9 +897,10 @@ function filterInteractiveElements(elements) {
     // OmniParser v2 returns two kinds of elements:
     //   type:'text', interactivity:false  — visible text labels on the page ("Name on card", "CVV", etc.)
     //   type:'icon', interactivity:true   — interactive controls (inputs, buttons, dropdowns)
-    // The 'content' of interactive elements is their current VALUE or an accessibility hint,
-    // NOT the field label. We spatially match each interactive element to its nearest
-    // text label, checking all directions with priority: left > above > below > right.
+    //
+    // IMPORTANT: Each text label should be assigned to AT MOST ONE interactive element.
+    // We match FROM labels TO elements (not the other way around) to ensure each label
+    // is used only once. Priority: label is LEFT of element > ABOVE > BELOW > RIGHT.
 
     const textLabels = elements.filter(el => el.interactivity === false && el.bbox);
     const interactive = elements.filter(el => el.interactivity === true && el.bbox);
@@ -317,56 +913,91 @@ function filterInteractiveElements(elements) {
     // Collect all actual visible text on the page (from text labels) for cross-referencing
     const visibleTexts = new Set(textLabels.map(t => t.label.trim().toLowerCase()));
 
-    for (const el of interactive) {
-        const [elX1, elY1, elX2, elY2] = el.bbox;
-        const elXCenter = (elX1 + elX2) / 2;
-        const elYCenter = (elY1 + elY2) / 2;
-        const elW = elX2 - elX1;
-        const elH = elY2 - elY1;
+    // For each TEXT LABEL, find the ONE best interactive element to assign it to
+    // This ensures each label is only used once
+    const labelAssignments = []; // { label, element, priority, dist }
 
-        // Classify each text label by its spatial relationship to this element,
-        // then pick the best from the highest-priority direction.
-        // Priority: left(0) > above(1) > below(2) > right(3)
-        const candidates = []; // { priority, dist, txt }
+    for (const txt of textLabels) {
+        const [tX1, tY1, tX2, tY2] = txt.bbox;
+        const tXCenter = (tX1 + tX2) / 2;
+        const tYCenter = (tY1 + tY2) / 2;
 
-        for (const txt of textLabels) {
-            const [tX1, tY1, tX2, tY2] = txt.bbox;
-            const tXCenter = (tX1 + tX2) / 2;
-            const tYCenter = (tY1 + tY2) / 2;
+        let bestMatch = null;
+        let bestPriority = 999;
+        let bestDist = Infinity;
 
-            // LEFT: text's right edge is to the left of element, vertically aligned
-            const isLeft = tX2 <= elX1 + 0.02;
+        for (const el of interactive) {
+            const [elX1, elY1, elX2, elY2] = el.bbox;
+            const elXCenter = (elX1 + elX2) / 2;
+            const elYCenter = (elY1 + elY2) / 2;
+            const elH = elY2 - elY1;
+
+            // Check spatial relationship: where is the label relative to this element?
+            // Label LEFT of element: label's right edge is to the left of element, vertically aligned
+            const isLabelLeft = tX2 <= elX1 + 0.02;
             const yAligned = Math.abs(tYCenter - elYCenter) < Math.max(0.06, elH * 0.8);
 
-            // ABOVE: text's bottom edge is above element, horizontally overlapping
-            const isAbove = tY2 <= elY1 + 0.02;
+            // Label ABOVE element: label's bottom edge is above element, horizontally overlapping
+            const isLabelAbove = tY2 <= elY1 + 0.02;
             const xOverlap = tX2 > elX1 - 0.02 && tX1 < elX2 + 0.02;
 
-            // BELOW: text's top edge is below element, horizontally overlapping
-            const isBelow = tY1 >= elY2 - 0.02;
+            // Label BELOW element: label's top edge is below element, horizontally overlapping
+            const isLabelBelow = tY1 >= elY2 - 0.02;
 
-            // RIGHT: text's left edge is to the right of element, vertically aligned
-            const isRight = tX1 >= elX2 - 0.02;
+            // Label RIGHT of element: label's left edge is to the right of element, vertically aligned
+            const isLabelRight = tX1 >= elX2 - 0.02;
 
-            if (isLeft && yAligned) {
-                const dist = Math.abs(tYCenter - elYCenter);
-                candidates.push({ priority: 0, dist, txt });
-            } else if (isAbove && xOverlap) {
-                const dist = Math.abs(tYCenter - elYCenter);
-                candidates.push({ priority: 1, dist, txt });
-            } else if (isBelow && xOverlap) {
-                const dist = Math.abs(tYCenter - elYCenter);
-                candidates.push({ priority: 2, dist, txt });
-            } else if (isRight && yAligned) {
-                const dist = Math.abs(tXCenter - elXCenter);
-                candidates.push({ priority: 3, dist, txt });
+            let priority = 999;
+            let dist = Infinity;
+
+            if (isLabelLeft && yAligned) {
+                priority = 0; // Highest priority - label to left of element
+                dist = elX1 - tX2; // Horizontal distance
+            } else if (isLabelAbove && xOverlap) {
+                priority = 1; // Label above element
+                dist = elY1 - tY2; // Vertical distance
+            } else if (isLabelBelow && xOverlap) {
+                priority = 2; // Label below element (unusual but possible)
+                dist = tY1 - elY2;
+            } else if (isLabelRight && yAligned) {
+                priority = 3; // Label to right of element
+                dist = tX1 - elX2;
+            }
+
+            // Only consider valid positions with reasonable distance
+            if (priority < 999 && dist >= 0 && dist < 0.15) {
+                if (priority < bestPriority || (priority === bestPriority && dist < bestDist)) {
+                    bestPriority = priority;
+                    bestDist = dist;
+                    bestMatch = el;
+                }
             }
         }
 
-        if (candidates.length > 0) {
-            // Sort by priority first, then by distance within same priority
-            candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
-            el.fieldLabel = candidates[0].txt.label;
+        if (bestMatch) {
+            labelAssignments.push({
+                label: txt.label,
+                element: bestMatch,
+                priority: bestPriority,
+                dist: bestDist
+            });
+        }
+    }
+
+    // Sort assignments by priority then distance (best matches first)
+    labelAssignments.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+
+    // Assign labels - each element gets at most one label (first/best match wins)
+    // Each label is also used only once (we track used labels)
+    const assignedElements = new Set();
+    const usedLabels = new Set();
+    for (const assignment of labelAssignments) {
+        const labelKey = assignment.label.toLowerCase();
+        if (!assignedElements.has(assignment.element) && !usedLabels.has(labelKey)) {
+            assignment.element.fieldLabel = assignment.label;
+            assignedElements.add(assignment.element);
+            usedLabels.add(labelKey);
+            console.log(`[VisualProcessor] Label "${assignment.label}" → element (priority=${assignment.priority}, dist=${assignment.dist.toFixed(3)})`);
         }
     }
 
@@ -1001,4 +1632,15 @@ function removeOverlay() {
         existing.remove();
         console.log('[VisualProcessor] Overlay removed.');
     }
+}
+
+function isVisualSignupPage() {
+    const url = window.location.href.toLowerCase();
+    if (/signup|sign.up|register|create.?account|join/.test(url)) return true;
+    if (document.querySelector('input[type="password"][name*="confirm"], input[type="password"][id*="confirm"], input[type="password"][name*="verify"]')) return true;
+    const btns = document.querySelectorAll('button, input[type="submit"], a[role="button"]');
+    for (const btn of btns) {
+        if (/sign.?up|register|create.?account|join\b/i.test(btn.textContent)) return true;
+    }
+    return false;
 }
