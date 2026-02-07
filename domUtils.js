@@ -374,12 +374,57 @@ async function fillField(element, value, info) {
     const sleep_between_events_ms = 50;
     console.log(`Filling field:`, element, `with value:`, value);
 
+    const tag = element.tagName.toLowerCase();
+    const inputType = (element.getAttribute('type') || '').toLowerCase();
+
     element.focus(); // Bring the element into focus
     await sleep(sleep_between_events_ms);
 
-    if (element.tagName.toLowerCase() === 'select') {
+    if (tag === 'select') {
         await fillSelectField(element, value);
         await sleep(delay_after_dropdown_selection_ms); // 2-second delay after dropdown selection
+    } else if (inputType === 'checkbox') {
+        // Handle checkbox: value should be true/false or "true"/"false"
+        const shouldCheck = value === true || value === 'true' || value === '1' || value === 'yes';
+        if (element.checked !== shouldCheck) {
+            simulateMouseClick(element);
+            await sleep(sleep_between_events_ms);
+            // Dispatch change event
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        console.log(`Checkbox ${element.name || element.id}: set to ${shouldCheck}`);
+    } else if (inputType === 'radio') {
+        // Handle radio button: find the radio in the group matching the value and click it
+        const groupName = element.getAttribute('name');
+        if (groupName) {
+            // Find the radio button with matching value in the group
+            const targetRadio = document.querySelector(
+                `input[type="radio"][name="${CSS.escape(groupName)}"][value="${CSS.escape(String(value))}"]`
+            );
+            if (targetRadio && !targetRadio.checked) {
+                targetRadio.focus();
+                simulateMouseClick(targetRadio);
+                await sleep(sleep_between_events_ms);
+                targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log(`Radio ${groupName}: selected value "${value}"`);
+            } else if (!targetRadio) {
+                // Try matching by label text if value match failed
+                const radios = document.querySelectorAll(`input[type="radio"][name="${CSS.escape(groupName)}"]`);
+                for (const radio of radios) {
+                    const label = getDomLabelForElement(radio);
+                    if (label && label.toLowerCase().includes(String(value).toLowerCase())) {
+                        if (!radio.checked) {
+                            radio.focus();
+                            simulateMouseClick(radio);
+                            await sleep(sleep_between_events_ms);
+                            radio.dispatchEvent(new Event('change', { bubbles: true }));
+                            console.log(`Radio ${groupName}: selected by label match "${label}"`);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     } else {
         // This is often the most reliable method for complex sites.
         await simulateHumanTyping(element, value);
@@ -390,6 +435,28 @@ async function fillField(element, value, info) {
 
     await sleep(sleep_between_events_ms);
     element.setAttribute('data-filled-by-extension', 'true'); // Mark as filled in case of re-filling to avoid filling same element
+}
+
+// Helper to get label for a form element (used by radio button matching)
+function getDomLabelForElement(el) {
+    // Check for associated <label> element
+    if (el.id) {
+        const labelEl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (labelEl) return labelEl.textContent.trim();
+    }
+    // Check if wrapped in a <label>
+    const parentLabel = el.closest('label');
+    if (parentLabel) {
+        const clone = parentLabel.cloneNode(true);
+        const inputs = clone.querySelectorAll('input, select, textarea');
+        inputs.forEach(inp => inp.remove());
+        const text = clone.textContent.trim();
+        if (text) return text;
+    }
+    // aria-label
+    const ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel) return ariaLabel;
+    return '';
 }
 
 async function fillSelectField(selectElement, value) {

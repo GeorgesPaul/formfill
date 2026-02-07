@@ -91,9 +91,9 @@ async function mergedFillForm(screenshotDataUrl, profiles, customPrompt, session
                 probeDomElements(interactiveElements, viewportWidth, viewportHeight);
                 visualElements = filterToFillableElements(interactiveElements);
 
-                // Add any dropdowns that OmniParser missed
-                visualElements = addMissedDropdowns(visualElements, viewportWidth, viewportHeight);
-                console.log(`[MergedProcessor] Visual analysis found ${visualElements.length} fillable elements (including dropdown fallback)`);
+                // Add any form elements that OmniParser missed (dropdowns, checkboxes, radios)
+                visualElements = addMissedFormElements(visualElements, viewportWidth, viewportHeight);
+                console.log(`[MergedProcessor] Visual analysis found ${visualElements.length} fillable elements (including fallback)`);
 
                 // Draw overlay for visual elements
                 drawBoundingBoxOverlay(visualElements, viewportWidth, viewportHeight);
@@ -572,9 +572,9 @@ async function visualFillForm(screenshotDataUrl, profiles, customPrompt, session
         // Step 5: Filter to fillable elements only (remove buttons, links, tabs, etc.)
         let fillableElements = filterToFillableElements(interactiveElements);
 
-        // Add any dropdowns that OmniParser missed (common issue - selects look like text)
-        fillableElements = addMissedDropdowns(fillableElements, viewportWidth, viewportHeight);
-        console.log(`[VisualProcessor] Fillable elements: ${fillableElements.length} (filtered out ${interactiveElements.length - fillableElements.length} non-fillable, added dropdown fallback)`);
+        // Add any form elements that OmniParser missed (dropdowns, checkboxes, radios)
+        fillableElements = addMissedFormElements(fillableElements, viewportWidth, viewportHeight);
+        console.log(`[VisualProcessor] Fillable elements: ${fillableElements.length} (filtered out ${interactiveElements.length - fillableElements.length} non-fillable, added fallback)`);
 
         // --- KeePass credential filling for visual pipeline ---
         let keepassFilledCount = 0;
@@ -1206,33 +1206,23 @@ function filterToFillableElements(elements) {
     });
 }
 
-function addMissedDropdowns(visualElements, viewportWidth, viewportHeight) {
-    // OmniParser often misses <select> dropdowns because they look like plain text
-    // or closed dropdown buttons. Find any DOM selects not covered by visual elements
-    // and add them to the list.
+function addMissedFormElements(visualElements, viewportWidth, viewportHeight) {
+    // OmniParser often misses certain form elements:
+    // - <select> dropdowns (look like plain text when closed)
+    // - Checkboxes (small icons, often custom-styled)
+    // - Radio buttons (small icons, often custom-styled)
+    // Find any DOM elements not covered by visual analysis and add them.
 
-    // Get all visible <select> elements on the page
-    const allSelects = Array.from(document.querySelectorAll('select')).filter(sel => {
-        // Must be visible
-        const style = window.getComputedStyle(sel);
+    // Helper to check if element is visible and in viewport
+    function isVisibleInViewport(el) {
+        const style = window.getComputedStyle(el);
         if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-        // Must be in viewport
-        const rect = sel.getBoundingClientRect();
+        const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return false;
         if (rect.bottom < 0 || rect.top > viewportHeight) return false;
         if (rect.right < 0 || rect.left > viewportWidth) return false;
-        // Skip disabled or already filled
-        if (sel.disabled) return false;
-        if (sel.hasAttribute('data-filled-by-extension') && sel.value) return false;
         return true;
-    });
-
-    if (allSelects.length === 0) {
-        console.log('[VisualProcessor] No additional dropdowns found on page.');
-        return visualElements;
     }
-
-    console.log(`[VisualProcessor] Found ${allSelects.length} <select> elements on page, checking for missed ones...`);
 
     // Build a set of DOM elements already covered by visual analysis
     const coveredElements = new Set();
@@ -1244,13 +1234,18 @@ function addMissedDropdowns(visualElements, viewportWidth, viewportHeight) {
     }
 
     let addedCount = 0;
-    for (const sel of allSelects) {
-        if (coveredElements.has(sel)) {
-            console.log(`[VisualProcessor] Select id="${sel.id}" name="${sel.name}" already covered by visual analysis`);
-            continue;
-        }
 
-        // This select was missed by OmniParser - create a synthetic visual element for it
+    // === 1. Find missed <select> dropdowns ===
+    const allSelects = Array.from(document.querySelectorAll('select')).filter(sel => {
+        if (!isVisibleInViewport(sel)) return false;
+        if (sel.disabled) return false;
+        if (sel.hasAttribute('data-filled-by-extension') && sel.value) return false;
+        return true;
+    });
+
+    for (const sel of allSelects) {
+        if (coveredElements.has(sel)) continue;
+
         const rect = sel.getBoundingClientRect();
         const normBbox = [
             rect.left / viewportWidth,
@@ -1259,18 +1254,15 @@ function addMissedDropdowns(visualElements, viewportWidth, viewportHeight) {
             rect.bottom / viewportHeight
         ];
 
-        // Get the label for this select
         const label = getDomLabel(sel);
-
-        // Get options
         const options = Array.from(sel.options).map(opt => ({
             value: opt.value,
             text: opt.textContent.trim(),
             selected: opt.selected
         }));
 
-        const syntheticElement = {
-            index: visualElements.length + addedCount,
+        visualElements.push({
+            index: visualElements.length,
             label: label || sel.name || sel.id || 'Dropdown',
             type: 'icon',
             bbox: normBbox,
@@ -1285,19 +1277,144 @@ function addMissedDropdowns(visualElements, viewportWidth, viewportHeight) {
                 disabled: sel.disabled,
                 options: options
             },
-            _addedByDropdownFallback: true
-        };
-
-        visualElements.push(syntheticElement);
+            _addedByFallback: true
+        });
         addedCount++;
         console.log(`[VisualProcessor] Added missed dropdown: id="${sel.id}" name="${sel.name}" label="${label}"`);
     }
 
+    // === 2. Find missed checkboxes ===
+    const allCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => {
+        if (!isVisibleInViewport(cb)) return false;
+        if (cb.disabled) return false;
+        if (cb.hasAttribute('data-filled-by-extension')) return false;
+        return true;
+    });
+
+    for (const cb of allCheckboxes) {
+        if (coveredElements.has(cb)) continue;
+
+        const rect = cb.getBoundingClientRect();
+        const normBbox = [
+            rect.left / viewportWidth,
+            rect.top / viewportHeight,
+            rect.right / viewportWidth,
+            rect.bottom / viewportHeight
+        ];
+
+        const label = getDomLabel(cb);
+
+        visualElements.push({
+            index: visualElements.length,
+            label: label || cb.name || cb.id || 'Checkbox',
+            type: 'icon',
+            bbox: normBbox,
+            interactivity: true,
+            fieldLabel: label,
+            currentValue: cb.checked ? 'checked' : 'unchecked',
+            elementType: 'checkbox',
+            domInfo: {
+                id: cb.id || '',
+                name: cb.name || '',
+                required: cb.required,
+                disabled: cb.disabled,
+                checked: cb.checked
+            },
+            _addedByFallback: true
+        });
+        addedCount++;
+        console.log(`[VisualProcessor] Added missed checkbox: id="${cb.id}" name="${cb.name}" label="${label}"`);
+    }
+
+    // === 3. Find missed radio buttons ===
+    // Group radios by name to avoid duplicates and provide all options
+    const radioGroups = new Map(); // name -> array of radio elements
+    const allRadios = Array.from(document.querySelectorAll('input[type="radio"]')).filter(rb => {
+        if (!isVisibleInViewport(rb)) return false;
+        if (rb.disabled) return false;
+        if (rb.hasAttribute('data-filled-by-extension')) return false;
+        return true;
+    });
+
+    for (const rb of allRadios) {
+        const name = rb.name || rb.id || 'unnamed';
+        if (!radioGroups.has(name)) {
+            radioGroups.set(name, []);
+        }
+        radioGroups.get(name).push(rb);
+    }
+
+    for (const [groupName, radios] of radioGroups) {
+        // Check if ANY radio in this group is already covered
+        const anyCovered = radios.some(rb => coveredElements.has(rb));
+        if (anyCovered) continue;
+
+        // Use the first radio for positioning, but include all options
+        const firstRadio = radios[0];
+        const rect = firstRadio.getBoundingClientRect();
+        const normBbox = [
+            rect.left / viewportWidth,
+            rect.top / viewportHeight,
+            rect.right / viewportWidth,
+            rect.bottom / viewportHeight
+        ];
+
+        // Get group options with labels
+        const groupOptions = radios.map(rb => ({
+            value: rb.value,
+            label: getDomLabel(rb) || rb.value,
+            checked: rb.checked
+        }));
+
+        // Find the group label (often a fieldset legend or nearby text)
+        let groupLabel = '';
+        const fieldset = firstRadio.closest('fieldset');
+        if (fieldset) {
+            const legend = fieldset.querySelector('legend');
+            if (legend) groupLabel = legend.textContent.trim();
+        }
+        if (!groupLabel) {
+            // Try to find a common label
+            groupLabel = getDomLabel(firstRadio) || groupName;
+        }
+
+        const checkedOption = radios.find(rb => rb.checked);
+
+        visualElements.push({
+            index: visualElements.length,
+            label: groupLabel,
+            type: 'icon',
+            bbox: normBbox,
+            interactivity: true,
+            fieldLabel: groupLabel,
+            currentValue: checkedOption ? (getDomLabel(checkedOption) || checkedOption.value) : '',
+            elementType: 'radio button',
+            domInfo: {
+                id: firstRadio.id || '',
+                name: groupName,
+                required: firstRadio.required,
+                disabled: firstRadio.disabled,
+                checked: firstRadio.checked,
+                groupOptions: groupOptions
+            },
+            _addedByFallback: true
+        });
+        addedCount++;
+        console.log(`[VisualProcessor] Added missed radio group: name="${groupName}" label="${groupLabel}" options=${groupOptions.length}`);
+    }
+
     if (addedCount > 0) {
-        console.log(`[VisualProcessor] Added ${addedCount} dropdowns that OmniParser missed.`);
+        console.log(`[VisualProcessor] Added ${addedCount} form elements that OmniParser missed.`);
+    } else {
+        console.log('[VisualProcessor] No additional form elements found on page.');
     }
 
     return visualElements;
+}
+
+// Keep old function name as alias for backwards compatibility
+function addMissedDropdowns(visualElements, viewportWidth, viewportHeight) {
+    return addMissedFormElements(visualElements, viewportWidth, viewportHeight);
 }
 
 function inferElementType(tag, inputType, role) {
