@@ -694,21 +694,28 @@ async function updateKeePassButtonState() {
   const fillCredsButton = document.getElementById('fillCredentials');
   if (!fillCredsButton) return;
 
+  // Don't update if we're currently filling
+  if (isFilling) return;
+
   try {
     const status = await browser.runtime.sendMessage({ action: 'keepass-status' });
-    if (status.connected && status.associated) {
+    console.log('[Popup] KeePass status:', status);
+
+    // Check if database is unlocked (associated = password in memory)
+    if (status && status.associated) {
       fillCredsButton.disabled = false;
+      fillCredsButton.textContent = 'Fill User/Pass';
       fillCredsButton.title = 'Fill username and password from KeePass';
-      fillCredsButton.style.opacity = '1';
     } else {
       fillCredsButton.disabled = true;
-      fillCredsButton.title = 'KeePass must be unlocked in KeePass Config';
-      fillCredsButton.style.opacity = '0.6';
+      fillCredsButton.textContent = 'Fill User/Pass (unlock in KeePass Config)';
+      fillCredsButton.title = 'KeePass database must be unlocked first';
     }
   } catch (err) {
+    console.log('[Popup] KeePass status error:', err);
     fillCredsButton.disabled = true;
+    fillCredsButton.textContent = 'Fill User/Pass (unlock in KeePass Config)';
     fillCredsButton.title = 'KeePass not available';
-    fillCredsButton.style.opacity = '0.6';
   }
 }
 

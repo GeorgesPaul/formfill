@@ -69,6 +69,10 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (typeof removeOverlay === 'function') {
       removeOverlay();
     }
+    // Clean up KeePass picker if present
+    if (typeof removeKeePassPicker === 'function') {
+      removeKeePassPicker();
+    }
     sendResponse({ status: "stopped" });
     return true;
   }
@@ -78,6 +82,10 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function fillCredentialsOnly(sessionId) {
   window.currentFillSessionId = sessionId;
   window.stopFilling = false;
+
+  // Store credential fields globally for the picker
+  window.keepassCredentialFields = { username: null, password: null };
+  window.keepassEntries = [];
 
   function isCancelled() {
     return window.stopFilling || window.currentFillSessionId !== sessionId;
@@ -140,6 +148,8 @@ async function fillCredentialsOnly(sessionId) {
       return { status: "success", message: "No credential fields found." };
     }
 
+    window.keepassCredentialFields = { username: usernameField, password: passwordField };
+
     if (isCancelled()) throw new Error("Credential filling stopped by user.");
 
     browser.runtime.sendMessage({
@@ -167,42 +177,33 @@ async function fillCredentialsOnly(sessionId) {
 
     if (isCancelled()) throw new Error("Credential filling stopped by user.");
 
-    // Use the first matching entry
-    const entry = keepassResult.entries[0];
-    console.log('[Content] Filling credentials from KeePass entry:', entry.name);
+    const entries = keepassResult.entries;
+    window.keepassEntries = entries;
+    console.log(`[Content] Found ${entries.length} KeePass entries for this site`);
 
-    let filledCount = 0;
-
-    if (usernameField && entry.login) {
-      usernameField.focus();
-      usernameField.value = entry.login;
-      usernameField.dispatchEvent(new Event('input', { bubbles: true }));
-      usernameField.dispatchEvent(new Event('change', { bubbles: true }));
-      usernameField.setAttribute('data-filled-by-extension', 'true');
-      filledCount++;
+    // If single match, auto-fill. If multiple matches, show picker.
+    if (entries.length === 1) {
+      const filledCount = fillCredentialEntry(entries[0], usernameField, passwordField);
+      browser.runtime.sendMessage({
+        action: "fillFormComplete",
+        filled: filledCount,
+        total: (usernameField ? 1 : 0) + (passwordField ? 1 : 0),
+        message: `Filled ${filledCount} credential field(s) from KeePass.`,
+        sessionId: sessionId
+      });
+      return { status: "success", message: `Filled ${filledCount} credential field(s).` };
+    } else {
+      // Multiple matches - show picker icon
+      showKeePassPicker(entries, usernameField, passwordField, sessionId);
+      browser.runtime.sendMessage({
+        action: "fillFormComplete",
+        filled: 0,
+        total: (usernameField ? 1 : 0) + (passwordField ? 1 : 0),
+        message: `Found ${entries.length} KeePass entries. Click the icon to select.`,
+        sessionId: sessionId
+      });
+      return { status: "success", message: `Found ${entries.length} entries. Select from picker.` };
     }
-
-    if (passwordField && entry.password) {
-      passwordField.focus();
-      passwordField.value = entry.password;
-      passwordField.dispatchEvent(new Event('input', { bubbles: true }));
-      passwordField.dispatchEvent(new Event('change', { bubbles: true }));
-      passwordField.setAttribute('data-filled-by-extension', 'true');
-      filledCount++;
-    }
-
-    // Click outside to trigger any validation
-    document.body.click();
-
-    browser.runtime.sendMessage({
-      action: "fillFormComplete",
-      filled: filledCount,
-      total: (usernameField ? 1 : 0) + (passwordField ? 1 : 0),
-      message: `Filled ${filledCount} credential field(s) from KeePass.`,
-      sessionId: sessionId
-    });
-
-    return { status: "success", message: `Filled ${filledCount} credential field(s).` };
 
   } catch (error) {
     console.error('[Content] Credential fill error:', error);
@@ -224,5 +225,203 @@ async function fillCredentialsOnly(sessionId) {
     }
 
     return { status: "error", message: error.toString() };
+  }
+}
+
+// Fill credentials from a single entry
+function fillCredentialEntry(entry, usernameField, passwordField) {
+  let filledCount = 0;
+
+  if (usernameField && entry.login) {
+    usernameField.focus();
+    usernameField.value = entry.login;
+    usernameField.dispatchEvent(new Event('input', { bubbles: true }));
+    usernameField.dispatchEvent(new Event('change', { bubbles: true }));
+    usernameField.setAttribute('data-filled-by-extension', 'true');
+    filledCount++;
+  }
+
+  if (passwordField && entry.password) {
+    passwordField.focus();
+    passwordField.value = entry.password;
+    passwordField.dispatchEvent(new Event('input', { bubbles: true }));
+    passwordField.dispatchEvent(new Event('change', { bubbles: true }));
+    passwordField.setAttribute('data-filled-by-extension', 'true');
+    filledCount++;
+  }
+
+  // Click outside to trigger validation
+  document.body.click();
+  console.log(`[Content] Filled ${filledCount} credential field(s) from entry: ${entry.name}`);
+  return filledCount;
+}
+
+// Show KeePass picker icon next to credential fields
+function showKeePassPicker(entries, usernameField, passwordField, sessionId) {
+  // Remove any existing picker
+  removeKeePassPicker();
+
+  const iconUrl = browser.runtime.getURL('icons/icon16.png');
+  const targetField = usernameField || passwordField;
+  if (!targetField) return;
+
+  // Create picker icon
+  const icon = document.createElement('img');
+  icon.id = 'keepass-picker-icon';
+  icon.src = iconUrl;
+  icon.title = `${entries.length} KeePass entries found - click to select`;
+  icon.style.cssText = `
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    z-index: 2147483646;
+    opacity: 0.9;
+    transition: opacity 0.2s;
+    background: #fff;
+    border-radius: 3px;
+    padding: 2px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  `;
+
+  // Position icon inside the field on the right
+  function positionIcon() {
+    const rect = targetField.getBoundingClientRect();
+    const scrollX = window.scrollX || document.documentElement.scrollLeft;
+    const scrollY = window.scrollY || document.documentElement.scrollTop;
+    icon.style.left = `${rect.right + scrollX - 26}px`;
+    icon.style.top = `${rect.top + scrollY + (rect.height - 20) / 2}px`;
+  }
+
+  positionIcon();
+  document.body.appendChild(icon);
+
+  // Update position on scroll/resize
+  window.addEventListener('scroll', positionIcon, { passive: true });
+  window.addEventListener('resize', positionIcon, { passive: true });
+
+  // Store cleanup function
+  window.keepassPickerCleanup = () => {
+    window.removeEventListener('scroll', positionIcon);
+    window.removeEventListener('resize', positionIcon);
+  };
+
+  // Handle icon hover
+  icon.addEventListener('mouseenter', () => { icon.style.opacity = '1'; });
+  icon.addEventListener('mouseleave', () => { icon.style.opacity = '0.9'; });
+
+  // Handle icon click - show dropdown
+  icon.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showKeePassDropdown(entries, usernameField, passwordField, icon);
+  });
+}
+
+// Show dropdown menu with KeePass entries
+function showKeePassDropdown(entries, usernameField, passwordField, icon) {
+  // Remove existing dropdown
+  const existing = document.getElementById('keepass-picker-dropdown');
+  if (existing) existing.remove();
+
+  const dropdown = document.createElement('div');
+  dropdown.id = 'keepass-picker-dropdown';
+  dropdown.style.cssText = `
+    position: absolute;
+    z-index: 2147483647;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    min-width: 220px;
+    max-width: 350px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+  `;
+
+  // Header
+  const header = document.createElement('div');
+  header.style.cssText = `
+    padding: 8px 12px;
+    background: #f5f5f5;
+    border-bottom: 1px solid #e0e0e0;
+    font-weight: 600;
+    color: #333;
+  `;
+  header.textContent = 'Select KeePass Entry';
+  dropdown.appendChild(header);
+
+  // Entry list
+  for (const entry of entries) {
+    const item = document.createElement('div');
+    item.style.cssText = `
+      padding: 10px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid #f0f0f0;
+    `;
+
+    const name = document.createElement('div');
+    name.style.cssText = 'font-weight: 500; color: #333; margin-bottom: 2px;';
+    name.textContent = entry.name || 'Unnamed Entry';
+
+    const details = document.createElement('div');
+    details.style.cssText = 'font-size: 11px; color: #888;';
+    details.textContent = entry.login || entry.url || '';
+
+    item.appendChild(name);
+    if (entry.login || entry.url) item.appendChild(details);
+
+    item.addEventListener('mouseenter', () => { item.style.background = '#e8f4fc'; });
+    item.addEventListener('mouseleave', () => { item.style.background = ''; });
+
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      fillCredentialEntry(entry, usernameField, passwordField);
+      removeKeePassPicker();
+    });
+
+    dropdown.appendChild(item);
+  }
+
+  document.body.appendChild(dropdown);
+
+  // Position dropdown below icon
+  const iconRect = icon.getBoundingClientRect();
+  const scrollX = window.scrollX || document.documentElement.scrollLeft;
+  const scrollY = window.scrollY || document.documentElement.scrollTop;
+  dropdown.style.left = `${iconRect.right + scrollX - dropdown.offsetWidth}px`;
+  dropdown.style.top = `${iconRect.bottom + scrollY + 4}px`;
+
+  // Adjust if off-screen
+  const dropdownRect = dropdown.getBoundingClientRect();
+  if (dropdownRect.right > window.innerWidth) {
+    dropdown.style.left = `${window.innerWidth - dropdownRect.width - 10 + scrollX}px`;
+  }
+  if (dropdownRect.left < 0) {
+    dropdown.style.left = `${10 + scrollX}px`;
+  }
+
+  // Close on click outside
+  function handleClickOutside(e) {
+    if (!dropdown.contains(e.target) && e.target.id !== 'keepass-picker-icon') {
+      dropdown.remove();
+      document.removeEventListener('click', handleClickOutside);
+    }
+  }
+  setTimeout(() => document.addEventListener('click', handleClickOutside), 0);
+}
+
+// Remove KeePass picker icon and dropdown
+function removeKeePassPicker() {
+  const icon = document.getElementById('keepass-picker-icon');
+  if (icon) icon.remove();
+  const dropdown = document.getElementById('keepass-picker-dropdown');
+  if (dropdown) dropdown.remove();
+  if (window.keepassPickerCleanup) {
+    window.keepassPickerCleanup();
+    window.keepassPickerCleanup = null;
   }
 }
