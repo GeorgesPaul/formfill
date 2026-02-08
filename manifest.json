@@ -63,8 +63,7 @@
         "llmClient.js",
         "formFiller.js",
         "visualProcessor.js",
-        "content.js",
-        "keepassUI.js"
+        "content.js"
       ],
       "run_at": "document_idle",
       "all_frames": true

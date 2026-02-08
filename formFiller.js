@@ -79,7 +79,37 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
 
         updateFillProgress(processed, filledCount, totalFields, "Starting to fill form... This will take at least a few seconds.", sessionId);
 
-        const formFieldsInfo = formElements.map(getFormFieldInfo);
+        let formFieldsInfo = formElements.map(getFormFieldInfo);
+
+        // --- Filter credential fields ---
+        // Password fields are never filled by LLM (use "Fill User/Pass" button for KeePass)
+        // Username/email fields: keep for LLM on signup pages (profile data), remove on login pages
+        if (isSignupPage()) {
+            // Signup: keep username/email for LLM (profile data), remove only passwords
+            formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info));
+            console.log('[FormFiller] Signup page detected. Removed password fields, keeping username for LLM.');
+        } else {
+            // Login: remove all credential fields (use "Fill User/Pass" button instead)
+            formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info) && !isUsernameField(f.info));
+            console.log('[FormFiller] Login page detected. Removed credential fields (use Fill User/Pass button).');
+        }
+
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
+
+        // If no fields remain after filtering, we're done
+        if (formFieldsInfo.length === 0) {
+            console.log('[FormFiller] No non-credential fields to fill.');
+            simulateMouseClick(document.body, true);
+            updateFillProgress(totalFields, filledCount, totalFields, `No form fields to fill (login page - use Fill User/Pass).`, sessionId);
+            browser.runtime.sendMessage({
+                action: "fillFormComplete",
+                filled: filledCount,
+                total: totalFields,
+                message: `No form fields to fill. Use "Fill User/Pass" for credentials.`,
+                sessionId: sessionId
+            });
+            return { status: "success", message: `No form fields to fill.` };
+        }
 
         // Always use Single Prompt Strategy
         const filledFields = await fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt, sessionId);
@@ -261,4 +291,36 @@ function trimAndRemoveQuotes(str) {
     }
 
     return str;
+}
+
+// --- Credential field detection ---
+
+function isPasswordField(fieldInfo) {
+    if (fieldInfo.type === 'password') return true;
+    const combined = ((fieldInfo.name || '') + (fieldInfo.id || '')).toLowerCase();
+    return /passw|pwd/.test(combined);
+}
+
+function isUsernameField(fieldInfo) {
+    const ac = (fieldInfo.autocomplete || '').toLowerCase();
+    if (ac === 'username' || ac === 'email') return true;
+    const combined = ((fieldInfo.name || '') + (fieldInfo.id || '') +
+                      (fieldInfo.placeholder || '')).toLowerCase();
+    if (/username|user.?name|login|userid|user.?id/.test(combined)) return true;
+    if (fieldInfo.type === 'email') return true;
+    if (/email|e.?mail/.test(combined)) return true;
+    return false;
+}
+
+function isSignupPage() {
+    const url = window.location.href.toLowerCase();
+    if (/signup|sign.up|register|create.?account|join/.test(url)) return true;
+    // Check for "confirm password" field
+    if (document.querySelector('input[type="password"][name*="confirm"], input[type="password"][id*="confirm"], input[type="password"][name*="verify"]')) return true;
+    // Check button/submit text
+    const btns = document.querySelectorAll('button, input[type="submit"], a[role="button"]');
+    for (const btn of btns) {
+        if (/sign.?up|register|create.?account|join\b/i.test(btn.textContent)) return true;
+    }
+    return false;
 }

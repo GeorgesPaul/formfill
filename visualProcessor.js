@@ -236,53 +236,15 @@ async function mergedFillForm(screenshotDataUrl, profiles, customPrompt, session
             return { status: "success", message: "No fillable elements found." };
         }
 
-        // === KeePass credential filling ===
-        browser.runtime.sendMessage({
-            action: "fillFormProgress",
-            processed: 3, filled: 0, total: 6,
-            message: "Checking KeePass for credentials...",
-            sessionId: sessionId
-        });
-
-        let keepassFilledCount = 0;
-        try {
-            const keepassStatus = await browser.runtime.sendMessage({ action: "keepass-status" });
-            if (keepassStatus && keepassStatus.connected && keepassStatus.associated) {
-                const keepassResult = await browser.runtime.sendMessage({
-                    action: "keepass-get-logins",
-                    url: window.location.href
-                });
-
-                if (keepassResult.success && keepassResult.entries && keepassResult.entries.length > 0) {
-                    const entry = keepassResult.entries[0];
-                    console.log('[MergedProcessor][KeePass] Found credentials for', entry.name);
-
-                    for (const item of mergedElements) {
-                        if (isPasswordField(item.info) && entry.password) {
-                            await fillField(item.element, entry.password, item.info);
-                            keepassFilledCount++;
-                            item._keepassFilled = true;
-                        } else if (isUsernameField(item.info) && entry.login) {
-                            await fillField(item.element, entry.login, item.info);
-                            keepassFilledCount++;
-                            item._keepassFilled = true;
-                        }
-                    }
-
-                    mergedElements = mergedElements.filter(item => !item._keepassFilled);
-                    filledCount += keepassFilledCount;
-                    console.log(`[MergedProcessor][KeePass] Filled ${keepassFilledCount} credential fields.`);
-                } else {
-                    // No KeePass entries - handle signup vs login
-                    if (isSignupPage()) {
-                        mergedElements = mergedElements.filter(item => !isPasswordField(item.info));
-                    } else {
-                        mergedElements = mergedElements.filter(item => !isPasswordField(item.info) && !isUsernameField(item.info));
-                    }
-                }
-            }
-        } catch (keepassErr) {
-            console.log('[MergedProcessor][KeePass] Not available:', keepassErr ? keepassErr.message : 'unknown');
+        // === Filter credential fields ===
+        // Password fields are never filled by LLM (use "Fill User/Pass" button for KeePass)
+        // Username/email fields: keep for LLM on signup pages, remove on login pages
+        if (isSignupPage()) {
+            mergedElements = mergedElements.filter(item => !isPasswordField(item.info));
+            console.log('[MergedProcessor] Signup page detected. Removed password fields, keeping username for LLM.');
+        } else {
+            mergedElements = mergedElements.filter(item => !isPasswordField(item.info) && !isUsernameField(item.info));
+            console.log('[MergedProcessor] Login page detected. Removed credential fields (use Fill User/Pass button).');
         }
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
@@ -293,10 +255,10 @@ async function mergedFillForm(screenshotDataUrl, profiles, customPrompt, session
             browser.runtime.sendMessage({
                 action: "fillFormComplete",
                 filled: filledCount, total: totalFields,
-                message: `Filled ${filledCount} of ${totalFields} fields (credentials from KeePass).`,
+                message: `No form fields to fill. Use "Fill User/Pass" for credentials.`,
                 sessionId: sessionId
             });
-            return { status: "success", message: `Filled ${filledCount} of ${totalFields} fields.` };
+            return { status: "success", message: `No form fields to fill.` };
         }
 
         // === Build merged LLM prompt ===
@@ -580,82 +542,33 @@ async function visualFillForm(screenshotDataUrl, profiles, customPrompt, session
         fillableElements = addMissedFormElements(fillableElements, viewportWidth, viewportHeight);
         console.log(`[VisualProcessor] Fillable elements: ${fillableElements.length} (filtered out ${interactiveElements.length - fillableElements.length} non-fillable, added fallback)`);
 
-        // --- KeePass credential filling for visual pipeline ---
-        let keepassFilledCount = 0;
-        try {
-            const keepassStatus = await browser.runtime.sendMessage({ action: "keepass-status" });
-            console.log('[VisualProcessor][KeePass] Status:', keepassStatus);
-            if (keepassStatus && keepassStatus.connected && keepassStatus.associated) {
-                const keepassResult = await browser.runtime.sendMessage({
-                    action: "keepass-get-logins",
-                    url: window.location.href
-                });
-
-                if (keepassResult.success && keepassResult.entries && keepassResult.entries.length > 0) {
-                    const entry = keepassResult.entries[0];
-                    console.log('[VisualProcessor][KeePass] Found credentials for', entry.name);
-
-                    for (const el of fillableElements) {
-                        const isPassword = el.elementType === 'password input' ||
-                            (el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
-                        const isUsername = el.elementType === 'email input' ||
-                            (el.domInfo && (el.domInfo.autocomplete === 'username' || el.domInfo.autocomplete === 'email')) ||
-                            (el.domInfo && /username|user.?name|login|userid|user.?id|email|e.?mail/i.test(
-                                (el.domInfo.name || '') + (el.domInfo.id || '') + (el.domInfo.placeholder || '')));
-
-                        if (isPassword && entry.password) {
-                            const domEl = getDomElementForVisualElement(el);
-                            if (domEl) {
-                                await simulateHumanTyping(domEl, entry.password);
-                                domEl.setAttribute('data-filled-by-extension', 'true');
-                                keepassFilledCount++;
-                                el._keepassFilled = true;
-                            }
-                        } else if (isUsername && entry.login) {
-                            const domEl = getDomElementForVisualElement(el);
-                            if (domEl) {
-                                await simulateHumanTyping(domEl, entry.login);
-                                domEl.setAttribute('data-filled-by-extension', 'true');
-                                keepassFilledCount++;
-                                el._keepassFilled = true;
-                            }
-                        }
-                    }
-
-                    // Remove KeePassXC-filled fields from LLM list
-                    fillableElements = fillableElements.filter(el => !el._keepassFilled);
-                    console.log(`[VisualProcessor][KeePass] Filled ${keepassFilledCount} credential fields. ${fillableElements.length} remain for LLM.`);
-                } else {
-                    // No KeePassXC entries
-                    const isSignup = isVisualSignupPage();
-                    if (isSignup) {
-                        fillableElements = fillableElements.filter(el => {
-                            return el.elementType !== 'password input' &&
-                                !(el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
-                        });
-                        console.log('[VisualProcessor][KeePass] Signup page, no entries. Removed password fields.');
-                    } else {
-                        fillableElements = fillableElements.filter(el => {
-                            const isPassword = el.elementType === 'password input' ||
-                                (el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
-                            const isUsername = el.elementType === 'email input' ||
-                                (el.domInfo && /username|user.?name|login|userid|user.?id|email|e.?mail/i.test(
-                                    (el.domInfo.name || '') + (el.domInfo.id || '') + (el.domInfo.placeholder || '')));
-                            return !isPassword && !isUsername;
-                        });
-                        console.log('[VisualProcessor][KeePass] Login page, no entries. Removed all credential fields.');
-                    }
-                }
-            }
-        } catch (keepassErr) {
-            console.log('[VisualProcessor][KeePass] Not available, skipping:', keepassErr ? keepassErr.message : 'unknown error');
+        // --- Filter credential fields ---
+        // Password fields are never filled by LLM (use "Fill User/Pass" button for KeePass)
+        // Username/email fields: keep for LLM on signup pages, remove on login pages
+        const isSignup = isVisualSignupPage();
+        if (isSignup) {
+            fillableElements = fillableElements.filter(el => {
+                return el.elementType !== 'password input' &&
+                    !(el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
+            });
+            console.log('[VisualProcessor] Signup page detected. Removed password fields, keeping username for LLM.');
+        } else {
+            fillableElements = fillableElements.filter(el => {
+                const isPassword = el.elementType === 'password input' ||
+                    (el.domInfo && /passw|pwd/i.test((el.domInfo.name || '') + (el.domInfo.id || '')));
+                const isUsername = el.elementType === 'email input' ||
+                    (el.domInfo && /username|user.?name|login|userid|user.?id|email|e.?mail/i.test(
+                        (el.domInfo.name || '') + (el.domInfo.id || '') + (el.domInfo.placeholder || '')));
+                return !isPassword && !isUsername;
+            });
+            console.log('[VisualProcessor] Login page detected. Removed credential fields (use Fill User/Pass button).');
         }
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 
         browser.runtime.sendMessage({
             action: "fillFormProgress",
-            processed: 3, filled: keepassFilledCount, total: 5,
+            processed: 3, filled: 0, total: 5,
             message: `Drawing overlay for ${fillableElements.length} fillable elements...`,
             sessionId: sessionId
         });
@@ -669,16 +582,13 @@ async function visualFillForm(screenshotDataUrl, profiles, customPrompt, session
 
         if (fillableElements.length === 0) {
             removeOverlay();
-            const msg = keepassFilledCount > 0
-                ? `Filled ${keepassFilledCount} credential fields from KeePassXC. No remaining fields for LLM.`
-                : "No fillable elements found on page.";
             browser.runtime.sendMessage({
                 action: "fillFormComplete",
-                filled: keepassFilledCount, total: keepassFilledCount,
-                message: msg,
+                filled: 0, total: 0,
+                message: `No form fields to fill. Use "Fill User/Pass" for credentials.`,
                 sessionId: sessionId
             });
-            return { status: "success", message: msg };
+            return { status: "success", message: "No form fields to fill." };
         }
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");

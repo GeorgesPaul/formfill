@@ -13,8 +13,12 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "fillFormComplete":
     case "fillFormStopped":
     case "fillFormError":
-      // STRICT SESSION CHECK: Ignore messages from stale sessions
-      if (message.sessionId && message.sessionId !== currentSessionId) {
+      // STRICT SESSION CHECK: Ignore messages without sessionId or from stale sessions
+      if (!message.sessionId) {
+        console.warn(`[Popup] Ignoring message without sessionId: ${message.action}`);
+        return;
+      }
+      if (message.sessionId !== currentSessionId) {
         console.warn(`[Popup] Ignoring message from stale session: ${message.sessionId} (current: ${currentSessionId})`);
         return;
       }
@@ -24,6 +28,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.warn(`[Popup] Ignoring progress message while stopped.`);
         return;
       }
+
+      console.log(`[Popup] Processing message: ${message.action}, session: ${message.sessionId}`);
 
       if (message.message) {
         updateStatusMessage(message.message);
@@ -46,6 +52,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Reset isFilling and update button states when form filling is complete or an error occurs
       if (message.action === "fillFormComplete" || message.action === "fillFormError" || message.action === "fillFormStopped") {
+        console.log(`[Popup] Received terminal message: ${message.action}, filled: ${message.filled}, total: ${message.total}`);
         isFilling = false;
         updateButtonStates();
 
@@ -205,7 +212,11 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
 
   // Set up event listeners
   document.getElementById('fillForm').addEventListener('click', fillForm);
+  document.getElementById('fillCredentials').addEventListener('click', fillCredentials);
   document.getElementById('stopFilling').addEventListener('click', stopFilling);
+
+  // Initialize KeePass button state
+  updateKeePassButtonState();
   document.getElementById('useVisualProcessing').addEventListener('change', function () {
     browser.storage.local.set({ useVisualProcessing: this.checked });
   });
@@ -219,6 +230,7 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
   document.getElementById('reloadBackup').addEventListener('click', loadCompleteBackupFromTxt);
   document.getElementById('addProfileFromTxt').addEventListener('click', addProfileFromTxt);
   document.getElementById('llmConfigButton').addEventListener('click', openLlmConfig);
+  document.getElementById('keepassConfigButton').addEventListener('click', openKeePassConfig);
   document.getElementById('removeProfile').addEventListener('click', removeSelectedProfile);
   document.getElementById('profileName').addEventListener('input', handleProfileNameChange);
   document.getElementById('donateButton').addEventListener('click', function () {
@@ -555,20 +567,48 @@ async function fillForm() {
           messagePayload.screenshot = screenshotDataUrl;
         } catch (screenshotError) {
           console.error('[Popup] Screenshot capture failed:', screenshotError);
-          updateStatusMessage("Screenshot capture failed: " + screenshotError.message);
-          isFilling = false;
-          updateButtonStates();
-          return;
+          throw new Error("Screenshot capture failed: " + screenshotError.message);
         }
       }
 
-      await browser.tabs.sendMessage(tabs[0].id, messagePayload);
+      try {
+        await browser.tabs.sendMessage(tabs[0].id, messagePayload);
+      } catch (sendError) {
+        // Content script not available — try programmatic injection (e.g. PDF viewer pages)
+        console.warn('[Popup] sendMessage failed, attempting programmatic script injection:', sendError.message);
+        updateStatusMessage("Content script not found, injecting scripts...");
+
+        const scripts = [
+          'apiUtils.js', 'utils.js', 'domUtils.js',
+          'llmClient.js', 'formFiller.js', 'visualProcessor.js', 'content.js'
+        ];
+        try {
+          for (const script of scripts) {
+            await browser.tabs.executeScript(tabs[0].id, { file: script });
+          }
+          // Retry the message now that scripts are injected
+          await browser.tabs.sendMessage(tabs[0].id, messagePayload);
+        } catch (injectError) {
+          console.error('[Popup] Script injection also failed:', injectError);
+          throw new Error("Cannot fill forms on this page. Content scripts could not be loaded (PDF or restricted page).");
+        }
+      }
     }
   } catch (error) {
     console.error("Error filling form:", error);
     updateStatusMessage("Error: " + error.message);
     isFilling = false;
     updateButtonStates();
+    stopTimer();
+
+    // Reset progress bar
+    const pc = document.getElementById('progressContainer');
+    const pf = document.getElementById('progressBarFill');
+    const pl = document.getElementById('progressLabel');
+    const et = document.getElementById('elapsedTime');
+    if (pc && pf) { pc.style.opacity = '0.5'; pf.style.width = '0%'; }
+    if (pl) { pl.style.color = 'gray'; }
+    if (et) { et.style.display = 'none'; }
   }
 }
 
@@ -634,14 +674,88 @@ function stopTimer() {
 
 function updateButtonStates() {
   const fillButton = document.getElementById('fillForm');
+  const fillCredsButton = document.getElementById('fillCredentials');
   const stopButton = document.getElementById('stopFilling');
 
   if (isFilling) {
     fillButton.disabled = true;
+    if (fillCredsButton) fillCredsButton.disabled = true;
     stopButton.disabled = false;
   } else {
     fillButton.disabled = false;
     stopButton.disabled = true;
+    // fillCredentials button state is managed by updateKeePassButtonState
+    updateKeePassButtonState();
+  }
+}
+
+// Check KeePass status and update the Fill User/Pass button
+async function updateKeePassButtonState() {
+  const fillCredsButton = document.getElementById('fillCredentials');
+  if (!fillCredsButton) return;
+
+  try {
+    const status = await browser.runtime.sendMessage({ action: 'keepass-status' });
+    if (status.connected && status.associated) {
+      fillCredsButton.disabled = false;
+      fillCredsButton.title = 'Fill username and password from KeePass';
+      fillCredsButton.style.opacity = '1';
+    } else {
+      fillCredsButton.disabled = true;
+      fillCredsButton.title = 'KeePass must be unlocked in KeePass Config';
+      fillCredsButton.style.opacity = '0.6';
+    }
+  } catch (err) {
+    fillCredsButton.disabled = true;
+    fillCredsButton.title = 'KeePass not available';
+    fillCredsButton.style.opacity = '0.6';
+  }
+}
+
+// Fill only username/password from KeePass
+async function fillCredentials() {
+  if (isFilling) return;
+
+  // Check KeePass status first
+  try {
+    const status = await browser.runtime.sendMessage({ action: 'keepass-status' });
+    if (!status.connected || !status.associated) {
+      updateStatusMessage('KeePass is not unlocked. Please unlock it in KeePass Config.');
+      return;
+    }
+  } catch (err) {
+    updateStatusMessage('KeePass is not available.');
+    return;
+  }
+
+  isFilling = true;
+  currentSessionId = generateSessionId();
+  updateButtonStates();
+  startTimer();
+  updateStatusMessage('Filling credentials from KeePass...');
+
+  const progressContainer = document.getElementById('progressContainer');
+  const progressLabel = document.getElementById('progressLabel');
+  if (progressContainer) progressContainer.style.opacity = '1';
+  if (progressLabel) progressLabel.style.color = 'black';
+
+  try {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tabs[0]) {
+      throw new Error('No active tab found');
+    }
+
+    await browser.tabs.sendMessage(tabs[0].id, {
+      action: "fillCredentials",
+      sessionId: currentSessionId
+    });
+
+  } catch (error) {
+    console.error('[Popup] Fill credentials error:', error);
+    updateStatusMessage('Error: ' + error.message);
+    isFilling = false;
+    updateButtonStates();
+    stopTimer();
   }
 }
 
@@ -1049,7 +1163,16 @@ function openLlmConfig() {
   browser.windows.create({
     url: browser.runtime.getURL('llmConfig.html'),
     type: 'popup',
-    width: 800, // Adjust as needed
-    height: 600 // Adjust as needed
+    width: 800,
+    height: 600
+  });
+}
+
+function openKeePassConfig() {
+  browser.windows.create({
+    url: browser.runtime.getURL('keepassConfig.html'),
+    type: 'popup',
+    width: 500,
+    height: 500
   });
 }
