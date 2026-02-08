@@ -3,6 +3,11 @@
   "name": "GeorgesPaul Form Filler",
   "version": "1.15",
   "description": "Intelligently fills forms based on user profiles",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "formfiller@megahard.pro"
+    }
+  },
   "permissions": [
     "activeTab",
     "storage",
@@ -30,6 +35,8 @@
   "background": {
     "scripts": [
       "apiUtils.js",
+      "lib/kdbxweb.min.js",
+      "keepassClient.js",
       "background.js"
     ],
     "persistent": true
@@ -38,8 +45,11 @@
     "apiUtils.js",
     "llmConfig.html",
     "llmConfig.js",
+    "keepassConfig.html",
+    "keepassConfig.js",
     "popup.js",
-    "styles.css"
+    "styles.css",
+    "icons/*"
   ],
   "content_scripts": [
     {
@@ -53,7 +63,8 @@
         "llmClient.js",
         "formFiller.js",
         "visualProcessor.js",
-        "content.js"
+        "content.js",
+        "keepassUI.js"
       ],
       "run_at": "document_idle",
       "all_frames": true
