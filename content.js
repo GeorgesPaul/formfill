@@ -20,8 +20,19 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.useVisualProcessing && message.screenshot) {
-      console.log("Using visual form processing pipeline...");
-      visualFillForm(message.screenshot, profilesToUse, message.customPrompt, message.sessionId).then(result => {
+      // Visual processing only makes sense in the top frame (screenshot is of the main page)
+      if (window.self !== window.top) {
+        // Iframe: fall back to non-visual filling (handles cross-origin iframe forms)
+        console.log("[Content] Iframe detected with visual processing enabled - using non-visual fallback");
+        fillForm(profilesToUse, message.customPrompt, message.sessionId).then(result => {
+          sendResponse(result);
+        }).catch(error => {
+          sendResponse({ status: "error", message: error.toString() });
+        });
+        return true;
+      }
+      console.log("Using merged visual + source analysis pipeline...");
+      mergedFillForm(message.screenshot, profilesToUse, message.customPrompt, message.sessionId).then(result => {
         sendResponse(result);
       }).catch(error => {
         sendResponse({ status: "error", message: error.toString() });

@@ -67,6 +67,10 @@ async function mergedFillForm(screenshotDataUrl, profiles, customPrompt, session
         const sourceFieldsInfo = sourceElements.map(getFormFieldInfo);
         console.log(`[MergedProcessor] Source analysis found ${sourceFieldsInfo.length} elements`);
 
+        // NOTE: If sourceFieldsInfo.length === 0, the form might be in a cross-origin iframe.
+        // This is handled by content.js which runs non-visual filling in iframes concurrently.
+        // The merged pipeline continues here for the top frame (may find visual-only elements).
+
         // Visual analysis (slow) - OmniParser
         let visualElements = [];
         try {
