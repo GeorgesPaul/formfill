@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KeePass Configuration</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="keepass-config-body">
+    <h2 class="llm-config-h2">KeePass Configuration</h2>
+
+    <fieldset class="win95-groupbox">
+        <legend>How it works</legend>
+        <p>This extension reads your KeePass database directly.</p>
+        <p>Your master password is stored <b>in memory only</b> and cleared when the browser closes. You'll need to unlock once per session.</p>
+    </fieldset>
+
+    <div id="keepassDatabaseSection">
+        <label for="keepassDatabasePath">Database file (.kdbx):</label>
+        <div id="databasePathRow">
+            <input type="text" id="keepassDatabasePath" placeholder="file:///C:/path/to/database.kdbx" readonly>
+            <button id="browseDatabaseBtn" class="llm-config-button">Browse...</button>
+        </div>
+    </div>
+
+    <div id="keepassPasswordSection">
+        <label for="keepassMasterPassword">Master Password:</label>
+        <input type="password" id="keepassMasterPassword" placeholder="Enter master password">
+    </div>
+
+    <div id="keepassStatusSection">
+        <label>Status:</label>
+        <span id="keepassStatus">Locked</span>
+    </div>
+
+    <div id="keepassButtons">
+        <button id="keepassUnlock" class="llm-config-button">Unlock</button>
+        <button id="keepassLock" class="llm-config-button" disabled>Lock</button>
+        <button id="keepassTest" class="llm-config-button" disabled>Test Lookup</button>
+    </div>
+
+    <div id="logLabel">System messages:</div>
+    <div id="logMsg"></div>
+
+    <script src="keepassConfig.js"></script>
+</body>
+</html>

@@ -167,6 +167,26 @@ select, input, textarea { /* Modified from select, input[type="text"] to include
 #fillForm:hover:not(:disabled) {
     background-color: #218838; /* Darker green on hover */
 }
+#fillCredentials {
+    height: 40px;
+    font-size: 14px;
+    font-weight: bold;
+    display: block;
+    width: 200px;
+    margin-left: auto;
+    margin-right: auto;
+    text-align: center;
+    background-color: #28a745; /* Green when enabled */
+    color: #fff;
+}
+#fillCredentials:disabled {
+    background-color: #6c757d; /* Gray when disabled */
+    color: #ccc;
+    cursor: not-allowed;
+}
+#fillCredentials:hover:not(:disabled) {
+    background-color: #218838; /* Darker green on hover */
+}
 #stopFilling {
     height: 20px;
     font-size: 13px;
@@ -427,19 +447,27 @@ footer a:hover {
     font-size: 11px;
     height: 22px;
 }
-.config-help {
+.win95-groupbox {
+    border: 2px groove #ddd;
+    padding: 6px 8px 6px 8px;
+    margin: 6px 0;
     font-size: 11px;
     color: #333;
-    margin: 4px 0 6px 0;
     line-height: 1.4;
 }
-.config-help p {
+.win95-groupbox legend {
+    font-size: 11px;
+    font-weight: normal;
+    padding: 0 4px;
+    color: #000;
+}
+.win95-groupbox p {
     margin: 2px 0;
 }
-.config-help a {
+.win95-groupbox a {
     color: #000080;
 }
-.config-help code {
+.win95-groupbox code {
     font-size: 10px;
 }
 #omniParserSettings {
@@ -475,6 +503,66 @@ footer a:hover {
     font-family: 'Courier New', monospace;
     font-size: 11px;
     text-align: right;
+}
+
+/* Styles specific to keepassConfig.html */
+body.keepass-config-body {
+    width: 450px;
+    margin: 8px;
+}
+#keepassDatabaseSection,
+#keepassPasswordSection {
+    margin: 8px 0;
+}
+#keepassDatabaseSection label,
+#keepassPasswordSection label {
+    display: block;
+    margin-bottom: 2px;
+    font-weight: bold;
+    font-size: 11px;
+}
+#databasePathRow {
+    display: flex;
+    gap: 4px;
+}
+#databasePathRow input {
+    flex: 1;
+}
+#databasePathRow button {
+    width: auto;
+    flex-shrink: 0;
+}
+#keepassMasterPassword {
+    width: calc(100% - 6px);
+}
+#keepassStatusSection {
+    margin: 8px 0;
+    font-size: 12px;
+}
+#keepassStatusSection label {
+    font-weight: bold;
+}
+#keepassStatusSection span {
+    margin-left: 4px;
+}
+#keepassButtons {
+    display: flex;
+    gap: 4px;
+    margin: 8px 0;
+}
+#keepassButtons button {
+    width: auto;
+    flex: 1;
+}
+#keepassConfigButton {
+    text-align: center;
+    font-weight: bold;
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    width: 100%;
+    height: 30px;
+    font-size: 14px;
 }
 
 /* Styles specific to llmConfig.html */

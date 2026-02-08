@@ -8,6 +8,12 @@ let currentSessionId = null; // Track the current session ID for strict isolatio
 // Add message listener to handle messages from background script
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.action) {
+    case "keepass-status-changed":
+      // KeePass Config notified us of a status change
+      console.log('[Popup] Received keepass-status-changed, updating button state');
+      updateKeePassButtonState();
+      break;
+
     case "fillFormStart":
     case "fillFormProgress":
     case "fillFormComplete":
@@ -212,11 +218,21 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
 
   // Set up event listeners
   document.getElementById('fillForm').addEventListener('click', fillForm);
-  document.getElementById('fillCredentials').addEventListener('click', fillCredentials);
+
+  const fillCredsBtn = document.getElementById('fillCredentials');
+  if (fillCredsBtn) {
+    fillCredsBtn.addEventListener('click', fillCredentials);
+    console.log('[Popup] fillCredentials event listener attached');
+  } else {
+    console.error('[Popup] fillCredentials button not found!');
+  }
+
   document.getElementById('stopFilling').addEventListener('click', stopFilling);
 
-  // Initialize KeePass button state
-  updateKeePassButtonState();
+  // Initialize KeePass button state (with delay to ensure background script is ready)
+  setTimeout(() => {
+    updateKeePassButtonState();
+  }, 100);
   document.getElementById('useVisualProcessing').addEventListener('change', function () {
     browser.storage.local.set({ useVisualProcessing: this.checked });
   });
@@ -692,51 +708,67 @@ function updateButtonStates() {
 // Check KeePass status and update the Fill User/Pass button
 async function updateKeePassButtonState() {
   const fillCredsButton = document.getElementById('fillCredentials');
-  if (!fillCredsButton) return;
+  if (!fillCredsButton) {
+    console.log('[Popup] fillCredentials button not found');
+    return;
+  }
 
   // Don't update if we're currently filling
   if (isFilling) return;
 
   try {
+    console.log('[Popup] Checking KeePass status...');
     const status = await browser.runtime.sendMessage({ action: 'keepass-status' });
-    console.log('[Popup] KeePass status:', status);
+    console.log('[Popup] KeePass status response:', JSON.stringify(status));
 
     // Check if database is unlocked (associated = password in memory)
     if (status && status.associated) {
       fillCredsButton.disabled = false;
       fillCredsButton.textContent = 'Fill User/Pass';
       fillCredsButton.title = 'Fill username and password from KeePass';
+      console.log('[Popup] KeePass unlocked - button enabled, disabled=' + fillCredsButton.disabled);
     } else {
       fillCredsButton.disabled = true;
       fillCredsButton.textContent = 'Fill User/Pass (unlock in KeePass Config)';
       fillCredsButton.title = 'KeePass database must be unlocked first';
+      console.log('[Popup] KeePass locked (associated=' + (status && status.associated) + ') - button disabled');
     }
   } catch (err) {
-    console.log('[Popup] KeePass status error:', err);
+    console.error('[Popup] KeePass status error:', err);
     fillCredsButton.disabled = true;
     fillCredsButton.textContent = 'Fill User/Pass (unlock in KeePass Config)';
-    fillCredsButton.title = 'KeePass not available';
+    fillCredsButton.title = 'KeePass not available: ' + err.message;
   }
 }
 
 // Fill only username/password from KeePass
 async function fillCredentials() {
-  if (isFilling) return;
+  console.log('[Popup] fillCredentials function called');
+
+  if (isFilling) {
+    console.log('[Popup] Already filling, ignoring click');
+    return;
+  }
 
   // Check KeePass status first
   try {
+    console.log('[Popup] Checking KeePass status before fill...');
     const status = await browser.runtime.sendMessage({ action: 'keepass-status' });
-    if (!status.connected || !status.associated) {
+    console.log('[Popup] KeePass status for fill:', JSON.stringify(status));
+    if (!status || !status.associated) {
       updateStatusMessage('KeePass is not unlocked. Please unlock it in KeePass Config.');
       return;
     }
   } catch (err) {
-    updateStatusMessage('KeePass is not available.');
+    console.error('[Popup] KeePass status error:', err);
+    updateStatusMessage('KeePass is not available: ' + err.message);
     return;
   }
 
+  console.log('[Popup] KeePass unlocked, proceeding with credential fill...');
   isFilling = true;
-  currentSessionId = generateSessionId();
+  currentSessionId = generateUUID();
+  console.log('[Popup] Generated session ID:', currentSessionId);
   updateButtonStates();
   startTimer();
   updateStatusMessage('Filling credentials from KeePass...');
@@ -748,14 +780,17 @@ async function fillCredentials() {
 
   try {
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    console.log('[Popup] Active tab:', tabs[0] ? tabs[0].id : 'none');
     if (!tabs[0]) {
       throw new Error('No active tab found');
     }
 
+    console.log('[Popup] Sending fillCredentials message to content script...');
     await browser.tabs.sendMessage(tabs[0].id, {
       action: "fillCredentials",
       sessionId: currentSessionId
     });
+    console.log('[Popup] fillCredentials message sent successfully');
 
   } catch (error) {
     console.error('[Popup] Fill credentials error:', error);

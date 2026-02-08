@@ -284,13 +284,13 @@ function showKeePassPicker(entries, usernameField, passwordField, sessionId) {
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
   `;
 
-  // Position icon inside the field on the right
+  // Position icon to the right of the field (left side of icon aligns with right side of field)
   function positionIcon() {
     const rect = targetField.getBoundingClientRect();
     const scrollX = window.scrollX || document.documentElement.scrollLeft;
     const scrollY = window.scrollY || document.documentElement.scrollTop;
-    icon.style.left = `${rect.right + scrollX - 26}px`;
-    icon.style.top = `${rect.top + scrollY + (rect.height - 20) / 2}px`;
+    icon.style.left = `${rect.right + scrollX + 4}px`;
+    icon.style.top = `${rect.top + scrollY + (rect.height - 24) / 2}px`;
   }
 
   positionIcon();
