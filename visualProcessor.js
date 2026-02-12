@@ -153,7 +153,7 @@ async function mergedFillForm(screenshotDataUrl, profiles, customPrompt, session
         }
 
         // Step 3: Build merged list - start with all unique source elements (by UID)
-        const mergedElements = [];
+        let mergedElements = [];
         const uidToMergedIndex = new Map(); // UID → index in mergedElements
 
         for (const fieldObj of sourceFieldsInfo) {
