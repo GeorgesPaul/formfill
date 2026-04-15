@@ -4,6 +4,7 @@ let totalFields = 0;
 let isFilling = false;
 let currentSessionId = null;
 let activeFrames = new Set(); // Track frames that are actively filling
+let completionTimer = null;  // Grace-period timer before signalling fillFormComplete to popup
 
 function generateLoadingBar(percentage) {
   const barLength = 20;
@@ -25,6 +26,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (message.action) {
     case "fillFormStart":
+      // Cancel any pending completion signal — a new frame is still registering
+      if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
       if (message.sessionId !== currentSessionId) {
         // New session - reset all tracking state
         currentSessionId = message.sessionId;
@@ -39,6 +42,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case "fillFormStopped": {
+      if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
       activeFrames.delete(sender.frameId);
       // Update this frame's final state
       formFillProgress[sender.frameId] = {
@@ -85,15 +89,32 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         total: message.total || (formFillProgress[sender.frameId] || {}).total || 0
       };
       if (activeFrames.size > 0) return; // Wait for other frames to finish
-      isFilling = false;
-      const duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-      totalFilled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
-      percentage = 1;
-      computedMessage = `Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${totalFilled} out of ${totalFields} fields in ${duration} seconds.`;
-      break;
+
+      // Grace period: wait briefly before signalling completion to the popup.
+      // This guards against a race where a concurrent frame's fillFormStart message
+      // is still in-flight when we see the first fillFormComplete — without the delay,
+      // background would incorrectly treat the session as finished.
+      const _sid = currentSessionId;
+      if (completionTimer) clearTimeout(completionTimer);
+      completionTimer = setTimeout(() => {
+        completionTimer = null;
+        if (activeFrames.size > 0 || currentSessionId !== _sid) return; // state changed
+        isFilling = false;
+        const _filled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
+        const _duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
+        browser.runtime.sendMessage({
+          action: "fillFormComplete",
+          filled: _filled,
+          total: totalFields,
+          message: `Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${_filled} out of ${totalFields} fields in ${_duration} seconds.`,
+          sessionId: _sid
+        }).catch(e => console.error("Error sending message to popup:", e));
+      }, 400);
+      return; // Relay handled by timer above
     }
 
     case "fillFormError":
+      if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
       activeFrames.delete(sender.frameId);
       if (activeFrames.size > 0) return; // Wait for other frames to finish
       isFilling = false;

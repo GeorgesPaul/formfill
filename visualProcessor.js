@@ -791,18 +791,29 @@ function parsePythonDictString(elementsString) {
 
             let dictStr = dictMatch[1];
 
-            // Convert Python dict syntax to JSON:
-            // 1. Replace Python booleans (as standalone values) with JSON booleans
+            // The 'content' value may contain double-quotes which would break JSON.parse
+            // after the blanket single→double quote conversion. Extract it first, replace
+            // with a safe placeholder, then restore after parsing.
+            const CONTENT_PLACEHOLDER = '\x00CONTENT\x00';
+            let savedContent = null;
+            const contentExtract = dictStr.match(/'content':\s*'((?:[^'\\]|\\.)*)'/);
+            if (contentExtract) {
+                savedContent = contentExtract[1];
+                dictStr = dictStr.replace(contentExtract[0], `'content': '${CONTENT_PLACEHOLDER}'`);
+            }
+
+            // Convert Python dict syntax to JSON
             dictStr = dictStr.replace(/:\s*True\b/g, ': true');
             dictStr = dictStr.replace(/:\s*False\b/g, ': false');
             dictStr = dictStr.replace(/:\s*None\b/g, ': null');
-
-            // 2. Replace single quotes with double quotes
-            //    Handle content that may contain apostrophes by using a targeted approach:
-            //    Replace ': ' patterns and boundary quotes
             dictStr = dictStr.replace(/'/g, '"');
 
             const parsed = JSON.parse(dictStr);
+
+            // Restore original content (may contain double-quotes or other characters)
+            if (savedContent !== null) {
+                parsed.content = savedContent;
+            }
 
             elements.push({
                 index: elements.length,
@@ -1644,6 +1655,13 @@ function getDomElementForVisualElement(el) {
     let domEl = document.elementFromPoint(cx, cy);
 
     if (overlay) overlay.style.display = '';
+
+    // Cross-origin iframes: elementFromPoint() returns the <iframe> wrapper, not the
+    // inputs inside. We cannot fill across the frame boundary from the top frame —
+    // the iframe's own content script handles those fields via the non-visual path.
+    if (domEl && domEl.tagName.toLowerCase() === 'iframe') {
+        return null;
+    }
 
     // If we hit a label or wrapper, try to find the actual input inside
     if (domEl) {

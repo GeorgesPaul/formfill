@@ -10,7 +10,13 @@
       "Bash(git checkout:*)",
       "WebSearch",
       "WebFetch(domain:replicate.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(cmd //c create_Firefox_extension_zip.bat)",
+      "Bash(dir ..extension.zip)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "Bash(curl:*)",
+      "Bash(git status:*)",
+      "Bash(node --check:*)"
     ]
   }
 }

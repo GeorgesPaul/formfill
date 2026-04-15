@@ -118,7 +118,8 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 
-        for (const { element, info } of formFieldsInfo) {
+        for (let i = 0; i < formFieldsInfo.length; i++) {
+            const { element, info } = formFieldsInfo[i];
 
             if (isCancelled()) {
                 throw new Error("Form filling stopped by user.");
@@ -129,28 +130,40 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
                 throw new Error("Form filling stopped: Safety timeout reached (5 minutes).");
             }
 
-            const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
-            const matchingClass = classes.find(cls => cls in filledFields);
+            // Match LLM result by: id > name > CSS class > label > nearbyText > numeric index
+            // Using 'in' operator so boolean false values are handled correctly
+            let value;
+            if (info.id && info.id in filledFields) {
+                value = filledFields[info.id];
+            } else if (info.name && info.name in filledFields) {
+                value = filledFields[info.name];
+            } else {
+                const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
+                const matchingClass = classes.find(cls => cls && cls in filledFields);
+                if (matchingClass) {
+                    value = filledFields[matchingClass];
+                } else if (info.label && info.label in filledFields) {
+                    value = filledFields[info.label];
+                } else if (info.nearbyText && info.nearbyText in filledFields) {
+                    value = filledFields[info.nearbyText];
+                } else if (String(i) in filledFields) {
+                    value = filledFields[String(i)];
+                }
+            }
 
-            let matched = false;
-            if (filledFields[info.id] || filledFields[info.name] || matchingClass) {
-                const value = filledFields[info.id] || filledFields[info.name] || filledFields[matchingClass];
-
-                // Check if element already has the correct value (whether it was previously filled or not)
+            if (value !== undefined && value !== null && value !== '') {
+                // Check if element already has the correct value
                 if (elementHasCorrectValue(element, value)) {
-                    console.log('Skipping field with correct value:', info.id || info.name);
-                    // Ensure it's marked as filled
+                    console.log('Skipping field with correct value:', info.id || info.name || info.label || i);
                     element.setAttribute('data-filled-by-extension', 'true');
                     processed++;
                     continue;
                 }
 
                 await fillField(element, value, info);
-
                 filledCount++;
-                matched = true;
             } else {
-                console.log('No match found for:', info.id, info.name, classes.join(' '));
+                console.log('No match found for:', info.id, info.name, info.label, 'index:', i);
             }
 
             processed++;
@@ -247,7 +260,9 @@ async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = 
 }
 
 function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt = '') {
-    const formFieldsString = JSON.stringify(formFieldsInfo);
+    // Include numeric index so LLM can key by index when id/name are absent
+    const formFieldsForPrompt = formFieldsInfo.map(({ info }, idx) => ({ index: idx, ...info }));
+    const formFieldsString = JSON.stringify(formFieldsForPrompt);
 
     // Use raw profile text directly
     let userDataString = '';
@@ -272,8 +287,8 @@ function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPro
   Form Fields Info:
   ${formFieldsString}
 
-  Your output should be a JSON object where keys are the 'id' or 'name' of the form fields and values are the extracted data. 
-  Do not include any other text or formatting. If no suitable value can be determined for a field, return an empty string for that field.
+  Your output should be a JSON object. For each field use its 'id' as key if non-empty, otherwise its 'name' if non-empty, otherwise its numeric 'index'.
+  Values are the data to fill. Omit fields where no suitable value exists. Do not include any other text or formatting.
   ${customPrompt ? `\nAdditional instructions from user:\n${customPrompt}` : ''}
   `;
 
