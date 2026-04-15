@@ -59,6 +59,15 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
             formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info) && !isUsernameField(f.info));
         }
 
+        // Draw detection overlays on every fillable field (purely cosmetic).
+        if (typeof OverlayUtils !== 'undefined') {
+            OverlayUtils.clearAll();
+            for (const f of formFieldsInfo) {
+                const labelText = f.info.label || f.info.placeholder || f.info.name || f.info.id || f.info.type || '';
+                OverlayUtils.add(f.element, 'detected', labelText);
+            }
+        }
+
         if (formFieldsInfo.length === 0) {
             browser.runtime.sendMessage({
                 action: "fillFormComplete", filled: 0, total: totalFields,
@@ -75,6 +84,13 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
             HeuristicFiller.applyHeuristics(formFieldsInfo, profiles);
 
         console.log(`[VisionFiller] Heuristics matched ${Object.keys(heuristicMatches).length}/${formFieldsInfo.length} fields; ${remainingIndices.length} remaining for vision LLM.`);
+
+        if (typeof OverlayUtils !== 'undefined') {
+            for (const idxStr of Object.keys(heuristicMatches)) {
+                const f = formFieldsInfo[Number(idxStr)];
+                if (f) OverlayUtils.setStatus(f.element, 'heuristic');
+            }
+        }
 
         // --- Vision LLM call for remaining fields ---
         let llmMatches = {};
@@ -105,6 +121,16 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 
+        // Update overlay status from LLM results: llm-matched vs nomatch.
+        if (typeof OverlayUtils !== 'undefined') {
+            for (let i = 0; i < formFieldsInfo.length; i++) {
+                if (i in heuristicMatches) continue;
+                const { element, info } = formFieldsInfo[i];
+                const v = resolveFieldValue(i, info, {}, llmMatches);
+                OverlayUtils.setStatus(element, (v !== undefined && v !== null && v !== '') ? 'llm' : 'nomatch');
+            }
+        }
+
         // --- Fill: merge heuristic + LLM, iterate fields ---
         for (let i = 0; i < formFieldsInfo.length; i++) {
             if (isCancelled()) throw new Error("Form filling stopped by user.");
@@ -119,6 +145,7 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
                 if (elementHasCorrectValue(element, value)) {
                     element.setAttribute('data-filled-by-extension', 'true');
                 } else {
+                    if (typeof OverlayUtils !== 'undefined') OverlayUtils.pulseFilling(element);
                     await fillField(element, value, info);
                     filledCount++;
                 }
@@ -141,9 +168,15 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
             sessionId
         });
 
+        // Leave overlays visible briefly so the user sees the final state, then clear.
+        if (typeof OverlayUtils !== 'undefined') {
+            setTimeout(() => OverlayUtils.clearAll(), 1200);
+        }
+
         return { status: "success", message: `Processed ${filledCount}/${totalFields}.` };
     } catch (error) {
         console.error("[VisionFiller] Error:", error);
+        if (typeof OverlayUtils !== 'undefined') OverlayUtils.clearAll();
         if (error.message === "Form filling stopped by user.") {
             browser.runtime.sendMessage({
                 action: "fillFormStopped",

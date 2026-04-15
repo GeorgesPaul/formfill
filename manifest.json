@@ -63,6 +63,7 @@
         "llmClient.js",
         "formFiller.js",
         "heuristicFiller.js",
+        "overlayUtils.js",
         "visionFiller.js",
         "content.js"
       ],
