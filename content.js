@@ -20,10 +20,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.useVisualProcessing && message.screenshot) {
-      // Visual processing only makes sense in the top frame (screenshot is of the main page)
+      // Vision mode only makes sense in the top frame (screenshot is of the main page)
       if (window.self !== window.top) {
-        // Iframe: fall back to non-visual filling (handles cross-origin iframe forms)
-        console.log("[Content] Iframe detected with visual processing enabled - using non-visual fallback");
+        console.log("[Content] Iframe detected with vision mode enabled — using DOM-only fallback");
         fillForm(profilesToUse, message.customPrompt, message.sessionId).then(result => {
           sendResponse(result);
         }).catch(error => {
@@ -31,8 +30,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         return true;
       }
-      console.log("Using merged visual + source analysis pipeline...");
-      mergedFillForm(message.screenshot, profilesToUse, message.customPrompt, message.sessionId).then(result => {
+      console.log("Using vision-LLM form filling pipeline...");
+      visionFillForm(message.screenshot, profilesToUse, message.customPrompt, message.sessionId).then(result => {
         sendResponse(result);
       }).catch(error => {
         sendResponse({ status: "error", message: error.toString() });

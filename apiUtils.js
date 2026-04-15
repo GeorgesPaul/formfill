@@ -52,16 +52,59 @@
         );
         console.log("HTTPie equivalent command:");
         console.log(httpieCommand);
-        // console.log("URL:", config.apiUrl);
-        // console.log("Request options method:", requestOptions.method); 
-        // console.log("Request options headers:", requestOptions.headers);
-        // console.log("Request options body:", requestOptions.body);
 
         try {
             const response = await fetch(config.apiUrl, requestOptions);
             return ApiUtils.handleLlmResponse(response, config);
         } catch (error) {
             console.error("Error interacting with LLM API:", error);
+            throw error;
+        }
+    };
+
+    // Multimodal prompt: sends prompt + screenshot to a vision-capable model via
+    // OpenAI-compatible image_url content blocks. Works on OpenRouter for Claude,
+    // GPT, Qwen-VL, Grok-vision, etc. Requires config.apiUrl to point to an
+    // OpenAI-compatible endpoint (OpenRouter or similar).
+    ApiUtils.promptLLMWithVision = async function(prompt, imageDataUrl) {
+        const config = await ApiUtils.getLlmConfig();
+        console.log("Using vision-capable LLM:", config.model);
+
+        if (!config.apiUrl.includes('openrouter.ai') && !/\/v1\/chat\/completions/.test(config.apiUrl)) {
+            throw new Error("Vision mode requires an OpenAI-compatible endpoint (OpenRouter recommended). Current endpoint: " + config.apiUrl);
+        }
+
+        const requestBody = {
+            model: config.model,
+            messages: [{
+                role: "user",
+                content: [
+                    { type: "text", text: prompt },
+                    { type: "image_url", image_url: { url: imageDataUrl } }
+                ]
+            }],
+            stream: false
+        };
+
+        const requestOptions = {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        };
+        if (config.apiKey) {
+            requestOptions.headers['Authorization'] = `Bearer ${config.apiKey}`;
+        }
+
+        try {
+            const response = await fetch(config.apiUrl, requestOptions);
+            if (!response.ok) {
+                const errorBody = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorBody}`);
+            }
+            const data = await response.json();
+            return data.choices[0].message.content.trim();
+        } catch (error) {
+            console.error("Error interacting with vision LLM API:", error);
             throw error;
         }
     };

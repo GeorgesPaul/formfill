@@ -596,7 +596,7 @@ async function fillForm() {
 
         const scripts = [
           'apiUtils.js', 'utils.js', 'domUtils.js',
-          'llmClient.js', 'formFiller.js', 'visualProcessor.js', 'content.js'
+          'llmClient.js', 'formFiller.js', 'heuristicFiller.js', 'visionFiller.js', 'content.js'
         ];
         try {
           for (const script of scripts) {

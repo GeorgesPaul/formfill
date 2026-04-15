@@ -12,9 +12,17 @@
     <fieldset class="win95-groupbox">
       <legend>LLM Setup</legend>
       <p>Configure an LLM to power form filling. Use any OpenAI-compatible API, or a local model via Ollama.</p>
-      <p><b>OpenRouter</b> provides access to many models (GPT-4o, Claude, Grok, Llama, etc.) through a single API.
+      <p><b>OpenRouter</b> provides access to many models through a single API.
         Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> and use
         <code>https://openrouter.ai/api/v1/chat/completions</code> as the API URL.</p>
+      <p><b>Vision mode</b> (enable with the "Use visual form processing" checkbox on the main panel) sends a page screenshot
+        alongside the DOM to a vision-capable model. Recommended models (click a preset below to autofill):</p>
+      <div id="visionPresets">
+        <button type="button" class="llm-config-button preset-btn" data-name="Claude Opus 4.6" data-model="anthropic/claude-opus-4.6">Claude Opus 4.6 (best reasoning)</button>
+        <button type="button" class="llm-config-button preset-btn" data-name="Claude Sonnet 4.5" data-model="anthropic/claude-sonnet-4.5">Claude Sonnet 4.5 (best computer-use, ~1/5 cost)</button>
+        <button type="button" class="llm-config-button preset-btn" data-name="GPT-5" data-model="openai/gpt-5">GPT-5</button>
+        <button type="button" class="llm-config-button preset-btn" data-name="Qwen2.5-VL 72B" data-model="qwen/qwen-2.5-vl-72b-instruct">Qwen2.5-VL 72B (cheap, strong GUI grounding)</button>
+      </div>
     </fieldset>
 
     <table id="configTable">
@@ -45,35 +53,6 @@
     </form>
 
     <div id="statusMessage"></div>
-
-    <hr>
-    <div id="replicateApiSection">
-      <fieldset class="win95-groupbox">
-        <legend>Visual Processing</legend>
-        <p><b>Replicate</b> is used for visual form processing (OmniParser v2 screen analysis).
-          Get a key at <a href="https://replicate.com/account/api-tokens" target="_blank">replicate.com/account/api-tokens</a>.
-          Only needed if "Use visual form processing" is enabled.</p>
-      </fieldset>
-      <label for="replicateApiKey">Replicate API Key:</label>
-      <div id="replicateApiRow">
-        <input type="password" id="replicateApiKey" placeholder="Enter Replicate API key">
-        <button id="testReplicateApi" type="button" class="llm-config-button">Test</button>
-      </div>
-
-      <div id="omniParserSettings">
-        <label class="omni-section-label">OmniParser v2 Settings:</label>
-        <div class="omni-param-row">
-          <label for="omniBoxThreshold">Box threshold:</label>
-          <input type="range" id="omniBoxThreshold" min="0.01" max="1" step="0.01" value="0.50">
-          <span id="omniBoxThresholdVal" class="omni-param-value">0.50</span>
-        </div>
-        <div class="omni-param-row">
-          <label for="omniIouThreshold">IOU threshold:</label>
-          <input type="range" id="omniIouThreshold" min="0.01" max="1" step="0.01" value="0.10">
-          <span id="omniIouThresholdVal" class="omni-param-value">0.10</span>
-        </div>
-      </div>
-    </div>
 
     <div id="logLabel">System messages:</div>
     <div id="logMsg"></div>
