@@ -92,42 +92,42 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
             }
         }
 
-        // --- Vision LLM call for remaining fields ---
+        // --- Vision LLM call: send ALL fields so the model can override bad DOM metadata ---
         let llmMatches = {};
-        if (remainingIndices.length > 0) {
-            updateFillProgress(0, 0, totalFields, `Asking vision LLM about ${remainingIndices.length} field(s)...`, sessionId);
+        updateFillProgress(0, 0, totalFields, `Asking vision LLM about ${formFieldsInfo.length} field(s)...`, sessionId);
 
-            const remainingFields = remainingIndices.map(idx => ({
-                index: idx,
-                ...stripFieldInfoForPrompt(formFieldsInfo[idx].info)
-            }));
+        const allFields = formFieldsInfo.map((f, idx) => ({
+            index: idx,
+            ...stripFieldInfoForPrompt(f.info)
+        }));
 
-            const prompt = buildVisionPrompt(remainingFields, profiles, customPrompt);
-            console.log('=== VISION PROMPT ===');
-            console.log(prompt);
+        const prompt = buildVisionPrompt(allFields, profiles, customPrompt);
+        console.log('=== VISION PROMPT ===');
+        console.log(prompt);
 
-            const raw = await ApiUtils.promptLLMWithVision(prompt, screenshotDataUrl);
+        const raw = await ApiUtils.promptLLMWithVision(prompt, screenshotDataUrl);
 
-            if (isCancelled()) throw new Error("Form filling stopped by user.");
+        if (isCancelled()) throw new Error("Form filling stopped by user.");
 
-            try {
-                const cleaned = raw.replace(/```json\n?|```/g, '').trim();
-                llmMatches = JSON.parse(cleaned);
-            } catch (e) {
-                console.error("Vision LLM did not return valid JSON:", raw.substring(0, 500));
-                // Fall through: heuristic matches still get applied.
-            }
+        try {
+            const cleaned = raw.replace(/```json\n?|```/g, '').trim();
+            llmMatches = JSON.parse(cleaned);
+        } catch (e) {
+            console.error("Vision LLM did not return valid JSON:", raw.substring(0, 500));
         }
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 
-        // Update overlay status from LLM results: llm-matched vs nomatch.
+        // Update overlays: LLM-matched fields turn blue, heuristic-only stay green, rest orange.
         if (typeof OverlayUtils !== 'undefined') {
             for (let i = 0; i < formFieldsInfo.length; i++) {
-                if (i in heuristicMatches) continue;
                 const { element, info } = formFieldsInfo[i];
-                const v = resolveFieldValue(i, info, {}, llmMatches);
-                OverlayUtils.setStatus(element, (v !== undefined && v !== null && v !== '') ? 'llm' : 'nomatch');
+                const llmVal = resolveLLMOnly(i, info, llmMatches);
+                if (llmVal !== undefined && llmVal !== null && llmVal !== '') {
+                    OverlayUtils.setStatus(element, 'llm');
+                } else if (!(i in heuristicMatches)) {
+                    OverlayUtils.setStatus(element, 'nomatch');
+                }
             }
         }
 
@@ -217,7 +217,7 @@ function stripFieldInfoForPrompt(info) {
     return out;
 }
 
-function buildVisionPrompt(remainingFields, profiles, customPrompt) {
+function buildVisionPrompt(fields, profiles, customPrompt) {
     let userData = '';
     for (const p of profiles) {
         userData += `\n=== ${p.name || 'Profile'} ===\n${p.data || ''}\n`;
@@ -225,24 +225,27 @@ function buildVisionPrompt(remainingFields, profiles, customPrompt) {
 
     return `You are helping fill a web form. You have:
 1) A screenshot of the form as the user sees it.
-2) DOM metadata for the fields that still need values (already-handled fields are not shown).
+2) DOM metadata for every fillable field on the page.
 3) The user's profile data in plain text.
 
-Use the screenshot to understand the visual layout, grouping, and any labels the DOM doesn't expose cleanly. Use the DOM metadata for exact field targeting. Match each field to the most appropriate profile value.
+IMPORTANT: Some forms have misleading HTML attributes. For example a field visually labeled "City" might carry autocomplete="address-line1", or a continuation line under "Street address" might have no label at all. When the visual label, position, or grouping in the screenshot conflicts with the DOM attributes (id, name, autocomplete), ALWAYS trust what you see in the screenshot. Use DOM metadata only for field targeting (keying your JSON output), not for deciding what a field means.
+
+Match each field to the most appropriate profile value based on what the field visually represents.
 
 User profile data:${userData}
 
 Fields to fill (JSON):
-${JSON.stringify(remainingFields)}
+${JSON.stringify(fields)}
 
-Respond with a single JSON object. Key each entry by the field's 'id' if non-empty, otherwise its 'name' if non-empty, otherwise its numeric 'index'. Value is the string to fill. Omit fields for which no suitable value exists in the profile. No markdown fences, no commentary — JSON only.
+Respond with a single JSON object. Key each entry by its numeric 'index' value (e.g. "0", "4", "6"). Do NOT key by id or name because some forms reuse the same id on multiple fields. Value is the string to fill. Omit fields for which no suitable value exists in the profile. No markdown fences, no commentary -- JSON only.
 ${customPrompt ? `\nAdditional user instructions:\n${customPrompt}` : ''}`;
 }
 
-function resolveFieldValue(i, info, heuristicMatches, llmMatches) {
-    // Heuristic wins over LLM for fields the heuristic matched (cheaper + deterministic).
-    if (i in heuristicMatches) return heuristicMatches[i];
-    // LLM key lookup: id > name > class > label > nearbyText > numeric index.
+// LLM-only lookup (no heuristic fallback). Used for overlay coloring.
+function resolveLLMOnly(i, info, llmMatches) {
+    // Numeric index is the primary key (avoids duplicate-id collisions).
+    if (String(i) in llmMatches) return llmMatches[String(i)];
+    // Fallback keys in case the LLM used id/name instead of index.
     if (info.id && info.id in llmMatches) return llmMatches[info.id];
     if (info.name && info.name in llmMatches) return llmMatches[info.name];
     const classes = Array.isArray(info.classes) ? info.classes : String(info.classes || '').split(' ');
@@ -250,6 +253,14 @@ function resolveFieldValue(i, info, heuristicMatches, llmMatches) {
     if (cls) return llmMatches[cls];
     if (info.label && info.label in llmMatches) return llmMatches[info.label];
     if (info.nearbyText && info.nearbyText in llmMatches) return llmMatches[info.nearbyText];
-    if (String(i) in llmMatches) return llmMatches[String(i)];
+    return undefined;
+}
+
+function resolveFieldValue(i, info, heuristicMatches, llmMatches) {
+    // Vision LLM sees screenshot + DOM, so it has more context than heuristics.
+    // LLM wins; heuristic is fallback for fields the LLM didn't return.
+    const llmVal = resolveLLMOnly(i, info, llmMatches);
+    if (llmVal !== undefined && llmVal !== null && llmVal !== '') return llmVal;
+    if (i in heuristicMatches) return heuristicMatches[i];
     return undefined;
 }

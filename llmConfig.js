@@ -165,11 +165,11 @@ function showConfigForm(configName = '') {
     populateFormWithConfig(configName);
   } else {
     form.reset();
-    // Default new-config preset: Claude Opus 4.6 via OpenRouter (best reasoning
+    // Default new-config preset: Claude Opus 4.7 via OpenRouter (best reasoning
     // for the vision-fill task; swap with a preset button if you want another).
-    document.getElementById('configName').value = 'Claude Opus 4.6';
+    document.getElementById('configName').value = 'Claude Opus 4.7';
     document.getElementById('apiUrl').value = 'https://openrouter.ai/api/v1/chat/completions';
-    document.getElementById('model').value = 'anthropic/claude-opus-4.6';
+    document.getElementById('model').value = 'anthropic/claude-opus-4.7';
     document.getElementById('apiKey').value = '';
   }
 }

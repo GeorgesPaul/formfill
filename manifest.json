@@ -1,11 +1,11 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.15",
+  "version": "1.17",
   "description": "Intelligently fills forms based on user profiles",
   "browser_specific_settings": {
     "gecko": {
-      "id": "formfiller@megahard.pro"
+      "id": "{7d43f771-471b-4067-86f8-21812d277fa0}"
     }
   },
   "permissions": [

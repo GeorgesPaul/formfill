@@ -111,6 +111,15 @@
         'url': 'url',
     };
 
+    // Check whether the visible label maps to a known alias.
+    function labelAlias(info) {
+        if (!info.label) return null;
+        for (const [re, alias] of PATTERNS) {
+            if (re.test(info.label)) return alias;
+        }
+        return null;
+    }
+
     function matchByAutocomplete(info, profile) {
         const ac = (info.autocomplete || '').toLowerCase().trim();
         if (!ac) return null;
@@ -120,6 +129,11 @@
         for (let i = tokens.length - 1; i >= 0; i--) {
             const alias = AUTOCOMPLETE_MAP[tokens[i]];
             if (alias) {
+                // If the visible label clearly maps to a different field type,
+                // the HTML is misleading. Bail and let vision LLM decide.
+                const la = labelAlias(info);
+                if (la && la !== alias) return null;
+
                 const v = resolve(profile, alias);
                 if (v != null) return v;
             }
@@ -167,16 +181,25 @@
     ];
 
     function matchByPattern(info, profile) {
-        // Haystack: prefer strong identifiers (autocomplete, name, id) over loose
-        // text (placeholder, label, nearbyText) to reduce false positives.
         const strong = [info.name, info.id].filter(Boolean).join(' ');
         const weak = [info.placeholder, info.label, info.ariaLabel, info.nearbyText].filter(Boolean).join(' ');
 
+        // Find what strong identifiers (name/id) suggest.
+        let strongAlias = null;
         for (const [re, alias] of PATTERNS) {
-            if (strong && re.test(strong)) {
-                const v = resolve(profile, alias);
-                if (v != null) return v;
-            }
+            if (strong && re.test(strong)) { strongAlias = alias; break; }
+        }
+
+        // If the label maps to a different alias than name/id, trust the label.
+        const la = labelAlias(info);
+        if (la && strongAlias && la !== strongAlias) {
+            const v = resolve(profile, la);
+            if (v != null) return v;
+        }
+
+        if (strongAlias) {
+            const v = resolve(profile, strongAlias);
+            if (v != null) return v;
         }
         for (const [re, alias] of PATTERNS) {
             if (weak && re.test(weak)) {
