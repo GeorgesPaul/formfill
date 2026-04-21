@@ -81,18 +81,11 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
 
         let formFieldsInfo = formElements.map(getFormFieldInfo);
 
-        // --- Filter credential fields ---
-        // Password fields are never filled by LLM (use "Fill User/Pass" button for KeePass)
-        // Username/email fields: keep for LLM on signup pages (profile data), remove on login pages
-        if (isSignupPage()) {
-            // Signup: keep username/email for LLM (profile data), remove only passwords
-            formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info));
-            console.log('[FormFiller] Signup page detected. Removed password fields, keeping username for LLM.');
-        } else {
-            // Login: remove all credential fields (use "Fill User/Pass" button instead)
-            formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info) && !isUsernameField(f.info));
-            console.log('[FormFiller] Login page detected. Removed credential fields (use Fill User/Pass button).');
-        }
+        // Fill Form only skips password fields. Everything else (including
+        // email and username) fills from the profile. Credentials come from
+        // the separate "Fill User/Pass" (KeePass) button.
+        formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info));
+        console.log('[FormFiller] Removed password fields; email/username filled from profile.');
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 

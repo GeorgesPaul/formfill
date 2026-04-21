@@ -52,12 +52,10 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
 
         let formFieldsInfo = formElements.map(getFormFieldInfo);
 
-        // Filter out credential fields (same logic as formFiller.js)
-        if (isSignupPage()) {
-            formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info));
-        } else {
-            formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info) && !isUsernameField(f.info));
-        }
+        // Fill Form only skips password fields. Everything else (including
+        // email and username) fills from the profile. Credentials come from
+        // the separate "Fill User/Pass" (KeePass) button.
+        formFieldsInfo = formFieldsInfo.filter(f => !isPasswordField(f.info));
 
         // Draw detection overlays on every fillable field (purely cosmetic).
         if (typeof OverlayUtils !== 'undefined') {
