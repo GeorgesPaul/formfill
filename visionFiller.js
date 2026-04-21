@@ -230,6 +230,8 @@ function buildVisionPrompt(fields, profiles, customPrompt) {
 
 IMPORTANT: Some forms have misleading HTML attributes. For example a field visually labeled "City" might carry autocomplete="address-line1", or a continuation line under "Street address" might have no label at all. When the visual label, position, or grouping in the screenshot conflicts with the DOM attributes (id, name, autocomplete), ALWAYS trust what you see in the screenshot. Use DOM metadata only for field targeting (keying your JSON output), not for deciding what a field means.
 
+Match the value format to the field. If a placeholder shows a format pattern (e.g. "dd-mm-aaaa", "(XXX) XXX-XXXX", "$X,XXX.XX"), reformat the profile value to match that pattern exactly. If the field has an options list, pick the EXACT option text or value as given -- do not paraphrase.
+
 Match each field to the most appropriate profile value based on what the field visually represents.
 
 User profile data:${userData}

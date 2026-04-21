@@ -261,113 +261,148 @@ function simulateMouseClick(element, outsideClick = false) {
 }
 
 
-async function simulateHumanTyping(element, value) {
-    const specialChars = {
-        ' ': 'Space',
-        '.': 'Period',
-        '/': 'Slash',
-        '-': 'Dash'
-    };
+// Get the native value setter for an element, bypassing any framework overrides.
+function getNativeSetter(element) {
+    const tag = element.tagName;
+    if (tag === 'TEXTAREA') return Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    if (tag === 'SELECT') return Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+    return Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+}
 
-    element.focus();
+function verifyFieldValue(element, expected) {
+    const actual = element.isContentEditable ? element.textContent.trim() : (element.value || '');
+    return actual === String(expected);
+}
 
-    // Clear existing value
-    element.value = '';
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
+// Strategy 1: React/Vue/Angular-aware fill via native prototype setter.
+function fillWithNativeSetter(element, value) {
+    try {
+        const setter = getNativeSetter(element);
+        setter.call(element, value);
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    } catch (_) { return false; }
+}
 
-    for (let i = 0; i < value.length; i++) {
-        if (window.stopFilling) {
-            throw new Error("Form filling stopped by user.");
+// Strategy 2: execCommand insertText (works in many contentEditable-like inputs).
+function fillWithExecCommand(element, value) {
+    try {
+        element.focus();
+        element.select();
+        return document.execCommand('insertText', false, value);
+    } catch (_) { return false; }
+}
+
+// Strategy 2b: Synthesized paste event. Some masked/formatted inputs only
+// process value changes through their paste handler.
+function fillWithPaste(element, value) {
+    try {
+        element.focus();
+        try { element.select(); } catch (_) {}
+        const dt = new DataTransfer();
+        dt.setData('text/plain', String(value));
+        const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+        const delivered = element.dispatchEvent(ev);
+        if (!delivered || ev.defaultPrevented === false) {
+            // Handler didn't set the value -- do it ourselves so the paste event's
+            // downstream listeners (input/change) still fire against a populated field.
+            try { getNativeSetter(element).call(element, value); } catch (_) { element.value = value; }
         }
-        const char = value[i];
-        const keyChar = specialChars[char] || char;
+        element.dispatchEvent(new InputEvent('input', { inputType: 'insertFromPaste', data: String(value), bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    } catch (_) { return false; }
+}
 
-        // Simulate keydown
-        const keydownEvent = new KeyboardEvent('keydown', {
-            key: char,
-            code: `Key${keyChar.toUpperCase()}`,
-            bubbles: true,
-            cancelable: true,
-        });
-        element.dispatchEvent(keydownEvent);
+// Per-character insertText. Mimics real keyboard typing: each char flows
+// through the browser's input pipeline, so masked/formatted inputs (Syncfusion,
+// Cleave, IMask, etc.) can intercept and format naturally. The first char
+// replaces any existing selection so previous strategies' partial state
+// is overwritten.
+async function fillWithCharByChar(element, value) {
+    element.focus();
+    // Select existing content so the first insertText overwrites it.
+    try { element.setSelectionRange(0, (element.value || '').length); } catch (_) {}
 
-        // Simulate keypress
-        const keypressEvent = new KeyboardEvent('keypress', {
-            key: char,
-            code: `Key${keyChar.toUpperCase()}`,
-            bubbles: true,
-            cancelable: true,
-            charCode: char.charCodeAt(0),
-        });
-        element.dispatchEvent(keypressEvent);
-
-        // Update value and dispatch input event
-        element.value += char;
-        const inputEvent = new InputEvent('input', {
-            inputType: 'insertText',
-            data: char,
-            bubbles: true,
-            cancelable: true,
-        });
-        element.dispatchEvent(inputEvent);
-
-        // Simulate keyup
-        const keyupEvent = new KeyboardEvent('keyup', {
-            key: char,
-            code: `Key${keyChar.toUpperCase()}`,
-            bubbles: true,
-            cancelable: true,
-        });
-        element.dispatchEvent(keyupEvent);
-
-        // Random delay between keystrokes (50-150ms)
-        await sleep(1 + Math.random() * 10);
+    const str = String(value);
+    for (const char of str) {
+        if (window.stopFilling) throw new Error("Form filling stopped by user.");
+        const code = char.charCodeAt(0);
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true, cancelable: true, keyCode: code, charCode: code }));
+        document.execCommand('insertText', false, char);
+        element.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true, keyCode: code }));
+        await sleep(5);
     }
-
-    // Final events
     element.dispatchEvent(new Event('change', { bubbles: true }));
     element.dispatchEvent(new Event('blur', { bubbles: true }));
 }
 
-async function simulateInput(element, value) {
-    // Try different methods to set the value
-    const methods = [
-        // Method 1: Direct value assignment
-        () => {
-            element.value = value;
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-        },
-        // Method 2: Using Object.getOwnPropertyDescriptor
-        () => {
-            const propertyDescriptor = Object.getOwnPropertyDescriptor(element.__proto__, 'value');
-            propertyDescriptor.set.call(element, value);
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-        },
-        // Method 3: Using defineProperty
-        () => {
-            Object.defineProperty(element, 'value', { writable: true, value: value });
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-        },
-        // Method 4: Simulated human typing
-        () => simulateHumanTyping(element, value)
-    ];
+// Relaxed verify for masked/formatted inputs. Returns true if every
+// alphanumeric character of the expected value appears in order somewhere
+// in the actual value. Handles cases where the mask reformats the string
+// (e.g. typed "18041985", displayed "18-04-1985").
+function verifyFieldValueRelaxed(element, expected) {
+    const actual = element.isContentEditable ? element.textContent : (element.value || '');
+    const strip = s => String(s).replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
+    const a = strip(actual), e = strip(expected);
+    return e.length > 0 && a.includes(e);
+}
 
-    triggerEvents(element, ['input', 'change', 'blur']);
+// Fill a text/textarea/contenteditable field with verify-and-retry cascade.
+async function fillTextInput(element, value) {
+    element.focus();
+    const tag = element.tagName;
 
-    for (const method of methods) {
-        await method();
-        await sleep(100);  // Wait a bit to see if the value sticks
-        if (element.value === value) {
-            console.log("Input successful with method:", method.name);
+    // Strategy 1: Native setter (fast, works on React/Vue/Angular vanilla inputs)
+    console.log('[fillTextInput] Strategy 1: native setter');
+    fillWithNativeSetter(element, value);
+    await sleep(30);
+    if (verifyFieldValue(element, value)) return;
+
+    // Strategy 2: execCommand insertText (whole value)
+    console.log('[fillTextInput] Strategy 2: execCommand insertText (whole)');
+    fillWithExecCommand(element, value);
+    await sleep(30);
+    if (verifyFieldValue(element, value)) return;
+
+    // Strategy 3: Synthesized paste event
+    console.log('[fillTextInput] Strategy 3: paste event');
+    fillWithPaste(element, value);
+    await sleep(30);
+    if (verifyFieldValue(element, value)) return;
+
+    // Strategy 4: Per-char insertText with full value. Masks can reject
+    // separator chars but still accept digits -- this lets them format.
+    console.log('[fillTextInput] Strategy 4: per-char insertText (full)');
+    await fillWithCharByChar(element, value);
+    await sleep(100);
+    if (verifyFieldValue(element, value)) return;
+    // Relaxed match: mask may have reformatted our input. Good enough.
+    if (verifyFieldValueRelaxed(element, value)) {
+        console.log('[fillTextInput] Strategy 4 succeeded with relaxed verify (masked input).');
+        return;
+    }
+
+    // Strategy 5: Per-char insertText with separators stripped. For masks
+    // that auto-insert their own separators and reject ours.
+    const alnum = String(value).replace(/[^0-9a-zA-Z]/g, '');
+    if (alnum && alnum !== String(value)) {
+        console.log('[fillTextInput] Strategy 5: per-char insertText (alphanumerics only)');
+        // Clear first so we don't accumulate on top of strategy 4 residue.
+        try { getNativeSetter(element).call(element, ''); } catch (_) { element.value = ''; }
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(20);
+        await fillWithCharByChar(element, alnum);
+        await sleep(100);
+        if (verifyFieldValue(element, value) || verifyFieldValueRelaxed(element, value)) {
+            console.log('[fillTextInput] Strategy 5 succeeded.');
             return;
         }
     }
 
-    console.error("Failed to set input value after trying all methods");
+    console.warn('[fillField] Value may not have stuck for:', element.id || element.name || element,
+                 'expected:', value, 'got:', element.value);
 }
 
 async function fillField(element, value, info) {
@@ -425,13 +460,19 @@ async function fillField(element, value, info) {
                 }
             }
         }
+    } else if (isCustomCombobox(element)) {
+        // ARIA combobox / custom dropdown (Syncfusion, MUI, Ant Design, etc.).
+        // Open it, click the matching option.
+        const ok = await fillCustomCombobox(element, value);
+        if (!ok) {
+            // Fall back to typing in case it's a combobox with free-text entry.
+            await fillTextInput(element, value);
+        }
     } else {
-        // This is often the most reliable method for complex sites.
-        await simulateHumanTyping(element, value);
+        // Verify-and-retry cascade: native setter, then execCommand, then keystrokes.
+        // Handles React/Vue/Angular controlled inputs that ignore raw value assignment.
+        await fillTextInput(element, value);
     }
-
-    // The blur event is already handled inside simulateHumanTyping and fillSelectField.
-    // element.blur(); // You can add this for extra certainty if needed.
 
     await sleep(sleep_between_events_ms);
     element.setAttribute('data-filled-by-extension', 'true'); // Mark as filled in case of re-filling to avoid filling same element
@@ -459,6 +500,46 @@ function getDomLabelForElement(el) {
     return '';
 }
 
+// Multi-strategy option matcher. Works on arrays of {text, value} pairs so it
+// can be reused for both native <select> options and ARIA listbox items.
+// Order: exact > numeric equivalence > startsWith > substring. Returns the
+// matched entry or null.
+function findMatchingOption(entries, value) {
+    const target = String(value).trim().toLowerCase();
+    if (!target) return null;
+    const targetNum = Number(target);
+    const isTargetNum = target !== '' && !isNaN(targetNum);
+
+    const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+
+    // 1. Exact text or value match (case-insensitive, trimmed)
+    for (const e of entries) {
+        if (norm(e.text) === target || norm(e.value) === target) return e;
+    }
+    // 2. Numeric equivalence ("4" === "04" === " 4 ")
+    if (isTargetNum) {
+        for (const e of entries) {
+            const tn = Number(norm(e.text));
+            if (!isNaN(tn) && tn === targetNum) return e;
+        }
+        for (const e of entries) {
+            const vn = Number(norm(e.value));
+            if (!isNaN(vn) && vn === targetNum) return e;
+        }
+    }
+    // 3. Prefix match either direction ("Apr" matches "April"; "April" matches "Apr")
+    for (const e of entries) {
+        const t = norm(e.text);
+        if (t && (t.startsWith(target) || target.startsWith(t))) return e;
+    }
+    // 4. Substring fallback
+    for (const e of entries) {
+        const t = norm(e.text);
+        if (t && (t.includes(target) || target.includes(t))) return e;
+    }
+    return null;
+}
+
 async function fillSelectField(selectElement, value) {
     console.log(`Filling select field ${selectElement.name} with value:`, value);
 
@@ -469,13 +550,13 @@ async function fillSelectField(selectElement, value) {
     await waitForOptions(selectElement);
 
     const options = Array.from(selectElement.options);
-    const optionToSelect = options.find(option =>
-        option.text.trim().toLowerCase() === value.toString().toLowerCase() ||
-        option.value.trim().toLowerCase() === value.toString().toLowerCase()
-    );
+    const optionToSelect = findMatchingOption(options, value);
 
     if (optionToSelect) {
-        selectElement.value = optionToSelect.value;
+        // Native setter so React-controlled <select> registers the change.
+        try { getNativeSetter(selectElement).call(selectElement, optionToSelect.value); }
+        catch (_) { selectElement.value = optionToSelect.value; }
+        selectElement.dispatchEvent(new Event('input', { bubbles: true }));
         selectElement.dispatchEvent(new Event('change', { bubbles: true }));
 
         // Wait for the selection to be applied
@@ -485,6 +566,106 @@ async function fillSelectField(selectElement, value) {
     } else {
         console.warn(`Could not find matching option for ${value} in`, selectElement);
     }
+}
+
+// Detects widgets that look like list dropdowns but are not native <select> —
+// MUI Autocomplete, Ant Design Select, Chakra Menu, ARIA comboboxes. Excludes
+// date pickers and other calendar/dialog popups, which should be typed into.
+function isCustomCombobox(element) {
+    if (!element) return false;
+    if (element.tagName === 'SELECT') return false;
+
+    // Placeholder with date-segment letters (dd/mm/yy/yyyy/aa/aaaa/jj) indicates
+    // a date picker. These open a calendar, not a listbox -- type into them.
+    const ph = element.getAttribute('placeholder') || '';
+    if (/(^|\W)(dd|mm|yy|yyyy|aa|aaaa|jj|tt)(\W|$)/i.test(ph)) return false;
+
+    // aria-haspopup="dialog" / "grid" / "tree" are calendars or dialogs, not listboxes.
+    const hp = (element.getAttribute('aria-haspopup') || '').toLowerCase();
+    if (hp === 'dialog' || hp === 'grid') return false;
+
+    const role = (element.getAttribute('role') || '').toLowerCase();
+    if (role === 'combobox' || role === 'listbox') return true;
+    if (hp === 'listbox' || hp === 'menu' || hp === 'true') return true;
+    // Readonly input with a popup anchor pointing to a listbox-style popup.
+    if ((element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') &&
+        (element.readOnly || element.hasAttribute('readonly')) &&
+        (element.getAttribute('aria-controls') || element.getAttribute('aria-owns'))) {
+        return true;
+    }
+    return false;
+}
+
+// Find the listbox/menu associated with a combobox. Tries aria-controls and
+// aria-owns first, then scans newly-visible listbox popups in the document.
+function findAssociatedListbox(element) {
+    const ids = [element.getAttribute('aria-controls'), element.getAttribute('aria-owns')]
+        .filter(Boolean).flatMap(s => s.split(/\s+/));
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el && isVisible(el)) return el;
+    }
+    // Any visible listbox/menu on the page (last opened usually).
+    const candidates = Array.from(document.querySelectorAll(
+        '[role="listbox"], [role="menu"], [role="tree"], [role="grid"]'
+    )).filter(isVisible);
+    return candidates[candidates.length - 1] || null;
+}
+
+function isVisible(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    return true;
+}
+
+// Open a custom combobox, click the matching option. Generic — no site-specific logic.
+async function fillCustomCombobox(element, value) {
+    console.log('[fillCustomCombobox] Opening combobox for value:', value);
+    element.focus();
+    simulateMouseClick(element);
+
+    // Wait for a listbox popup to appear.
+    let listbox = null;
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+        if (window.stopFilling) throw new Error("Form filling stopped by user.");
+        listbox = findAssociatedListbox(element);
+        if (listbox) break;
+        await sleep(50);
+    }
+    if (!listbox) {
+        console.warn('[fillCustomCombobox] No listbox appeared after clicking');
+        return false;
+    }
+
+    // Collect option-like descendants.
+    const optionEls = Array.from(listbox.querySelectorAll(
+        '[role="option"], [role="menuitem"], [role="treeitem"], [role="gridcell"], li, option'
+    )).filter(isVisible);
+
+    const entries = optionEls.map(el => ({
+        text: cleanText(el.textContent || ''),
+        value: el.getAttribute('data-value') || el.getAttribute('value') || cleanText(el.textContent || ''),
+        el
+    }));
+
+    const match = findMatchingOption(entries, value);
+    if (!match) {
+        console.warn('[fillCustomCombobox] No matching option for', value, 'among', entries.map(e => e.text));
+        // Close the popup so it doesn't stay open.
+        simulateMouseClick(document.body, true);
+        return false;
+    }
+
+    match.el.scrollIntoView({ block: 'nearest' });
+    simulateMouseClick(match.el);
+    await sleep(50);
+    match.el.dispatchEvent(new Event('change', { bubbles: true }));
+    console.log('[fillCustomCombobox] Clicked option:', match.text);
+    return true;
 }
 
 async function waitForOptions(selectElement, timeout = 2000) {
