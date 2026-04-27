@@ -260,6 +260,94 @@ function simulateMouseClick(element, outsideClick = false) {
     }
 }
 
+// Full pointer/mouse/focus/click sequence at the field's center. Bot-detection
+// scripts watch for pointerdown/mousedown before input -- a bare focus() does
+// not satisfy them. Use this before mutating a text field's value.
+function simulateRealisticFocus(element) {
+    try { element.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const opts = { view: window, bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1 };
+
+    const fire = (Ctor, type, init) => {
+        try { element.dispatchEvent(new Ctor(type, init)); } catch (_) {}
+    };
+
+    fire(PointerEvent, 'pointerover', { ...opts, pointerType: 'mouse' });
+    fire(MouseEvent, 'mouseover', opts);
+    fire(PointerEvent, 'pointermove', { ...opts, pointerType: 'mouse' });
+    fire(MouseEvent, 'mousemove', opts);
+    fire(PointerEvent, 'pointerdown', { ...opts, pointerType: 'mouse', isPrimary: true });
+    fire(MouseEvent, 'mousedown', opts);
+    try { element.focus(); } catch (_) {}
+    fire(FocusEvent, 'focus', { bubbles: false });
+    fire(FocusEvent, 'focusin', { bubbles: true });
+    fire(PointerEvent, 'pointerup', { ...opts, pointerType: 'mouse', isPrimary: true, buttons: 0 });
+    fire(MouseEvent, 'mouseup', { ...opts, buttons: 0 });
+    fire(MouseEvent, 'click', { ...opts, buttons: 0 });
+}
+
+// Append a single character then delete it, producing real keydown/keyup/
+// beforeinput/input events. Used after non-typing fill strategies so that
+// detection scripts which require keystroke evidence see them. Net change to
+// the field's value is zero. Caller must already have focus on the element.
+async function tickleField(element) {
+    if (!element) return;
+    const TICKLE_CHAR = 'a';
+    const TICKLE_CODE = TICKLE_CHAR.charCodeAt(0);
+    const isCE = !!element.isContentEditable;
+
+    try {
+        // Park the caret at the end so insertText appends.
+        if (!isCE) {
+            try {
+                const len = (element.value || '').length;
+                element.setSelectionRange(len, len);
+            } catch (_) {}
+        }
+
+        // Insert the tickle char.
+        element.dispatchEvent(new KeyboardEvent('keydown', {
+            key: TICKLE_CHAR, code: 'Key' + TICKLE_CHAR.toUpperCase(),
+            keyCode: TICKLE_CODE, charCode: TICKLE_CODE, bubbles: true, cancelable: true
+        }));
+        const inserted = document.execCommand('insertText', false, TICKLE_CHAR);
+        if (!inserted && !isCE) {
+            // execCommand blocked (CSP/Trusted Types). Append via native setter.
+            try {
+                const setter = getNativeSetter(element);
+                setter.call(element, (element.value || '') + TICKLE_CHAR);
+                element.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: TICKLE_CHAR, bubbles: true }));
+            } catch (_) {}
+        }
+        element.dispatchEvent(new KeyboardEvent('keyup', {
+            key: TICKLE_CHAR, code: 'Key' + TICKLE_CHAR.toUpperCase(),
+            keyCode: TICKLE_CODE, charCode: TICKLE_CODE, bubbles: true
+        }));
+        await sleep(15);
+
+        // Delete it (Backspace).
+        element.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true, cancelable: true
+        }));
+        const deleted = document.execCommand('delete', false);
+        if (!deleted && !isCE) {
+            try {
+                const setter = getNativeSetter(element);
+                const v = element.value || '';
+                if (v.endsWith(TICKLE_CHAR)) setter.call(element, v.slice(0, -1));
+                element.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward', bubbles: true }));
+            } catch (_) {}
+        }
+        element.dispatchEvent(new KeyboardEvent('keyup', {
+            key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true
+        }));
+    } catch (e) {
+        console.warn('[tickleField] failed:', e);
+    }
+}
+
 
 // Get the native value setter for an element, bypassing any framework overrides.
 function getNativeSetter(element) {
@@ -350,38 +438,38 @@ function verifyFieldValueRelaxed(element, expected) {
 }
 
 // Fill a text/textarea/contenteditable field with verify-and-retry cascade.
+// Returns { filled, typed } so the caller can decide whether to tickle.
 async function fillTextInput(element, value) {
-    element.focus();
     const tag = element.tagName;
 
     // Strategy 1: Native setter (fast, works on React/Vue/Angular vanilla inputs)
     console.log('[fillTextInput] Strategy 1: native setter');
     fillWithNativeSetter(element, value);
     await sleep(30);
-    if (verifyFieldValue(element, value)) return;
+    if (verifyFieldValue(element, value)) return { filled: true, typed: false };
 
     // Strategy 2: execCommand insertText (whole value)
     console.log('[fillTextInput] Strategy 2: execCommand insertText (whole)');
     fillWithExecCommand(element, value);
     await sleep(30);
-    if (verifyFieldValue(element, value)) return;
+    if (verifyFieldValue(element, value)) return { filled: true, typed: false };
 
     // Strategy 3: Synthesized paste event
     console.log('[fillTextInput] Strategy 3: paste event');
     fillWithPaste(element, value);
     await sleep(30);
-    if (verifyFieldValue(element, value)) return;
+    if (verifyFieldValue(element, value)) return { filled: true, typed: false };
 
     // Strategy 4: Per-char insertText with full value. Masks can reject
     // separator chars but still accept digits -- this lets them format.
     console.log('[fillTextInput] Strategy 4: per-char insertText (full)');
     await fillWithCharByChar(element, value);
     await sleep(100);
-    if (verifyFieldValue(element, value)) return;
+    if (verifyFieldValue(element, value)) return { filled: true, typed: true };
     // Relaxed match: mask may have reformatted our input. Good enough.
     if (verifyFieldValueRelaxed(element, value)) {
         console.log('[fillTextInput] Strategy 4 succeeded with relaxed verify (masked input).');
-        return;
+        return { filled: true, typed: true };
     }
 
     // Strategy 5: Per-char insertText with separators stripped. For masks
@@ -397,12 +485,13 @@ async function fillTextInput(element, value) {
         await sleep(100);
         if (verifyFieldValue(element, value) || verifyFieldValueRelaxed(element, value)) {
             console.log('[fillTextInput] Strategy 5 succeeded.');
-            return;
+            return { filled: true, typed: true };
         }
     }
 
     console.warn('[fillField] Value may not have stuck for:', element.id || element.name || element,
                  'expected:', value, 'got:', element.value);
+    return { filled: false, typed: true };
 }
 
 async function fillField(element, value, info) {
@@ -412,7 +501,21 @@ async function fillField(element, value, info) {
     const tag = element.tagName.toLowerCase();
     const inputType = (element.getAttribute('type') || '').toLowerCase();
 
-    element.focus(); // Bring the element into focus
+    // Text-like fields go through the typing path: realistic click+focus first
+    // (so detection scripts see pointer/mouse events), then fill, then a
+    // single-char tickle if no per-char typing already happened.
+    const isTextLike = !(
+        tag === 'select' ||
+        inputType === 'checkbox' ||
+        inputType === 'radio' ||
+        isCustomCombobox(element)
+    );
+
+    if (isTextLike) {
+        simulateRealisticFocus(element);
+    } else {
+        element.focus();
+    }
     await sleep(sleep_between_events_ms);
 
     if (tag === 'select') {
@@ -471,7 +574,13 @@ async function fillField(element, value, info) {
     } else {
         // Verify-and-retry cascade: native setter, then execCommand, then keystrokes.
         // Handles React/Vue/Angular controlled inputs that ignore raw value assignment.
-        await fillTextInput(element, value);
+        const result = await fillTextInput(element, value);
+        // If a non-typing strategy succeeded, leave a keystroke trail for
+        // detection scripts that gate on real keyboard events.
+        if (result && result.filled && !result.typed) {
+            await tickleField(element);
+            await sleep(sleep_between_events_ms);
+        }
     }
 
     await sleep(sleep_between_events_ms);
