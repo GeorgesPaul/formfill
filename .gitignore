@@ -5,6 +5,9 @@
 
 apitest.html
 
+# Stray Windows reserved-device file occasionally created by a misdirected redirect
+nul
+
 # Firefox Extension zip file
 *.zip
 
