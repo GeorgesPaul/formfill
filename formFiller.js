@@ -111,59 +111,60 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
 
         if (isCancelled()) throw new Error("Form filling stopped by user.");
 
+        // --- Build the cached signature->value map from the first pass ---
+        const intended = new Map();
         for (let i = 0; i < formFieldsInfo.length; i++) {
-            const { element, info } = formFieldsInfo[i];
-
-            if (isCancelled()) {
-                throw new Error("Form filling stopped by user.");
-            }
-
-            // 2. Check Safety Timeout (TTL)
-            if (Date.now() - processStartTime > MAX_EXECUTION_TIME) {
-                throw new Error("Form filling stopped: Safety timeout reached (5 minutes).");
-            }
-
-            // Match LLM result by: id > name > CSS class > label > nearbyText > numeric index
-            // Using 'in' operator so boolean false values are handled correctly
-            let value;
-            if (info.id && info.id in filledFields) {
-                value = filledFields[info.id];
-            } else if (info.name && info.name in filledFields) {
-                value = filledFields[info.name];
-            } else {
-                const classes = Array.isArray(info.classes) ? info.classes : info.classes.split(' ');
-                const matchingClass = classes.find(cls => cls && cls in filledFields);
-                if (matchingClass) {
-                    value = filledFields[matchingClass];
-                } else if (info.label && info.label in filledFields) {
-                    value = filledFields[info.label];
-                } else if (info.nearbyText && info.nearbyText in filledFields) {
-                    value = filledFields[info.nearbyText];
-                } else if (String(i) in filledFields) {
-                    value = filledFields[String(i)];
-                }
-            }
-
+            const { info } = formFieldsInfo[i];
+            const value = resolveDomValue(i, info, filledFields);
             if (value !== undefined && value !== null && value !== '') {
-                // Check if element already has the correct value
-                if (elementHasCorrectValue(element, value)) {
-                    console.log('Skipping field with correct value:', info.id || info.name || info.label || i);
-                    element.setAttribute('data-filled-by-extension', 'true');
-                    processed++;
-                    continue;
-                }
-
-                await fillField(element, value, info);
-                filledCount++;
-            } else {
-                console.log('No match found for:', info.id, info.name, info.label, 'index:', i);
+                intended.set(fieldSignature(info), value);
             }
-
-            processed++;
-            updateFillProgress(processed, filledCount, totalFields, `Processing ${processed} out of ${totalFields} fields (filled ${filledCount})...`, sessionId);
-
-            await sleep(10);
         }
+
+        // Re-query ALL visible non-password fields each pass so the loop sees
+        // fields the form blanked and fields that newly appeared.
+        const buildFields = () => {
+            const docs = findIframesWithForms();
+            return getVisibleFormElements(docs)
+                .map(getFormFieldInfo)
+                .filter(f => !isPasswordField(f.info));
+        };
+
+        const cancelledOrTimedOut = () =>
+            isCancelled() || (Date.now() - processStartTime > MAX_EXECUTION_TIME);
+
+        // DOM-only recall: re-ask the text LLM about the current fields so
+        // newly appeared ones get values. Keyed by signature.
+        const recallForNewFields = async (fields) => {
+            if (cancelledOrTimedOut()) throw new Error("Form filling stopped by user.");
+            const infos = fields.map(f => ({ info: f.info }));
+            const more = await fillFormSinglePrompt(infos, profileData, customPrompt, sessionId);
+            if (cancelledOrTimedOut()) throw new Error("Form filling stopped by user.");
+            const out = new Map();
+            fields.forEach((f, idx) => {
+                const v = resolveDomValue(idx, f.info, more);
+                if (v !== undefined && v !== null && v !== '') {
+                    out.set(fieldSignature(f.info), v);
+                }
+            });
+            return out;
+        };
+
+        const loopResult = await runFillVerifyLoop({
+            getFields: buildFields,
+            initialValues: intended,
+            recallForNewFields,
+            isCancelled: cancelledOrTimedOut,
+            onPass: ({ pass, wrong, filledCount: fc, newCount }) => {
+                filledCount = fc;
+                processed = totalFields;
+                updateFillProgress(Math.max(0, totalFields - wrong), fc, totalFields,
+                    `Pass ${pass}: ${fc} filled, ${wrong} remaining` +
+                    (newCount ? `, ${newCount} new field(s)` : '') + '...', sessionId);
+            },
+        });
+        filledCount = loopResult.filledCount;
+        processed = totalFields;
 
         simulateMouseClick(document.body, true);
 
@@ -288,6 +289,21 @@ function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPro
     return { staticPart, dynamicPart };
 }
 
+
+// Resolve the LLM value for a field by: id > name > CSS class > label >
+// nearbyText > numeric index. 'in' is used so falsy values still match.
+function resolveDomValue(i, info, filledFields) {
+    if (info.id && info.id in filledFields) return filledFields[info.id];
+    if (info.name && info.name in filledFields) return filledFields[info.name];
+    const classes = Array.isArray(info.classes)
+        ? info.classes : String(info.classes || '').split(' ');
+    const matchingClass = classes.find(cls => cls && cls in filledFields);
+    if (matchingClass) return filledFields[matchingClass];
+    if (info.label && info.label in filledFields) return filledFields[info.label];
+    if (info.nearbyText && info.nearbyText in filledFields) return filledFields[info.nearbyText];
+    if (String(i) in filledFields) return filledFields[String(i)];
+    return undefined;
+}
 
 function trimAndRemoveQuotes(str) {
     // First, trim leading and trailing whitespace

@@ -182,8 +182,24 @@ function elementHasCorrectValue(element, expectedValue) {
         return false;
     }
 
-    // For other input types, do a direct comparison
-    return normalizedCurrent === normalizedExpected;
+    // Exact, then case-insensitive.
+    if (normalizedCurrent === normalizedExpected) return true;
+    if (normalizedCurrent.toLowerCase() === normalizedExpected.toLowerCase()) return true;
+
+    // Tolerant compare for masked / auto-reformatted fields (phone, date,
+    // currency). The form may legitimately turn "1234567890" into
+    // "(123) 456-7890" or "18041985" into "18-04-1985"; treat those as
+    // correct so the refill loop does not fight the mask forever.
+    const strip = s => s.replace(/[^0-9a-z]/gi, '').toLowerCase();
+    const a = strip(normalizedCurrent);
+    const e = strip(normalizedExpected);
+    if (e.length >= 3 && a === e) return true;
+    // Mask added a fixed prefix/suffix (e.g. "$1,234.00", "+1..."): the
+    // intended value still appears as a contiguous run. Min length guards
+    // against short false positives.
+    if (e.length >= 4 && a.includes(e)) return true;
+
+    return false;
 }
 
 function getVisibleFormElements(documents) {
@@ -494,9 +510,9 @@ async function fillTextInput(element, value) {
     return { filled: false, typed: true };
 }
 
-async function fillField(element, value, info) {
+async function fillField(element, value, info, attempt = 1) {
     const sleep_between_events_ms = 50;
-    console.log(`Filling field:`, element, `with value:`, value);
+    console.log(`Filling field (attempt ${attempt}):`, element, `with value:`, value);
 
     const tag = element.tagName.toLowerCase();
     const inputType = (element.getAttribute('type') || '').toLowerCase();
@@ -572,6 +588,15 @@ async function fillField(element, value, info) {
             await fillTextInput(element, value);
         }
     } else {
+        // On a retry pass the field may hold stale/partial text (a previous
+        // attempt's residue, or a value the form reset). Clear it first so the
+        // fill cascade starts clean instead of appending onto garbage.
+        if (attempt > 1) {
+            try { getNativeSetter(element).call(element, ''); }
+            catch (_) { try { element.value = ''; } catch (_) {} }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            await sleep(20);
+        }
         // Verify-and-retry cascade: native setter, then execCommand, then keystrokes.
         // Handles React/Vue/Angular controlled inputs that ignore raw value assignment.
         const result = await fillTextInput(element, value);
@@ -803,4 +828,139 @@ async function waitForSelection(selectElement, expectedValue, timeout = 2000) {
         await new Promise(resolve => setTimeout(resolve, 50));
     }
     throw new Error('Timeout waiting for select value to be applied');
+}
+
+// ---------------------------------------------------------------------------
+// Fill / verify / refill loop (shared by the vision and DOM-only fill paths).
+// ---------------------------------------------------------------------------
+
+// Stable identity for a field across DOM re-queries. id/name survive remounts;
+// for fields with neither, fall back to structural attributes. This is what
+// lets us re-fill a field the form blanked, and recognise a brand-new field.
+function fieldSignature(info) {
+    if (info && info.id) return 'id:' + info.id;
+    if (info && info.name) return 'name:' + info.name;
+    const i = info || {};
+    return 'sig:' + [i.type, i.label, i.placeholder, i.autocomplete,
+                     String(i.nearbyText || '').slice(0, 40)].join('|');
+}
+
+// Re-query the live page each pass, re-fill anything wrong/missing/reset from a
+// cached signature->value map, and re-trigger the LLM when new fields appear.
+//
+// opts:
+//   getFields()            -> [{element, info}] for all fillable fields NOW
+//   initialValues          -> Map(signature -> value) from the first LLM pass
+//   recallForNewFields(fields, newFields) -> Promise<Map sig->value> | null
+//   isCancelled()          -> boolean (user stop / superseded session)
+//   onPass({pass,wrong,changed,newCount,filledCount})  (optional)
+//   maxPasses (default 3), maxRecalls (default 3), settleMs (default 300)
+//
+// Returns { filledCount }.
+async function runFillVerifyLoop(opts) {
+    const intended = opts.initialValues instanceof Map
+        ? opts.initialValues : new Map();
+    const maxPasses = opts.maxPasses || 3;
+    const maxRecalls = opts.maxRecalls || 3;
+    const settleMs = opts.settleMs == null ? 300 : opts.settleMs;
+    // Seed with the fields present at loop start so pass 1 is the baseline:
+    // the caller already ran the first LLM pass, so nothing here is "new" yet
+    // and no recall fires until the form actually produces new fields.
+    const seen = new Set();
+    try {
+        for (const f of opts.getFields()) seen.add(fieldSignature(f.info));
+    } catch (_) {}
+    let filledCount = 0;
+    let recalls = 0;
+
+    for (let pass = 1; pass <= maxPasses; pass++) {
+        if (opts.isCancelled && opts.isCancelled()) {
+            throw new Error("Form filling stopped by user.");
+        }
+
+        const fields = opts.getFields();
+
+        // Newly appeared fields = signatures we have never processed before.
+        const newFields = fields.filter(f => !seen.has(fieldSignature(f.info)));
+
+        // Re-trigger the LLM only when new fields actually showed up, and only
+        // up to maxRecalls times. No new fields -> no recall (cost guard).
+        if (newFields.length > 0 && recalls < maxRecalls && opts.recallForNewFields) {
+            recalls++;
+            try {
+                const extra = await opts.recallForNewFields(fields, newFields);
+                if (extra instanceof Map) {
+                    for (const [k, v] of extra) {
+                        if (v !== undefined && v !== null && v !== '') intended.set(k, v);
+                    }
+                }
+            } catch (e) {
+                if (e && e.message === "Form filling stopped by user.") throw e;
+                console.warn('[runFillVerifyLoop] recall failed:', e);
+            }
+        }
+
+        for (const f of fields) seen.add(fieldSignature(f.info));
+
+        let changed = 0;
+        for (const { element, info } of fields) {
+            if (opts.isCancelled && opts.isCancelled()) {
+                throw new Error("Form filling stopped by user.");
+            }
+            const value = intended.get(fieldSignature(info));
+            if (value === undefined || value === null || value === '') continue;
+
+            if (elementHasCorrectValue(element, value)) {
+                element.setAttribute('data-filled-by-extension', 'true');
+                if (typeof OverlayUtils !== 'undefined') OverlayUtils.setStatus(element, 'llm');
+                continue;
+            }
+
+            if (typeof OverlayUtils !== 'undefined') OverlayUtils.pulseFilling(element);
+            await fillField(element, value, info, pass);
+            filledCount++;
+            changed++;
+        }
+
+        // Let the form settle: masks reformat, dependent fields render/reset.
+        await sleep(settleMs);
+
+        // Re-verify against the (possibly mutated) DOM.
+        let wrong = 0;
+        const after = opts.getFields();
+        for (const { element, info } of after) {
+            const value = intended.get(fieldSignature(info));
+            if (value === undefined || value === null || value === '') continue;
+            if (!elementHasCorrectValue(element, value)) {
+                wrong++;
+                if (typeof OverlayUtils !== 'undefined') OverlayUtils.setStatus(element, 'nomatch');
+            }
+        }
+
+        if (opts.onPass) {
+            opts.onPass({ pass, wrong, changed, newCount: newFields.length, filledCount });
+        }
+        console.log(`[runFillVerifyLoop] pass ${pass}: filled ${changed} this pass, ` +
+                    `${wrong} still wrong, ${newFields.length} new field(s).`);
+
+        // Done when nothing is wrong and the form stopped producing new fields.
+        if (wrong === 0 && newFields.length === 0) break;
+    }
+
+    return { filledCount };
+}
+
+// Ask the background script for a fresh screenshot of the page (content
+// scripts cannot call browser.tabs.captureVisibleTab themselves). Used by the
+// vision path mid-loop after the form has changed.
+async function captureFreshScreenshot() {
+    try {
+        const res = await browser.runtime.sendMessage({ action: 'captureScreenshot' });
+        if (typeof res === 'string') return res;
+        if (res && res.dataUrl) return res.dataUrl;
+        return null;
+    } catch (e) {
+        console.warn('[captureFreshScreenshot] failed:', e);
+        return null;
+    }
 }

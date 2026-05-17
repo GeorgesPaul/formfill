@@ -14,6 +14,19 @@ function generateLoadingBar(percentage) {
 }
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Fresh screenshot for the content script's mid-loop vision recall. Content
+  // scripts can't call tabs.captureVisibleTab; background can. Returning a
+  // Promise resolves it as the message response (Firefox WebExtensions).
+  if (message.action === "captureScreenshot") {
+    const winId = sender && sender.tab ? sender.tab.windowId : null;
+    return browser.tabs.captureVisibleTab(winId, { format: 'png' })
+      .then(dataUrl => ({ dataUrl }))
+      .catch(err => {
+        console.error("captureScreenshot failed:", err);
+        return { dataUrl: null };
+      });
+  }
+
   let computedMessage = '';
   let totalFilled = 0;
   let totalProcessed = 0;

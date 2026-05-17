@@ -129,31 +129,71 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
             }
         }
 
-        // --- Fill: merge heuristic + LLM, iterate fields ---
+        // --- Build the cached signature->value map from the first pass ---
+        const intended = new Map();
         for (let i = 0; i < formFieldsInfo.length; i++) {
-            if (isCancelled()) throw new Error("Form filling stopped by user.");
-            if (Date.now() - processStartTime > MAX_EXECUTION_TIME) {
-                throw new Error("Form filling stopped: Safety timeout reached (5 minutes).");
-            }
-
-            const { element, info } = formFieldsInfo[i];
+            const { info } = formFieldsInfo[i];
             const value = resolveFieldValue(i, info, heuristicMatches, llmMatches);
-
             if (value !== undefined && value !== null && value !== '') {
-                if (elementHasCorrectValue(element, value)) {
-                    element.setAttribute('data-filled-by-extension', 'true');
-                } else {
-                    if (typeof OverlayUtils !== 'undefined') OverlayUtils.pulseFilling(element);
-                    await fillField(element, value, info);
-                    filledCount++;
-                }
+                intended.set(fieldSignature(info), value);
             }
-
-            processed++;
-            updateFillProgress(processed, filledCount, totalFields,
-                `Filled ${filledCount}/${totalFields} (${processed} processed)...`, sessionId);
-            await sleep(10);
         }
+
+        // Re-query ALL visible non-password fields (not filtered by the
+        // data-filled marker) so the loop sees fields the form blanked and
+        // fields that newly appeared.
+        const buildFields = () => {
+            const docs = findIframesWithForms();
+            return getVisibleFormElements(docs)
+                .map(getFormFieldInfo)
+                .filter(f => !isPasswordField(f.info));
+        };
+
+        const cancelledOrTimedOut = () =>
+            isCancelled() || (Date.now() - processStartTime > MAX_EXECUTION_TIME);
+
+        // Vision recall: recapture the screenshot, re-ask the LLM about the
+        // current fields so newly appeared ones get values. Keyed by signature.
+        const recallForNewFields = async (fields) => {
+            if (cancelledOrTimedOut()) throw new Error("Form filling stopped by user.");
+            const shot = await captureFreshScreenshot();
+            if (!shot) return null;
+            const allFields = fields.map((f, idx) => ({
+                index: idx, ...stripFieldInfoForPrompt(f.info)
+            }));
+            const recallPrompt = buildVisionPrompt(allFields, profiles, customPrompt);
+            const raw = await ApiUtils.promptLLMWithVision(recallPrompt, shot);
+            if (cancelledOrTimedOut()) throw new Error("Form filling stopped by user.");
+            let m = {};
+            try { m = JSON.parse(raw.replace(/```json\n?|```/g, '').trim()); }
+            catch (e) {
+                console.error('[VisionFiller] recall LLM returned invalid JSON:', raw.substring(0, 300));
+                return null;
+            }
+            const out = new Map();
+            fields.forEach((f, idx) => {
+                const v = resolveLLMOnly(idx, f.info, m);
+                if (v !== undefined && v !== null && v !== '') {
+                    out.set(fieldSignature(f.info), v);
+                }
+            });
+            return out;
+        };
+
+        const loopResult = await runFillVerifyLoop({
+            getFields: buildFields,
+            initialValues: intended,
+            recallForNewFields,
+            isCancelled: cancelledOrTimedOut,
+            onPass: ({ pass, wrong, filledCount: fc, newCount }) => {
+                filledCount = fc;
+                updateFillProgress(Math.max(0, totalFields - wrong), fc, totalFields,
+                    `Pass ${pass}: ${fc} filled, ${wrong} remaining` +
+                    (newCount ? `, ${newCount} new field(s)` : '') + '...', sessionId);
+            },
+        });
+        filledCount = loopResult.filledCount;
+        processed = totalFields;
 
         simulateMouseClick(document.body, true);
 
