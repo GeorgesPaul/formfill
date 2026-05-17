@@ -258,8 +258,15 @@ async function fillFormSinglePrompt(formFieldsInfo, profileData, customPrompt = 
 }
 
 function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPrompt = '') {
-    // Include numeric index so LLM can key by index when id/name are absent
-    const formFieldsForPrompt = formFieldsInfo.map(({ info }, idx) => ({ index: idx, ...info }));
+    // Trim each field to the human-meaningful bits (label/placeholder/type/
+    // options) plus the identifiers needed only for keying. Reuses the vision
+    // path's trimmer when available so both paths see the same shape.
+    const strip = (typeof stripFieldInfoForPrompt === 'function')
+        ? stripFieldInfoForPrompt
+        : (info => info);
+    const formFieldsForPrompt = formFieldsInfo.map(({ info }, idx) => ({
+        index: idx, ...strip(info)
+    }));
     const formFieldsString = JSON.stringify(formFieldsForPrompt);
 
     // Use raw profile text directly
@@ -282,11 +289,21 @@ function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPro
   ${userDataString}`;
 
     const dynamicPart = `
-  Form Fields Info:
+  Form Fields Info (JSON):
   ${formFieldsString}
 
-  Your output should be a JSON object. For each field use its 'id' as key if non-empty, otherwise its 'name' if non-empty, otherwise its numeric 'index'.
-  Values are the data to fill. Omit fields where no suitable value exists. Do not include any other text or formatting.
+  Decide what each field is from what a human SEES: its visible 'label'
+  (and 'placeholder'/'nearbyText'). Treat 'id', 'name', and 'autocomplete'
+  as UNRELIABLE -- some forms deliberately set them to the wrong thing or
+  reuse the same id/name on several fields. When 'label' conflicts with
+  'id'/'name'/'autocomplete', the label wins. If a field has no label and
+  nothing visible identifies it, omit it.
+
+  Output a single JSON object keyed STRICTLY by each field's numeric
+  'index' (e.g. "0", "5"). Never key by id or name -- ids are not unique
+  on some forms and that collapses distinct fields. Value is the string to
+  fill; for a <select> use the exact option text. Omit fields with no
+  suitable profile value. No markdown, no commentary -- JSON only.
   ${customPrompt ? `\nAdditional instructions from user:\n${customPrompt}` : ''}
   `;
 
@@ -294,9 +311,13 @@ function generateSinglePromptForAllFields(formFieldsInfo, profileData, customPro
 }
 
 
-// Resolve the LLM value for a field by: id > name > CSS class > label >
-// nearbyText > numeric index. 'in' is used so falsy values still match.
+// Resolve the LLM value for a field. Numeric index FIRST: the prompt tells
+// the model to key strictly by index, and index is the only collision-free
+// key (id/name are reused across fields on some forms, which would map one
+// field's value onto another). id/name/label remain as defensive fallbacks
+// only for models that ignored the instruction. 'in' so falsy values match.
 function resolveDomValue(i, info, filledFields) {
+    if (String(i) in filledFields) return filledFields[String(i)];
     if (info.id && info.id in filledFields) return filledFields[info.id];
     if (info.name && info.name in filledFields) return filledFields[info.name];
     const classes = Array.isArray(info.classes)
@@ -305,7 +326,6 @@ function resolveDomValue(i, info, filledFields) {
     if (matchingClass) return filledFields[matchingClass];
     if (info.label && info.label in filledFields) return filledFields[info.label];
     if (info.nearbyText && info.nearbyText in filledFields) return filledFields[info.nearbyText];
-    if (String(i) in filledFields) return filledFields[String(i)];
     return undefined;
 }
 

@@ -70,37 +70,81 @@ function getBasicFieldInfo(input) {
     };
 }
 
+// Text of a <label> minus any form controls nested inside it.
+function labelTextWithoutControls(labelEl) {
+    try {
+        const clone = labelEl.cloneNode(true);
+        clone.querySelectorAll('input, select, textarea, button').forEach(n => n.remove());
+        const t = cleanText(clone.textContent);
+        if (t) return t;
+    } catch (_) {}
+    return cleanText(labelEl.textContent) || null;
+}
+
+// Return ONLY the label a human visually associates with this exact field.
+// Never borrow another field's label. The order below goes from least to
+// most ambiguous; we deliberately stop rather than guess.
+//
+// Why this is strict: pages (including deliberate test traps) reuse the same
+// id/name on multiple inputs. A global `label[for=ID]` lookup then returns the
+// first matching label in the document, mislabelling every later duplicate.
+// And climbing to the <form> to find "a label" borrows an unrelated field's
+// label for label-less inputs. Both poison the heuristic AND the vision LLM
+// (which is fed this label as DOM metadata).
 function getAssociatedLabel(input) {
-    let label = document.querySelector(`label[for="${input.id}"]`);
+    const doc = input.ownerDocument || document;
 
-    // Try aria-labelledby
-    if (!label && input.getAttribute('aria-labelledby')) {
-        const labelledBy = document.getElementById(input.getAttribute('aria-labelledby'));
-        if (labelledBy) return cleanText(labelledBy.textContent);
+    // 1. Wrapping <label> ancestor -- unambiguous, this input is inside it.
+    const wrapping = input.closest('label');
+    if (wrapping) {
+        const t = labelTextWithoutControls(wrapping);
+        if (t) return t;
     }
 
-    // Try aria-label
-    if (!label && input.getAttribute('aria-label')) {
-        return input.getAttribute('aria-label');
-    }
-
-    if (!label) {
-        let element = input;
-        for (let i = 0; i < 3; i++) {
-            element = element.parentElement;
-            if (!element) break;
-
-            label = element.querySelector('label');
-            if (label) break;
-
-            if (element.tagName.toLowerCase() === 'label') {
-                label = element;
-                break;
+    // 2. Explicit for= association, but ONLY when the id is unique in the
+    //    document. Duplicate ids make label[for] ambiguous/misleading.
+    if (input.id) {
+        let unique = false;
+        try { unique = doc.querySelectorAll(`[id="${CSS.escape(input.id)}"]`).length === 1; }
+        catch (_) { unique = false; }
+        if (unique) {
+            let l = null;
+            try { l = doc.querySelector(`label[for="${CSS.escape(input.id)}"]`); } catch (_) {}
+            if (l) {
+                const t = labelTextWithoutControls(l);
+                if (t) return t;
             }
         }
     }
 
-    return label ? (label.textContent ? cleanText(label.textContent) : label) : null;
+    // 3. aria-labelledby / aria-label -- explicit and per-element, safe.
+    const albl = input.getAttribute('aria-labelledby');
+    if (albl) {
+        const parts = albl.split(/\s+/)
+            .map(id => { const n = doc.getElementById(id); return n ? cleanText(n.textContent) : ''; })
+            .filter(Boolean);
+        if (parts.length) return parts.join(' ');
+    }
+    const al = input.getAttribute('aria-label');
+    if (al && al.trim()) return al.trim();
+
+    // 4. Proximity: the label inside the SMALLEST ancestor that contains this
+    //    input and no other form control -- i.e. the field's own group/row.
+    //    This mirrors the label a human sees next to the field and refuses to
+    //    reach far enough to steal a different field's label.
+    const CONTROLS = 'input, select, textarea';
+    let el = input.parentElement;
+    for (let i = 0; i < 5 && el; i++, el = el.parentElement) {
+        if (el.querySelectorAll(CONTROLS).length > 1) break; // group now spans other fields
+        const lbl = el.querySelector('label');
+        if (lbl) {
+            const t = labelTextWithoutControls(lbl);
+            if (t) return t;
+        }
+    }
+
+    // No label this field unambiguously owns. Report none rather than guess.
+    return null;
 }
 
 function getNearbyText(element, maxDistance = 100) {
@@ -855,10 +899,14 @@ async function waitForSelection(selectElement, expectedValue, timeout = 2000) {
 // for fields with neither, fall back to structural attributes. This is what
 // lets us re-fill a field the form blanked, and recognise a brand-new field.
 function fieldSignature(info) {
-    if (info && info.id) return 'id:' + info.id;
-    if (info && info.name) return 'name:' + info.name;
     const i = info || {};
-    return 'sig:' + [i.type, i.label, i.placeholder, i.autocomplete,
+    // Combine identifiers rather than returning early on id/name: forms
+    // (and test traps) reuse the same id/name on multiple inputs, and
+    // returning 'id:'+id alone collapses distinct fields into one map entry
+    // so they overwrite each other. The visible label is the human-
+    // distinguishing signal, so include it; id/name keep it stable across
+    // re-queries/remounts.
+    return 'sig:' + [i.id, i.name, i.type, i.label, i.placeholder,
                      String(i.nearbyText || '').slice(0, 40)].join('|');
 }
 
