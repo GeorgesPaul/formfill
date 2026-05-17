@@ -185,10 +185,14 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
             initialValues: intended,
             recallForNewFields,
             isCancelled: cancelledOrTimedOut,
-            onPass: ({ pass, wrong, filledCount: fc, newCount }) => {
+            onPass: ({ pass, wrong, filledCount: fc, newCount, done, intendedTotal }) => {
                 filledCount = fc;
-                updateFillProgress(Math.max(0, totalFields - wrong), fc, totalFields,
-                    `Pass ${pass}: ${fc} filled, ${wrong} remaining` +
+                // Report fields-correct as progress, and never let the bar
+                // read 100% mid-loop -- the post-loop completion call below is
+                // the only thing allowed to signal "done".
+                const shown = Math.min(done, Math.max(0, totalFields - 1));
+                updateFillProgress(shown, shown, totalFields,
+                    `Pass ${pass}: ${done}/${intendedTotal} correct, ${wrong} remaining` +
                     (newCount ? `, ${newCount} new field(s)` : '') + '...', sessionId);
             },
         });

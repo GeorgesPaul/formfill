@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.19",
+  "version": "1.20",
   "description": "Intelligently fills forms based on user profiles",
   "browser_specific_settings": {
     "gecko": {

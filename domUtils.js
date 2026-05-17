@@ -323,6 +323,13 @@ async function tickleField(element) {
             } catch (_) {}
         }
 
+        // Snapshot before inserting so we can guarantee a zero net change even
+        // when a digit-only mask, input filter, or maxlength swallows the
+        // tickle char. Without this, the Backspace below deletes a *real*
+        // character (e.g. the last digit of a masked "MM / YY" Expiry field).
+        const readValue = () => isCE ? (element.textContent || '') : (element.value || '');
+        const before = readValue();
+
         // Insert the tickle char.
         element.dispatchEvent(new KeyboardEvent('keydown', {
             key: TICKLE_CHAR, code: 'Key' + TICKLE_CHAR.toUpperCase(),
@@ -343,18 +350,28 @@ async function tickleField(element) {
         }));
         await sleep(15);
 
-        // Delete it (Backspace).
+        const landed = readValue() !== before;
+
+        // Fire the Backspace keydown/keyup regardless so detection scripts see
+        // a delete keystroke. Only actually remove something if the tickle
+        // char landed; otherwise there is nothing to undo and a delete would
+        // eat a genuine character.
         element.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true, cancelable: true
         }));
-        const deleted = document.execCommand('delete', false);
-        if (!deleted && !isCE) {
-            try {
-                const setter = getNativeSetter(element);
-                const v = element.value || '';
-                if (v.endsWith(TICKLE_CHAR)) setter.call(element, v.slice(0, -1));
-                element.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward', bubbles: true }));
-            } catch (_) {}
+        if (landed) {
+            // Restore exactly to the pre-tickle value instead of a blind
+            // execCommand('delete'), which can desync from a mask.
+            if (isCE) {
+                document.execCommand('delete', false);
+                if ((element.textContent || '') !== before) element.textContent = before;
+            } else {
+                try { getNativeSetter(element).call(element, before); }
+                catch (_) { try { element.value = before; } catch (_) {} }
+            }
+            element.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward', bubbles: true }));
+        } else {
+            console.log('[tickleField] tickle char swallowed (mask/maxlength) -- skipping delete to preserve field value.');
         }
         element.dispatchEvent(new KeyboardEvent('keyup', {
             key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true
@@ -925,20 +942,27 @@ async function runFillVerifyLoop(opts) {
         // Let the form settle: masks reformat, dependent fields render/reset.
         await sleep(settleMs);
 
-        // Re-verify against the (possibly mutated) DOM.
+        // Re-verify against the (possibly mutated) DOM. intendedTotal counts
+        // fields we have a value for; done = those now correct. These give a
+        // true monotonic progress fraction (filledCount is cumulative across
+        // passes and would overshoot the field count).
         let wrong = 0;
+        let intendedTotal = 0;
         const after = opts.getFields();
         for (const { element, info } of after) {
             const value = intended.get(fieldSignature(info));
             if (value === undefined || value === null || value === '') continue;
+            intendedTotal++;
             if (!elementHasCorrectValue(element, value)) {
                 wrong++;
                 if (typeof OverlayUtils !== 'undefined') OverlayUtils.setStatus(element, 'nomatch');
             }
         }
+        const done = Math.max(0, intendedTotal - wrong);
 
         if (opts.onPass) {
-            opts.onPass({ pass, wrong, changed, newCount: newFields.length, filledCount });
+            opts.onPass({ pass, wrong, changed, newCount: newFields.length,
+                          filledCount, done, intendedTotal });
         }
         console.log(`[runFillVerifyLoop] pass ${pass}: filled ${changed} this pass, ` +
                     `${wrong} still wrong, ${newFields.length} new field(s).`);

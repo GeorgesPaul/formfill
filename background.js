@@ -82,14 +82,24 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         totalFields -= formFillProgress[sender.frameId].total;
         totalFields += message.total;
       }
-      formFillProgress[sender.frameId] = {
-        processed: message.processed,
-        filled: message.filled,
-        total: message.total
-      };
+      // Clamp per-frame counts to the frame's total. The multi-pass refill
+      // loop reports cumulative attempts that can exceed the field count;
+      // without clamping the bar pins at 100% while filling is still running.
+      {
+        const t = message.total || 0;
+        formFillProgress[sender.frameId] = {
+          processed: Math.min(Math.max(0, message.processed || 0), t),
+          filled: Math.min(Math.max(0, message.filled || 0), t),
+          total: t
+        };
+      }
       totalProcessed = Object.values(formFillProgress).reduce((sum, progress) => sum + progress.processed, 0);
       totalFilled = Object.values(formFillProgress).reduce((sum, progress) => sum + progress.filled, 0);
-      percentage = totalFields > 0 ? totalProcessed / totalFields : 0;
+      totalProcessed = Math.min(totalProcessed, totalFields);
+      totalFilled = Math.min(totalFilled, totalFields);
+      // Never report a full bar from a progress message -- only the explicit
+      // fillFormComplete path is allowed to show 100%/done.
+      percentage = totalFields > 0 ? Math.min(0.99, totalProcessed / totalFields) : 0;
       computedMessage = `Processing form...\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%`;
       break;
 
