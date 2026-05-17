@@ -83,7 +83,11 @@
                     { type: "image_url", image_url: { url: imageDataUrl } }
                 ]
             }],
-            stream: false
+            stream: false,
+            // OpenRouter unified reasoning control. For Anthropic models this
+            // maps to a large extended-thinking budget. Without it the model
+            // answers with no thinking (fast but low quality on tricky DOM).
+            reasoning: { effort: "high" }
         };
 
         const requestOptions = {
@@ -114,7 +118,9 @@
         return {
           model: config.model,
           messages: [{ role: "user", content: prompt }],
-          stream: false
+          stream: false,
+          // High extended-thinking budget for Anthropic models via OpenRouter.
+          reasoning: { effort: "high" }
         };
       } else {
         return {
