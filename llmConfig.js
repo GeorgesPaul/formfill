@@ -170,7 +170,7 @@ function showConfigForm(configName = '') {
     // want another).
     document.getElementById('configName').value = 'Claude Opus (latest)';
     document.getElementById('apiUrl').value = 'https://openrouter.ai/api/v1/chat/completions';
-    document.getElementById('model').value = 'anthropic/claude-opus-latest';
+    document.getElementById('model').value = '~anthropic/claude-opus-latest';
     document.getElementById('apiKey').value = '';
   }
 }
