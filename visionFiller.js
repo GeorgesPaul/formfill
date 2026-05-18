@@ -180,6 +180,7 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
             return out;
         };
 
+        let lastShown = 0;
         const loopResult = await runFillVerifyLoop({
             getFields: buildFields,
             initialValues: intended,
@@ -190,10 +191,20 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
                 // Report fields-correct as progress, and never let the bar
                 // read 100% mid-loop -- the post-loop completion call below is
                 // the only thing allowed to signal "done".
-                const shown = Math.min(done, Math.max(0, totalFields - 1));
-                updateFillProgress(shown, shown, totalFields,
+                lastShown = Math.min(done, Math.max(0, totalFields - 1));
+                updateFillProgress(lastShown, lastShown, totalFields,
                     `Pass ${pass}: ${done}/${intendedTotal} correct, ${wrong} remaining` +
                     (newCount ? `, ${newCount} new field(s)` : '') + '...', sessionId);
+            },
+            // Keeps the bar/counter alive between pass boundaries (long iframe
+            // fills and slow LLM recalls). Holds the bar position but refreshes
+            // the status so it never looks frozen.
+            onProgress: ({ phase, pass, filledCount: fc, newCount }) => {
+                if (typeof fc === 'number') filledCount = fc;
+                const msg = phase === 'recall'
+                    ? `Pass ${pass}: asking LLM about ${newCount || ''} new field(s)...`
+                    : `Pass ${pass}: filling (${filledCount} filled so far)...`;
+                updateFillProgress(lastShown, lastShown, totalFields, msg, sessionId);
             },
         });
         filledCount = loopResult.filledCount;

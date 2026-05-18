@@ -919,6 +919,8 @@ function fieldSignature(info) {
 //   recallForNewFields(fields, newFields) -> Promise<Map sig->value> | null
 //   isCancelled()          -> boolean (user stop / superseded session)
 //   onPass({pass,wrong,changed,newCount,filledCount})  (optional)
+//   onProgress({phase,pass,...})  (optional) -- fires per filled field and
+//     before each LLM recall so the UI does not freeze mid-pass
 //   maxPasses (default 3), maxRecalls (default 3), settleMs (default 300)
 //
 // Returns { filledCount }.
@@ -952,6 +954,11 @@ async function runFillVerifyLoop(opts) {
         // up to maxRecalls times. No new fields -> no recall (cost guard).
         if (newFields.length > 0 && recalls < maxRecalls && opts.recallForNewFields) {
             recalls++;
+            // Keep the UI alive: a recall is a (possibly slow) LLM round-trip
+            // with no field activity, so without this the bar looks frozen.
+            if (opts.onProgress) {
+                opts.onProgress({ phase: 'recall', pass, newCount: newFields.length, filledCount });
+            }
             try {
                 const extra = await opts.recallForNewFields(fields, newFields);
                 if (extra instanceof Map) {
@@ -985,6 +992,11 @@ async function runFillVerifyLoop(opts) {
             await fillField(element, value, info, pass);
             filledCount++;
             changed++;
+            // Per-field tick so the bar/counter move during a pass instead of
+            // freezing until the pass ends (slow iframes do many fills/sleeps).
+            if (opts.onProgress) {
+                opts.onProgress({ phase: 'filling', pass, changed, filledCount });
+            }
         }
 
         // Let the form settle: masks reformat, dependent fields render/reset.
