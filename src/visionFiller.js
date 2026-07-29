@@ -17,7 +17,7 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
 
     if (!Array.isArray(profiles) || profiles.length === 0) {
         const errorMsg = 'Invalid profiles: profiles should be a non-empty array';
-        browser.runtime.sendMessage({ action: "fillFormError", error: errorMsg, sessionId });
+        Compat.notify({ action: "fillFormError", error: errorMsg, sessionId });
         throw new Error(errorMsg);
     }
 
@@ -47,7 +47,7 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
         }
 
         window.stopFilling = false;
-        browser.runtime.sendMessage({ action: "fillFormStart", sessionId });
+        Compat.notify({ action: "fillFormStart", sessionId });
         updateFillProgress(0, 0, totalFields, "Analysing form...", sessionId);
 
         let formFieldsInfo = formElements.map(getFormFieldInfo);
@@ -67,7 +67,7 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
         }
 
         if (formFieldsInfo.length === 0) {
-            browser.runtime.sendMessage({
+            Compat.notify({
                 action: "fillFormComplete", filled: 0, total: totalFields,
                 message: 'No form fields to fill. Use "Fill User/Pass" for credentials.',
                 sessionId
@@ -214,7 +214,7 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
 
         updateFillProgress(totalFields, filledCount, totalFields,
             `Completed filling ${filledCount} out of ${totalFields} fields.`, sessionId);
-        browser.runtime.sendMessage({
+        Compat.notify({
             action: "fillFormComplete",
             filled: filledCount, total: totalFields,
             message: `Completed filling ${filledCount} out of ${totalFields} fields.`,
@@ -231,14 +231,14 @@ async function visionFillForm(screenshotDataUrl, profiles, customPrompt = '', se
         console.error("[VisionFiller] Error:", error);
         if (typeof OverlayUtils !== 'undefined') OverlayUtils.clearAll();
         if (error.message === "Form filling stopped by user.") {
-            browser.runtime.sendMessage({
+            Compat.notify({
                 action: "fillFormStopped",
                 filled: filledCount, processed, total: totalFields,
                 message: "Form filling stopped by user.", sessionId
             });
             window.stopFilling = false;
         } else {
-            browser.runtime.sendMessage({
+            Compat.notify({
                 action: "fillFormError", error: error.toString(), sessionId
             });
         }

@@ -19,7 +19,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'amo_common.ps1')
 
-if (-not $ManifestPath) { $ManifestPath = Join-Path $PSScriptRoot '..\manifest.json' }
+if (-not $ManifestPath) { $ManifestPath = Join-Path $PSScriptRoot '..\manifests\manifest.firefox.json' }
 if (-not (Test-Path -LiteralPath $ManifestPath)) { throw "manifest.json not found: $ManifestPath" }
 $ManifestPath = (Resolve-Path -LiteralPath $ManifestPath).Path
 
@@ -50,7 +50,27 @@ if ($Preview) {
 
 # Replace only the first quoted "version" string value; leaves all other formatting intact.
 $rx = [regex]'("version"\s*:\s*")[^"]*(")'
-$updated = $rx.Replace($raw, { param($m) $m.Groups[1].Value + $next + $m.Groups[2].Value }, 1)
-if ($updated -eq $raw) { throw "Could not locate the version field to update in $ManifestPath" }
-[IO.File]::WriteAllText($ManifestPath, $updated)  # UTF-8, no BOM; newlines preserved
-Write-Host "manifest.json updated to $next." -ForegroundColor Green
+
+# A no-op replace means one of two very different things: the file has no version
+# field (a real error), or it already holds the target version (fine, and normal
+# when the version was set by hand). Test for the field itself to tell them apart.
+function Set-ManifestVersion([string]$path, [string]$version) {
+  $text = Get-Content -Raw -LiteralPath $path
+  $name = Split-Path -Leaf $path
+  if (-not $rx.IsMatch($text)) { throw "Could not locate the version field to update in $path" }
+  $new = $rx.Replace($text, { param($m) $m.Groups[1].Value + $version + $m.Groups[2].Value }, 1)
+  if ($new -eq $text) {
+    Write-Host "$name already at $version." -ForegroundColor Green
+    return
+  }
+  [IO.File]::WriteAllText($path, $new)  # UTF-8, no BOM; newlines preserved
+  Write-Host "$name updated to $version." -ForegroundColor Green
+}
+
+Set-ManifestVersion $ManifestPath $next
+
+# Keep the Chrome manifest on the same version so the two packages never drift.
+$chromeManifest = Join-Path (Split-Path -Parent $ManifestPath) 'manifest.chrome.json'
+if (Test-Path -LiteralPath $chromeManifest) {
+  Set-ManifestVersion (Resolve-Path -LiteralPath $chromeManifest).Path $next
+}

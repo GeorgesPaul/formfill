@@ -20,7 +20,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
     if (!Array.isArray(profiles) || profiles.length === 0) {
         const errorMsg = 'Invalid profiles: profiles should be a non-empty array';
         console.error(errorMsg);
-        browser.runtime.sendMessage({
+        Compat.notify({
             action: "fillFormError",
             error: errorMsg,
             sessionId: sessionId
@@ -75,7 +75,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
 
         // Only register with background AFTER confirming we have elements to fill
         window.stopFilling = false;
-        browser.runtime.sendMessage({ action: "fillFormStart", sessionId: sessionId });
+        Compat.notify({ action: "fillFormStart", sessionId: sessionId });
 
         updateFillProgress(processed, filledCount, totalFields, "Starting to fill form... This will take at least a few seconds.", sessionId);
 
@@ -94,7 +94,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
             console.log('[FormFiller] No non-credential fields to fill.');
             simulateMouseClick(document.body, true);
             updateFillProgress(totalFields, filledCount, totalFields, `No form fields to fill (login page - use Fill User/Pass).`, sessionId);
-            browser.runtime.sendMessage({
+            Compat.notify({
                 action: "fillFormComplete",
                 filled: filledCount,
                 total: totalFields,
@@ -185,7 +185,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
         // Final forced update to ensure 100%
         updateFillProgress(totalFields, filledCount, totalFields, `Completed filling ${filledCount} out of ${totalFields} fields.`, sessionId);
 
-        browser.runtime.sendMessage({
+        Compat.notify({
             action: "fillFormComplete",
             filled: filledCount,
             total: totalFields,
@@ -198,7 +198,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
         console.error("Error filling form:", error);
 
         if (error.message === "Form filling stopped by user.") {
-            browser.runtime.sendMessage({
+            Compat.notify({
                 action: "fillFormStopped",
                 filled: filledCount,
                 processed: processed,
@@ -208,7 +208,7 @@ async function fillForm(profiles, customPrompt = '', sessionId = null) {
             });
             window.stopFilling = false; // Reset the stop action
         } else {
-            browser.runtime.sendMessage({
+            Compat.notify({
                 action: "fillFormError",
                 error: error.toString() || "undefined",
                 sessionId: sessionId

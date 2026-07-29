@@ -57,9 +57,9 @@ async function loadConfigurations() {
 
 function createDefaultConfig() {
   return {
-    'Default': {
-      apiUrl: 'http://localhost:11434/api/generate',
-      model: 'llama3.1',
+    'Claude Opus 5': {
+      apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+      model: 'anthropic/claude-opus-5',
       apiKey: ''
     }
   };
@@ -165,12 +165,11 @@ function showConfigForm(configName = '') {
     populateFormWithConfig(configName);
   } else {
     form.reset();
-    // Default new-config preset: latest Claude Opus via OpenRouter (best
-    // reasoning for the vision-fill task; swap with a preset button if you
-    // want another).
-    document.getElementById('configName').value = 'Claude Opus (latest)';
+    // Default new-config preset: Claude Opus 5 via OpenRouter (best reasoning
+    // for the vision-fill task; swap with a preset button if you want another).
+    document.getElementById('configName').value = 'Claude Opus 5';
     document.getElementById('apiUrl').value = 'https://openrouter.ai/api/v1/chat/completions';
-    document.getElementById('model').value = '~anthropic/claude-opus-latest';
+    document.getElementById('model').value = 'anthropic/claude-opus-5';
     document.getElementById('apiKey').value = '';
   }
 }

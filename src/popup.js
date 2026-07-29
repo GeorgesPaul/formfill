@@ -577,7 +577,7 @@ async function fillForm() {
         // Capture screenshot of the visible tab
         updateStatusMessage("Capturing screenshot...");
         try {
-          const screenshotDataUrl = await browser.tabs.captureVisibleTab(null, { format: 'png' });
+          const screenshotDataUrl = await Compat.captureVisibleTab(null, { format: 'png' });
           console.log('[Popup] Screenshot captured, length:', screenshotDataUrl.length);
           messagePayload.useVisualProcessing = true;
           messagePayload.screenshot = screenshotDataUrl;
@@ -594,14 +594,14 @@ async function fillForm() {
         console.warn('[Popup] sendMessage failed, attempting programmatic script injection:', sendError.message);
         updateStatusMessage("Content script not found, injecting scripts...");
 
+        // Keep in step with the content_scripts list in both manifests.
         const scripts = [
-          'apiUtils.js', 'utils.js', 'domUtils.js',
-          'llmClient.js', 'formFiller.js', 'heuristicFiller.js', 'overlayUtils.js', 'visionFiller.js', 'content.js'
+          'browserCompat.js', 'apiUtils.js', 'utils.js', 'domUtils.js',
+          'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'formFiller.js',
+          'heuristicFiller.js', 'overlayUtils.js', 'visionFiller.js', 'content.js'
         ];
         try {
-          for (const script of scripts) {
-            await browser.tabs.executeScript(tabs[0].id, { file: script });
-          }
+          await Compat.executeScriptFiles(tabs[0].id, scripts);
           // Retry the message now that scripts are injected
           await browser.tabs.sendMessage(tabs[0].id, messagePayload);
         } catch (injectError) {

@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem Full auto-publish: bump the version (based on AMO), build extension.zip, upload as a new version.
+rem Full auto-publish: bump the version (based on AMO), build the Firefox package, upload as a new version.
 rem Pass-through args go to the UPLOAD step, e.g.:  publish_to_amo.bat -Channel unlisted
 rem For a safe dry run, use the standalone scripts instead:
 rem     powershell -ExecutionPolicy Bypass -File bump_version.ps1 -Preview
@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo === Building extension.zip ===
+echo === Building the Firefox package ===
 call "%~dp0create_Firefox_extension_zip.bat"
 if errorlevel 1 (
   echo Build failed - aborting.

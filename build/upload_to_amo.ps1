@@ -3,7 +3,7 @@
   Upload a new version of the extension to addons.mozilla.org (AMO) via the v5 API.
 
 .DESCRIPTION
-  Takes a pre-built zip (default: ..\extension.zip) and submits it as a new version:
+  Takes a pre-built zip (default: ..\dist\formfill-firefox-<version>.zip) and submits it as a new version:
     1. POST the zip to /addons/upload/        -> returns an upload uuid
     2. Poll  /addons/upload/{uuid}/           -> wait for validation
     3. POST  /addons/addon/{id}/versions/     -> creates the new version (skipped with -ValidateOnly)
@@ -30,13 +30,18 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'amo_common.ps1')
 $apiBase = Get-AmoApiBase
 
-if (-not $Zip) { $Zip = Join-Path $PSScriptRoot '..\extension.zip' }
+$manifestPath = Join-Path $PSScriptRoot '..\manifests\manifest.firefox.json'
+
+if (-not $Zip) {
+  # build.ps1 writes dist\formfill-firefox-<version>.zip
+  $manifestVersion = (Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json).version
+  $Zip = Join-Path $PSScriptRoot ("..\dist\formfill-firefox-{0}.zip" -f $manifestVersion)
+}
 if (-not (Test-Path -LiteralPath $Zip)) { throw "Zip not found: $Zip  (build it first with create_Firefox_extension_zip.bat)" }
 $Zip = (Resolve-Path -LiteralPath $Zip).Path
 
 $cred = Get-AmoCredentials
 
-$manifestPath = Join-Path $PSScriptRoot '..\manifest.json'
 $version = $null
 if (Test-Path $manifestPath) { try { $version = (Get-Content $manifestPath -Raw | ConvertFrom-Json).version } catch {} }
 
@@ -89,9 +94,19 @@ try {
 catch {
   $resp = $_.Exception.Response
   if ($resp) {
+    $code = [int]$resp.StatusCode
     $reader = New-Object IO.StreamReader($resp.GetResponseStream())
     $errBody = $reader.ReadToEnd()
-    throw "Create-version failed (HTTP $([int]$resp.StatusCode)). Common cause: version $version already exists on AMO (bump manifest.json). Response:`n$errBody"
+    # 5xx is AMO having a bad day, not a problem with this package. The version
+    # may or may not have been created, so check before retrying.
+    $hint = if ($code -ge 500) {
+      "AMO server error (transient). Check whether the version landed anyway: " +
+      "GET $apiBase/addons/addon/$idEnc/versions/  -- if $version is not listed, just run this script again."
+    }
+    else {
+      "Common cause: version $version already exists on AMO (bump the manifest)."
+    }
+    throw "Create-version failed (HTTP $code). $hint Response:`n$errBody"
   }
   throw
 }

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Form Filler</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <h2>LLM Form Filler by Georges Paul</h2>
+  <label id="userPromptLabel" for="userPrompt">Custom Prompt:</label>
+  <textarea id="userPrompt"
+    placeholder="Instructions for the AI, for example: Bob is the sender of the parcel and Sandra is the recipient."></textarea>
+  <div id="visualProcessingSection">
+    <label title="Attach a screenshot of the page to the LLM call. Requires a vision-capable model (Claude Opus/Sonnet, GPT-5, Qwen2.5-VL, etc.)."><input type="checkbox" id="useVisualProcessing"> Vision mode (attach screenshot)</label>
+  </div>
+  <hr>
+  <label id="progressLabel" for="progressBar" style="color: gray;">Filling Progress <span id="elapsedTime"
+      style="display: none;">(0s)</span>:</label>
+  <div id="progressContainer" class="windows-95-progress" style="opacity: 0.5;">
+    <div id="progressBarFill"></div>
+  </div>
+  <button id="fillForm">Fill Form</button>
+  <button id="fillCredentials">Fill User/Pass</button>
+  <button id="stopFilling" disabled>Stop Filling</button>
+
+  <div id="profileSelectContainer">
+    <div id="profileListHeader">
+      <span id="selectedCount">0 profiles selected</span>
+      <div id="profileButtons">
+
+      </div>
+    </div>
+    <select id="profileSelect" multiple size="6">
+
+    </select>
+    <div id="profileManagementButtons">
+      <button id="showAddProfileForm">Add New</button>
+      <button id="removeProfile">Delete Selected</button>
+    </div>
+    <div id="profileSelectionButtons">
+      <button id="selectAllProfiles">Select All Profiles</button>
+      <button id="clearAllProfiles">Select None</button>
+    </div>
+  </div>
+  <div id="profileForm">
+    <h3 id="formTitle">Add Profile</h3>
+    <form id="dynamicProfileForm"></form>
+    <div id="profileFormButtons">
+      <button id="addProfileFromTxt">Add profile from text file</button>
+      <button id="saveSelectedProfile">Save selected profile to text file</button>
+      <button id="backupAllProfiles">Backup everything to text file</button>
+      <button id="reloadBackup">Reload backup from text file</button>
+    </div>
+    <button id="llmConfigButton">LLM API Config</button>
+    <button id="keepassConfigButton">KeePass Config</button>
+  </div>
+  <div id="logLabel">System messages:</div>
+  <div id="logMsg"></div>
+  <footer>
+    <button id="donateButton" class="button donate-button">Donate</button>
+    <br>
+    <img src="qr-code.png" alt="Donate QR Code" width="150">
+    <br><br>
+    <a href="https://github.com/GeorgesPaul/formfill" target="_blank">GitHub Repository</a>
+  </footer>
+  <script src="browserCompat.js"></script>
+  <script src="popup.js"></script>
+  <script src="apiUtils.js"></script>
+  <script src="llmConfig.js"></script>
+
+</body>

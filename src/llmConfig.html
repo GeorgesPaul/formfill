@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM API Configuration</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="llm-config-body">
+    <h2 class="llm-config-h2">LLM API Configuration</h2>
+
+    <fieldset class="win95-groupbox">
+      <legend>LLM Setup</legend>
+      <p>Configure an LLM to power form filling. Use any OpenAI-compatible API, or a local model via Ollama.</p>
+      <p><b>OpenRouter</b> provides access to many models through a single API.
+        Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> and use
+        <code>https://openrouter.ai/api/v1/chat/completions</code> as the API URL.</p>
+      <p><b>Vision mode</b> (enable with the "Use visual form processing" checkbox on the main panel) sends a page screenshot
+        alongside the DOM to a vision-capable model. Recommended models (click a preset below to autofill):</p>
+      <div id="visionPresets">
+        <button type="button" class="llm-config-button preset-btn" data-name="Claude Opus 5" data-model="anthropic/claude-opus-5">Claude Opus 5 (default, best reasoning)</button>
+        <button type="button" class="llm-config-button preset-btn" data-name="Claude Sonnet 5" data-model="anthropic/claude-sonnet-5">Claude Sonnet 5 (fast, much cheaper)</button>
+        <button type="button" class="llm-config-button preset-btn" data-name="GPT-5" data-model="openai/gpt-5">GPT-5</button>
+        <button type="button" class="llm-config-button preset-btn" data-name="Qwen2.5-VL 72B" data-model="qwen/qwen-2.5-vl-72b-instruct">Qwen2.5-VL 72B (cheap, strong GUI grounding)</button>
+      </div>
+    </fieldset>
+
+    <table id="configTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>API URL</th>
+                <th>Model</th>
+                <th>API Key</th>
+            </tr>
+        </thead>
+        <tbody>
+        </tbody>
+    </table>
+
+    <button id="addConfig" class="llm-config-button">Add</button>
+    <button id="editConfig" class="llm-config-button">Edit</button>
+    <button id="deleteConfig" class="llm-config-button">Delete</button>
+    <button id="testApi" class="llm-config-button">Test API</button>
+
+    <form id="configForm">
+        <input type="text" id="configName" placeholder="Configuration Name" required>
+        <input type="text" id="apiUrl" placeholder="API URL" required>
+        <input type="text" id="model" placeholder="Model" required>
+        <input type="password" id="apiKey" placeholder="API Key">
+        <button type="submit" class="llm-config-button">Save</button>
+        <button type="button" id="cancelEdit" class="llm-config-button">Cancel</button>
+    </form>
+
+    <div id="statusMessage"></div>
+
+    <div id="logLabel">System messages:</div>
+    <div id="logMsg"></div>
+    <script src="browserCompat.js"></script>
+    <script src="apiUtils.js"></script>
+    <script src="llmConfig.js"></script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FormFill test: widget variants</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 760px; }
+  .row { margin-bottom: 18px; position: relative; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  input { width: 340px; padding: 6px 8px; font-size: 14px; border: 1px solid #999; }
+  .pop { position: absolute; z-index: 10; background: #fff; border: 1px solid #bbb;
+         width: 340px; display: none; }
+  .pop > div { padding: 6px 8px; font-size: 13px; cursor: pointer; }
+  .pop > div.hl { background: #d6e9ff; }
+</style>
+</head>
+<body>
+<h2>Widget variants</h2>
+
+<!-- 1. Mouse-only suggestion list: no keyboard navigation at all, selection on
+        mousedown (this is how the Google Places widget behaves). -->
+<div class="row">
+  <label for="city">City (mouse-only suggestions)</label>
+  <input id="city" type="text" autocomplete="off">
+  <div class="pop" id="cityPop"></div>
+</div>
+
+<!-- 2. Suggestion list that never contains the value we want. The filler must
+        keep the typed text and not pick something wrong. -->
+<div class="row">
+  <label for="company">Company (suggestions never match)</label>
+  <input id="company" type="text" autocomplete="off">
+  <div class="pop" id="companyPop"></div>
+</div>
+
+<!-- 3. Pick-only ARIA combobox: readonly input, list opens on click. -->
+<div class="row">
+  <label for="country">Country (readonly combobox)</label>
+  <input id="country" type="text" readonly role="combobox" aria-haspopup="listbox"
+         aria-controls="countryPop" aria-expanded="false">
+  <div class="pop" id="countryPop" role="listbox"></div>
+</div>
+
+<!-- 4. Framework-controlled input: the "component" owns the value and rewrites
+        it on every input event (uppercase), like a controlled React input. -->
+<div class="row">
+  <label for="code">Reference code (controlled + uppercased)</label>
+  <input id="code" type="text">
+</div>
+
+<script>
+const log = [];
+function widget(inputId, popId, data, opts) {
+  const input = document.getElementById(inputId);
+  const pop = document.getElementById(popId);
+  let items = [], hl = -1, picked = false;
+  function close() { pop.style.display = 'none'; pop.replaceChildren(); items = []; hl = -1;
+                     input.setAttribute('aria-expanded', 'false'); }
+  function open(list) {
+    pop.replaceChildren();
+    items = list.map(t => {
+      const d = document.createElement('div');
+      if (opts.role) d.setAttribute('role', 'option');
+      d.textContent = t;
+      d.addEventListener('mousedown', e => { e.preventDefault(); pick(d); });
+      pop.appendChild(d);
+      return d;
+    });
+    pop.style.display = 'block';
+    input.setAttribute('aria-expanded', 'true');
+  }
+  function pick(d) { input.value = d.textContent; picked = true; close();
+                     input.dispatchEvent(new Event('change', { bubbles: true }));
+                     log.push(inputId + ' picked: ' + d.textContent); }
+  if (opts.openOnClick) {
+    input.addEventListener('mousedown', () => open(data));
+  } else {
+    input.addEventListener('input', () => {
+      picked = false;
+      const q = input.value.trim().toLowerCase();
+      if (q.length < 2) { close(); return; }
+      const m = data.filter(d => d.toLowerCase().includes(q.split(/[\s,]+/)[0]));
+      if (m.length) open(m); else close();
+    });
+  }
+  if (opts.keyboard) {
+    input.addEventListener('keydown', ev => {
+      if (pop.style.display !== 'block') return;
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); hl = (hl + 1) % items.length;
+        items.forEach(i => i.classList.remove('hl')); items[hl].classList.add('hl'); }
+      else if (ev.key === 'Enter') { ev.preventDefault(); if (hl >= 0) pick(items[hl]); }
+      else if (ev.key === 'Escape') close();
+    });
+  }
+  return { isPicked: () => picked, value: () => input.value };
+}
+
+// 1. Mouse only: no keyboard listener at all.
+window.cityWidget = widget('city', 'cityPop',
+  ['Amsterdam, Noord-Holland', 'Amstelveen, Noord-Holland', 'Amersfoort, Utrecht'],
+  { keyboard: false, role: false });
+
+// 2. Suggestions that never contain the wanted value.
+window.companyWidget = widget('company', 'companyPop',
+  ['Acme Holdings BV', 'Acme Logistics NV', 'Acme Retail Group'],
+  { keyboard: true, role: true });
+
+// 3. Readonly combobox, opens on click.
+window.countryWidget = widget('country', 'countryPop',
+  ['Belgium', 'Germany', 'Netherlands', 'United Kingdom'],
+  { keyboard: true, role: true, openOnClick: true });
+
+// 4. Controlled input: component state wins and forces uppercase.
+const code = document.getElementById('code');
+let componentState = '';
+code.addEventListener('input', () => {
+  componentState = code.value.toUpperCase();
+  if (code.value !== componentState) code.value = componentState;
+});
+window.codeState = () => componentState;
+window.widgetLog = log;
+</script>
+</body>
+</html>

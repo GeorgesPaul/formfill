@@ -24,14 +24,17 @@ function logToUser(message, ...args) {
         }).join(" ");
     }
 
-    browser.runtime.sendMessage({
+    // Compat.notify, not sendMessage: nobody awaits these, and with the panel
+    // closed (or a sleeping MV3 service worker) Chrome turns every one of them
+    // into an unhandled promise rejection in the page console.
+    Compat.notify({
         action: "updateProgress",
         message: fullMessage
     });
 }
 
 function updateFillProgress(processed, filled, total, message, sessionId = null) {
-    browser.runtime.sendMessage({
+    Compat.notify({
         action: "fillFormProgress",
         processed: processed,
         filled: filled,

@@ -447,3 +447,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Build output (build/build.ps1)
+dist/

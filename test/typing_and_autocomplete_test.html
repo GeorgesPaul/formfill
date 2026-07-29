@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FormFill test: typing checks + autocomplete dropdowns</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 760px; }
+  .row { margin-bottom: 14px; position: relative; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  input { width: 340px; padding: 6px 8px; font-size: 14px; border: 1px solid #999; border-radius: 3px; }
+  .err { color: #c00; font-size: 12px; margin-top: 3px; min-height: 15px; }
+  .ok { color: #070; }
+  #suggestions {
+    position: absolute; z-index: 10; background: #fff; border: 1px solid #bbb;
+    width: 340px; max-height: 190px; overflow-y: auto; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    display: none;
+  }
+  #suggestions [role="option"] { padding: 6px 8px; font-size: 13px; cursor: pointer; }
+  #suggestions [role="option"].active { background: #d6e9ff; }
+  #results { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 12px;
+             background: #f4f4f4; border: 1px solid #ddd; padding: 10px; margin-top: 18px; }
+  button { padding: 6px 14px; font-size: 14px; }
+</style>
+</head>
+<body>
+<h2>FormFill test bench</h2>
+<p>Reproduces the two failure modes: forms that only accept <em>typed</em> input, and
+address fields that require picking a suggestion from a dynamic dropdown.</p>
+
+<form id="testForm" autocomplete="off">
+  <div class="row">
+    <label for="fullName">Full name</label>
+    <input id="fullName" name="fullName" type="text" data-check="typed">
+    <div class="err" id="err-fullName"></div>
+  </div>
+
+  <div class="row">
+    <label for="street">Street address (pick from the list)</label>
+    <input id="street" name="street" type="text" role="combobox" aria-autocomplete="list"
+           aria-expanded="false" aria-controls="suggestions" data-check="typed,picked">
+    <div id="suggestions" role="listbox"></div>
+    <div class="err" id="err-street"></div>
+  </div>
+
+  <div class="row">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" data-check="typed">
+    <div class="err" id="err-email"></div>
+  </div>
+
+  <div class="row">
+    <label for="dob">Date of birth (dd-mm-yyyy, mask)</label>
+    <input id="dob" name="dob" type="text" placeholder="dd-mm-yyyy" maxlength="10" data-check="typed">
+    <div class="err" id="err-dob"></div>
+  </div>
+
+  <div class="row">
+    <label for="phone">Phone</label>
+    <input id="phone" name="phone" type="tel" data-check="typed">
+    <div class="err" id="err-phone"></div>
+  </div>
+
+  <button type="button" id="validate">Validate</button>
+</form>
+
+<div id="results">(no run yet)</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// "Was this really typed?" tracking. Mirrors what modern forms do: a value that
+// simply appears (element.value = "...") leaves no keystroke trail, so the form
+// treats the field as untouched and reports it as missing on submit.
+// isTrusted is deliberately NOT checked -- no extension can forge that, and the
+// real-world forms this reproduces clearly do not check it either.
+// ---------------------------------------------------------------------------
+const tracked = {};
+const FIELDS = ['fullName', 'street', 'email', 'dob', 'phone'];
+
+for (const id of FIELDS) {
+  const el = document.getElementById(id);
+  tracked[id] = { keydown: 0, keyup: 0, input: 0, beforeinput: 0, blurred: false, changed: false };
+  el.addEventListener('keydown', () => tracked[id].keydown++);
+  el.addEventListener('keyup', () => tracked[id].keyup++);
+  el.addEventListener('beforeinput', () => tracked[id].beforeinput++);
+  el.addEventListener('input', () => tracked[id].input++);
+  el.addEventListener('change', () => tracked[id].changed = true);
+  el.addEventListener('blur', () => tracked[id].blurred = true);
+}
+
+// --- masked date field: the page inserts the dashes itself -------------------
+const dob = document.getElementById('dob');
+dob.addEventListener('input', () => {
+  const digits = dob.value.replace(/\D/g, '').slice(0, 8);
+  let out = digits.slice(0, 2);
+  if (digits.length > 2) out += '-' + digits.slice(2, 4);
+  if (digits.length > 4) out += '-' + digits.slice(4, 8);
+  if (out !== dob.value) dob.value = out;
+});
+
+// --- address autocomplete ----------------------------------------------------
+const ADDRESSES = [
+  'Keizersgracht 123, 1015 CJ Amsterdam',
+  'Keizersgracht 213, 1016 DZ Amsterdam',
+  'Keizerstraat 12, 2584 BC Den Haag',
+  'Prinsengracht 263, 1016 GV Amsterdam',
+  'Damrak 1, 1012 LG Amsterdam',
+  'Kalverstraat 92, 1012 PH Amsterdam'
+];
+
+const street = document.getElementById('street');
+const box = document.getElementById('suggestions');
+let picked = false;
+let activeIndex = -1;
+let items = [];
+
+function closeBox() {
+  box.style.display = 'none';
+  box.replaceChildren();
+  street.setAttribute('aria-expanded', 'false');
+  street.removeAttribute('aria-activedescendant');
+  items = [];
+  activeIndex = -1;
+}
+
+function openBox(matches) {
+  box.replaceChildren();
+  items = matches.map((text, i) => {
+    const d = document.createElement('div');
+    d.setAttribute('role', 'option');
+    d.id = 'sugg-' + i;
+    d.textContent = text;
+    d.addEventListener('mousedown', ev => { ev.preventDefault(); choose(i); });
+    box.appendChild(d);
+    return d;
+  });
+  box.style.display = 'block';
+  street.setAttribute('aria-expanded', 'true');
+  activeIndex = -1;
+}
+
+function highlight(i) {
+  items.forEach(el => el.classList.remove('active'));
+  items.forEach(el => el.setAttribute('aria-selected', 'false'));
+  if (i >= 0 && items[i]) {
+    items[i].classList.add('active');
+    items[i].setAttribute('aria-selected', 'true');
+    street.setAttribute('aria-activedescendant', items[i].id);
+  }
+}
+
+function choose(i) {
+  if (!items[i]) return;
+  street.value = items[i].textContent;
+  picked = true;
+  closeBox();
+  street.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+street.addEventListener('input', () => {
+  picked = false;                     // editing invalidates a previous pick
+  const q = street.value.trim().toLowerCase();
+  if (q.length < 3) { closeBox(); return; }
+  // Match on the first word only, like a real street lookup does.
+  const first = q.split(/[\s,]+/)[0];
+  const matches = ADDRESSES.filter(a => a.toLowerCase().includes(first));
+  if (matches.length) openBox(matches); else closeBox();
+});
+
+street.addEventListener('keydown', ev => {
+  if (box.style.display !== 'block') return;
+  if (ev.key === 'ArrowDown') { ev.preventDefault(); activeIndex = (activeIndex + 1) % items.length; highlight(activeIndex); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); activeIndex = (activeIndex - 1 + items.length) % items.length; highlight(activeIndex); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); if (activeIndex >= 0) choose(activeIndex); }
+  else if (ev.key === 'Escape') { closeBox(); }
+});
+
+// --- validation --------------------------------------------------------------
+function validate() {
+  const report = [];
+  let bad = 0;
+  for (const id of FIELDS) {
+    const el = document.getElementById(id);
+    const t = tracked[id];
+    const errEl = document.getElementById('err-' + id);
+    let msg = '';
+    if (!el.value.trim()) msg = 'This field is required.';
+    else if (t.keydown === 0 || t.input === 0) msg = 'This field is required.';   // never typed into
+    else if (id === 'street' && !picked) msg = 'Please select an address from the list.';
+    errEl.textContent = msg;
+    errEl.className = msg ? 'err' : 'err ok';
+    if (!msg) errEl.textContent = 'OK';
+    if (msg) bad++;
+    report.push(`${id}: value=${JSON.stringify(el.value)} keydown=${t.keydown} input=${t.input} ` +
+                `beforeinput=${t.beforeinput} change=${t.changed} blur=${t.blurred}` +
+                (id === 'street' ? ` picked=${picked}` : '') + ` -> ${msg || 'OK'}`);
+  }
+  const summary = bad === 0 ? 'ALL FIELDS ACCEPTED' : `${bad} FIELD(S) REJECTED`;
+  document.getElementById('results').textContent = summary + '\n' + report.join('\n');
+  window.__ffTestResult = { ok: bad === 0, failures: bad, report };
+  return bad === 0;
+}
+document.getElementById('validate').addEventListener('click', validate);
+window.__ffValidate = validate;
+window.__ffTracked = tracked;
+</script>
+</body>
+</html>

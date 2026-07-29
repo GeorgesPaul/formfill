@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FormFill test: basic controls</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; }
+  .row { margin-bottom: 12px; }
+  label { font-weight: 600; font-size: 13px; display: block; }
+  [contenteditable] { border: 1px solid #999; padding: 6px; width: 320px; min-height: 20px; }
+</style>
+</head>
+<body>
+<h2>Basic controls regression</h2>
+<form id="f">
+  <div class="row"><label for="country">Country</label>
+    <select id="country" name="country">
+      <option value="">-- choose --</option>
+      <option value="be">Belgium</option>
+      <option value="nl">Netherlands</option>
+      <option value="de">Germany</option>
+    </select></div>
+
+  <div class="row"><label>Newsletter</label>
+    <label><input type="checkbox" id="newsletter" name="newsletter"> Subscribe</label></div>
+
+  <div class="row"><label>Gender</label>
+    <label><input type="radio" name="gender" value="male"> Male</label>
+    <label><input type="radio" name="gender" value="female"> Female</label>
+    <label><input type="radio" name="gender" value="other"> Other</label></div>
+
+  <div class="row"><label for="bio">Bio</label>
+    <textarea id="bio" name="bio" rows="3" cols="40"></textarea></div>
+
+  <div class="row"><label for="notes">Notes (contenteditable)</label>
+    <div id="notes" contenteditable="true" role="textbox"></div></div>
+
+  <div class="row"><label for="stale">Field with a stale value</label>
+    <input id="stale" name="stale" type="text" value="WRONG OLD VALUE"></div>
+
+  <div class="row"><label for="num">Amount (number input)</label>
+    <input id="num" name="num" type="number"></div>
+
+  <div class="row"><label for="when">Date (native date input)</label>
+    <input id="when" name="when" type="date"></div>
+</form>
+<script>
+window.snapshot = () => ({
+  country: document.getElementById('country').value,
+  newsletter: document.getElementById('newsletter').checked,
+  gender: (document.querySelector('input[name=gender]:checked') || {}).value || null,
+  bio: document.getElementById('bio').value,
+  notes: document.getElementById('notes').textContent,
+  stale: document.getElementById('stale').value,
+  num: document.getElementById('num').value,
+  when: document.getElementById('when').value
+});
+</script>
+</body>
+</html>

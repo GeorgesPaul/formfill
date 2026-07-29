@@ -14,9 +14,10 @@ async function getLlmConfig() {
 }
 
 function getDefaultLlmConfig() {
+    // Keep in step with ApiUtils.getDefaultLlmConfig.
     return {
-        apiUrl: 'http://localhost:11434/api/generate',
-        model: 'llama3.1',
+        apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+        model: 'anthropic/claude-opus-5',
         apiKey: ''
     };
 }

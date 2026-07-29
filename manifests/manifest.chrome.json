@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "name": "GeorgesPaul Form Filler",
+  "version": "1.23",
+  "description": "Intelligently fills forms based on user profiles",
+  "minimum_chrome_version": "114",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "serviceWorker.js"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "llmConfig.html",
+        "llmConfig.js",
+        "keepassConfig.html",
+        "keepassConfig.js",
+        "styles.css",
+        "icons/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "browserCompat.js",
+        "apiUtils.js",
+        "utils.js",
+        "domUtils.js",
+        "typingEngine.js",
+        "autocompleteFiller.js",
+        "llmClient.js",
+        "formFiller.js",
+        "heuristicFiller.js",
+        "overlayUtils.js",
+        "visionFiller.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "GeorgesPaul Form Filler"
+  }
+}

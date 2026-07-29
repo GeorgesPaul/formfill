@@ -213,6 +213,17 @@ function elementHasCorrectValue(element, expectedValue) {
     const normalizedExpected = expectedValue.toString().trim();
     const normalizedCurrent = currentValue.toString().trim();
 
+    // An autocomplete widget accepted a suggestion for this value. What the
+    // widget wrote back ("Main Street 12, 1012 AB Amsterdam") legitimately
+    // differs from what we typed, so treat it as correct instead of fighting
+    // the widget on every refill pass. Only while the field is non-empty --
+    // if the form blanked it, it genuinely needs filling again.
+    const carriesText = typeof element.value === 'string' || element.isContentEditable;
+    if ((normalizedCurrent || !carriesText) &&
+        element.getAttribute('data-ff-accepted-for') === normalizedExpected) {
+        return true;
+    }
+
     // For select elements, check both the selected option's text and value
     if (element.tagName.toLowerCase() === 'select') {
         const selectedOption = element.options[element.selectedIndex];
@@ -348,78 +359,15 @@ function simulateRealisticFocus(element) {
     fire(MouseEvent, 'click', { ...opts, buttons: 0 });
 }
 
-// Append a single character then delete it, producing real keydown/keyup/
-// beforeinput/input events. Used after non-typing fill strategies so that
-// detection scripts which require keystroke evidence see them. Net change to
-// the field's value is zero. Caller must already have focus on the element.
+// Delete the last character and type it back, producing a real
+// keydown/keypress/beforeinput/input/keyup trail. This is exactly the manual
+// fix people apply when a form insists a filled field is empty. Used after any
+// fill strategy that did not itself type. Net change to the value is zero.
+// Caller must already have focus on the element.
 async function tickleField(element) {
     if (!element) return;
-    const TICKLE_CHAR = 'a';
-    const TICKLE_CODE = TICKLE_CHAR.charCodeAt(0);
-    const isCE = !!element.isContentEditable;
-
     try {
-        // Park the caret at the end so insertText appends.
-        if (!isCE) {
-            try {
-                const len = (element.value || '').length;
-                element.setSelectionRange(len, len);
-            } catch (_) {}
-        }
-
-        // Snapshot before inserting so we can guarantee a zero net change even
-        // when a digit-only mask, input filter, or maxlength swallows the
-        // tickle char. Without this, the Backspace below deletes a *real*
-        // character (e.g. the last digit of a masked "MM / YY" Expiry field).
-        const readValue = () => isCE ? (element.textContent || '') : (element.value || '');
-        const before = readValue();
-
-        // Insert the tickle char.
-        element.dispatchEvent(new KeyboardEvent('keydown', {
-            key: TICKLE_CHAR, code: 'Key' + TICKLE_CHAR.toUpperCase(),
-            keyCode: TICKLE_CODE, charCode: TICKLE_CODE, bubbles: true, cancelable: true
-        }));
-        const inserted = document.execCommand('insertText', false, TICKLE_CHAR);
-        if (!inserted && !isCE) {
-            // execCommand blocked (CSP/Trusted Types). Append via native setter.
-            try {
-                const setter = getNativeSetter(element);
-                setter.call(element, (element.value || '') + TICKLE_CHAR);
-                element.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: TICKLE_CHAR, bubbles: true }));
-            } catch (_) {}
-        }
-        element.dispatchEvent(new KeyboardEvent('keyup', {
-            key: TICKLE_CHAR, code: 'Key' + TICKLE_CHAR.toUpperCase(),
-            keyCode: TICKLE_CODE, charCode: TICKLE_CODE, bubbles: true
-        }));
-        await sleep(15);
-
-        const landed = readValue() !== before;
-
-        // Fire the Backspace keydown/keyup regardless so detection scripts see
-        // a delete keystroke. Only actually remove something if the tickle
-        // char landed; otherwise there is nothing to undo and a delete would
-        // eat a genuine character.
-        element.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true, cancelable: true
-        }));
-        if (landed) {
-            // Restore exactly to the pre-tickle value instead of a blind
-            // execCommand('delete'), which can desync from a mask.
-            if (isCE) {
-                document.execCommand('delete', false);
-                if ((element.textContent || '') !== before) element.textContent = before;
-            } else {
-                try { getNativeSetter(element).call(element, before); }
-                catch (_) { try { element.value = before; } catch (_) {} }
-            }
-            element.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward', bubbles: true }));
-        } else {
-            console.log('[tickleField] tickle char swallowed (mask/maxlength) -- skipping delete to preserve field value.');
-        }
-        element.dispatchEvent(new KeyboardEvent('keyup', {
-            key: 'Backspace', code: 'Backspace', keyCode: 8, bubbles: true
-        }));
+        await TypingEngine.retypeLastChar(element);
     } catch (e) {
         console.warn('[tickleField] failed:', e);
     }
@@ -480,27 +428,16 @@ function fillWithPaste(element, value) {
     } catch (_) { return false; }
 }
 
-// Per-character insertText. Mimics real keyboard typing: each char flows
-// through the browser's input pipeline, so masked/formatted inputs (Syncfusion,
-// Cleave, IMask, etc.) can intercept and format naturally. The first char
-// replaces any existing selection so previous strategies' partial state
-// is overwritten.
+// Per-character typing. Every char flows through a full keydown/keypress/
+// beforeinput/input/keyup sequence, so masked inputs (Cleave, IMask,
+// Syncfusion) format naturally and bot/"was this typed?" checks see the
+// keystrokes they require. Clears any existing content with real Backspace
+// presses first. See typingEngine.js for the event details.
 async function fillWithCharByChar(element, value) {
-    element.focus();
-    // Select existing content so the first insertText overwrites it.
-    try { element.setSelectionRange(0, (element.value || '').length); } catch (_) {}
-
-    const str = String(value);
-    for (const char of str) {
-        if (window.stopFilling) throw new Error("Form filling stopped by user.");
-        const code = char.charCodeAt(0);
-        element.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true, cancelable: true, keyCode: code, charCode: code }));
-        document.execCommand('insertText', false, char);
-        element.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true, keyCode: code }));
-        await sleep(5);
-    }
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    await TypingEngine.typeText(element, value, {
+        clearFirst: true,
+        isCancelled: () => window.stopFilling,
+    });
 }
 
 // Relaxed verify for masked/formatted inputs. Returns true if every
@@ -514,61 +451,134 @@ function verifyFieldValueRelaxed(element, expected) {
     return e.length > 0 && a.includes(e);
 }
 
-// Fill a text/textarea/contenteditable field with verify-and-retry cascade.
+// Fill a text/textarea/contenteditable field.
+//
+// Typing comes FIRST and is the normal path: most forms now check that a field
+// was really typed into, and a value assigned any other way is treated as
+// empty ("this field is required", in red, next to a visibly filled field).
+// The value-assignment strategies below it exist only for fields keystrokes
+// cannot drive -- readonly/masked widgets, date inputs, framework-controlled
+// inputs that reject synthetic keys.
+//
 // Returns { filled, typed } so the caller can decide whether to tickle.
 async function fillTextInput(element, value) {
-    const tag = element.tagName;
+    const typable = TypingEngine.isTypable(element);
 
-    // Strategy 1: Native setter (fast, works on React/Vue/Angular vanilla inputs)
-    console.log('[fillTextInput] Strategy 1: native setter');
+    // A field with maxlength can only ever hold that many characters, so cap the
+    // value the way typing would. The marker tells the verify/refill loop that
+    // the truncated result is the intended outcome, not a failed fill.
+    const cap = (typeof element.maxLength === 'number' && element.maxLength > 0)
+        ? element.maxLength : -1;
+    if (cap > 0 && String(value).length > cap) {
+        console.log(`[fillTextInput] Value longer than maxlength=${cap}; truncating.`);
+        try { element.setAttribute('data-ff-accepted-for', String(value).trim()); } catch (_) {}
+        value = String(value).slice(0, cap);
+    }
+
+    if (typable) {
+        // Strategy 1: type it, character by character.
+        console.log('[fillTextInput] Strategy 1: simulated typing');
+        await fillWithCharByChar(element, value);
+        await sleep(60);
+        if (verifyFieldValue(element, value)) return { filled: true, typed: true };
+        if (verifyFieldValueRelaxed(element, value)) {
+            console.log('[fillTextInput] Strategy 1 succeeded with relaxed verify (masked input).');
+            return { filled: true, typed: true };
+        }
+
+        // Strategy 2: type the alphanumerics only. For masks that insert their
+        // own separators and reject ours (dates, phone numbers, card numbers).
+        const alnum = String(value).replace(/[^0-9a-zA-Z]/g, '');
+        if (alnum && alnum !== String(value)) {
+            console.log('[fillTextInput] Strategy 2: simulated typing (alphanumerics only)');
+            await fillWithCharByChar(element, alnum);
+            await sleep(60);
+            if (verifyFieldValue(element, value) || verifyFieldValueRelaxed(element, value)) {
+                console.log('[fillTextInput] Strategy 2 succeeded.');
+                return { filled: true, typed: true };
+            }
+        }
+    } else {
+        console.log('[fillTextInput] Field is not typable (readonly/date/custom); using value assignment.');
+    }
+
+    // Strategy 3: native setter (React/Vue/Angular vanilla inputs, date inputs).
+    console.log('[fillTextInput] Strategy 3: native setter');
     fillWithNativeSetter(element, value);
     await sleep(30);
     if (verifyFieldValue(element, value)) return { filled: true, typed: false };
 
-    // Strategy 2: execCommand insertText (whole value)
-    console.log('[fillTextInput] Strategy 2: execCommand insertText (whole)');
+    // Strategy 4: execCommand insertText for the whole value. Only meaningful
+    // when the page actually has focus (see typingEngine.js).
+    console.log('[fillTextInput] Strategy 4: execCommand insertText (whole)');
     fillWithExecCommand(element, value);
     await sleep(30);
     if (verifyFieldValue(element, value)) return { filled: true, typed: false };
 
-    // Strategy 3: Synthesized paste event
-    console.log('[fillTextInput] Strategy 3: paste event');
+    // Strategy 5: synthesized paste event, for inputs that only accept a value
+    // through their paste handler.
+    console.log('[fillTextInput] Strategy 5: paste event');
     fillWithPaste(element, value);
     await sleep(30);
     if (verifyFieldValue(element, value)) return { filled: true, typed: false };
-
-    // Strategy 4: Per-char insertText with full value. Masks can reject
-    // separator chars but still accept digits -- this lets them format.
-    console.log('[fillTextInput] Strategy 4: per-char insertText (full)');
-    await fillWithCharByChar(element, value);
-    await sleep(100);
-    if (verifyFieldValue(element, value)) return { filled: true, typed: true };
-    // Relaxed match: mask may have reformatted our input. Good enough.
-    if (verifyFieldValueRelaxed(element, value)) {
-        console.log('[fillTextInput] Strategy 4 succeeded with relaxed verify (masked input).');
-        return { filled: true, typed: true };
-    }
-
-    // Strategy 5: Per-char insertText with separators stripped. For masks
-    // that auto-insert their own separators and reject ours.
-    const alnum = String(value).replace(/[^0-9a-zA-Z]/g, '');
-    if (alnum && alnum !== String(value)) {
-        console.log('[fillTextInput] Strategy 5: per-char insertText (alphanumerics only)');
-        // Clear first so we don't accumulate on top of strategy 4 residue.
-        try { getNativeSetter(element).call(element, ''); } catch (_) { element.value = ''; }
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        await sleep(20);
-        await fillWithCharByChar(element, alnum);
-        await sleep(100);
-        if (verifyFieldValue(element, value) || verifyFieldValueRelaxed(element, value)) {
-            console.log('[fillTextInput] Strategy 5 succeeded.');
-            return { filled: true, typed: true };
-        }
-    }
+    if (verifyFieldValueRelaxed(element, value)) return { filled: true, typed: false };
 
     console.warn('[fillField] Value may not have stuck for:', element.id || element.name || element,
                  'expected:', value, 'got:', element.value);
-    return { filled: false, typed: true };
+    return { filled: false, typed: typable };
+}
+
+// Type into a text-like field and deal with whatever the page does in
+// response: a suggestion dropdown to pick from, a mask that reformats, or a
+// validator waiting for change/blur. Shared by the plain-text branch and by
+// comboboxes that turn out to be free-text typeaheads.
+async function fillTextLikeField(element, value, info, attempt = 1) {
+    // On a retry pass the field may hold stale/partial text (a previous
+    // attempt's residue, or a value the form reset). The typing path clears it
+    // with real Backspace presses; this only covers the non-typable fields that
+    // skip typing altogether.
+    if (attempt > 1 && !TypingEngine.isTypable(element)) {
+        try { getNativeSetter(element).call(element, ''); }
+        catch (_) { try { element.value = ''; } catch (_) {} }
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(20);
+    }
+
+    // Watch for a suggestion popup from the first keystroke onwards: many
+    // widgets render their list once and reuse it, so it has to be observed
+    // while typing rather than looked for afterwards.
+    const watcher = AutocompleteFiller.startWatch(element);
+    let result;
+    try {
+        // Typing first, then value-assignment fallbacks. See fillTextInput.
+        result = await fillTextInput(element, value);
+    } catch (e) {
+        watcher.stop();
+        throw e;
+    }
+
+    // Address/city/company lookups: pick the matching suggestion, otherwise the
+    // form keeps treating the field as unset.
+    let autocompleted = { handled: false };
+    try {
+        autocompleted = await AutocompleteFiller.resolve(watcher, element, value, info || {});
+    } catch (e) {
+        watcher.stop();
+        console.warn('[fillField] autocomplete handling failed:', e);
+    }
+
+    if (!autocompleted.handled) {
+        // If a non-typing strategy filled the field, leave a keystroke trail for
+        // validators that gate on real keyboard events.
+        if (result && result.filled && !result.typed) {
+            await tickleField(element);
+            await sleep(50);
+        }
+        // change + a real blur, which is what most "you must fill this in"
+        // validators actually listen for.
+        TypingEngine.commitField(element);
+    }
+    return autocompleted;
 }
 
 async function fillField(element, value, info, attempt = 1) {
@@ -645,28 +655,12 @@ async function fillField(element, value, info, attempt = 1) {
         // Open it, click the matching option.
         const ok = await fillCustomCombobox(element, value);
         if (!ok) {
-            // Fall back to typing in case it's a combobox with free-text entry.
-            await fillTextInput(element, value);
+            // Free-text combobox, or one whose list never opened on click: type
+            // into it and take whatever suggestions that produces.
+            await fillTextLikeField(element, value, info, attempt);
         }
     } else {
-        // On a retry pass the field may hold stale/partial text (a previous
-        // attempt's residue, or a value the form reset). Clear it first so the
-        // fill cascade starts clean instead of appending onto garbage.
-        if (attempt > 1) {
-            try { getNativeSetter(element).call(element, ''); }
-            catch (_) { try { element.value = ''; } catch (_) {} }
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            await sleep(20);
-        }
-        // Verify-and-retry cascade: native setter, then execCommand, then keystrokes.
-        // Handles React/Vue/Angular controlled inputs that ignore raw value assignment.
-        const result = await fillTextInput(element, value);
-        // If a non-typing strategy succeeded, leave a keystroke trail for
-        // detection scripts that gate on real keyboard events.
-        if (result && result.filled && !result.typed) {
-            await tickleField(element);
-            await sleep(sleep_between_events_ms);
-        }
+        await fillTextLikeField(element, value, info, attempt);
     }
 
     await sleep(sleep_between_events_ms);
@@ -779,6 +773,15 @@ function isCustomCombobox(element) {
     const hp = (element.getAttribute('aria-haspopup') || '').toLowerCase();
     if (hp === 'dialog' || hp === 'grid') return false;
 
+    // A typable input with aria-autocomplete="list"/"both" is a search-as-you-
+    // type field (address lookup, city search). Its list only appears in
+    // response to typing, so clicking it and waiting for a listbox finds
+    // nothing. Those belong on the typing path, which handles the suggestions.
+    const aac = (element.getAttribute('aria-autocomplete') || '').toLowerCase();
+    const typableInput = (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') &&
+                         !element.readOnly && !element.hasAttribute('readonly');
+    if (typableInput && (aac === 'list' || aac === 'both' || aac === 'inline')) return false;
+
     const role = (element.getAttribute('role') || '').toLowerCase();
     if (role === 'combobox' || role === 'listbox') return true;
     if (hp === 'listbox' || hp === 'menu' || hp === 'true') return true;
@@ -819,8 +822,9 @@ function isVisible(el) {
 // Open a custom combobox, click the matching option. Generic — no site-specific logic.
 async function fillCustomCombobox(element, value) {
     console.log('[fillCustomCombobox] Opening combobox for value:', value);
-    element.focus();
-    simulateMouseClick(element);
+    // Full pointer sequence, not a bare click: most dropdown widgets open on
+    // mousedown/pointerdown and never see a lone click event.
+    simulateRealisticFocus(element);
 
     // Wait for a listbox popup to appear.
     let listbox = null;
@@ -847,7 +851,28 @@ async function fillCustomCombobox(element, value) {
         el
     }));
 
-    const match = findMatchingOption(entries, value);
+    let match = findMatchingOption(entries, value);
+
+    if (!match) {
+        // Fuzzy fallback: "Amsterdam, Noord-Holland" for "Amsterdam".
+        const scored = entries
+            .map(e => ({ e, s: AutocompleteFiller.score(e.text, value) }))
+            .sort((a, b) => b.s - a.s)[0];
+        if (scored && scored.s >= 0.55) match = scored.e;
+    }
+
+    if (!match && TypingEngine.isTypable(element)) {
+        // Searchable combobox (react-select, select2, MUI Autocomplete): the
+        // full option list only appears after typing a query.
+        console.log('[fillCustomCombobox] No option matched; typing to filter.');
+        const watcher = AutocompleteFiller.startWatch(element);
+        await TypingEngine.typeText(element, value, {
+            clearFirst: true, isCancelled: () => window.stopFilling
+        });
+        const res = await AutocompleteFiller.resolve(watcher, element, value, {});
+        if (res.handled) return true;
+    }
+
     if (!match) {
         console.warn('[fillCustomCombobox] No matching option for', value, 'among', entries.map(e => e.text));
         // Close the popup so it doesn't stay open.
@@ -856,9 +881,13 @@ async function fillCustomCombobox(element, value) {
     }
 
     match.el.scrollIntoView({ block: 'nearest' });
-    simulateMouseClick(match.el);
+    // Same reason as opening: options are commonly selected on mousedown.
+    AutocompleteFiller.mouseSequence(match.el);
     await sleep(50);
     match.el.dispatchEvent(new Event('change', { bubbles: true }));
+    // Remember what the widget was asked for: its own display text may differ
+    // from our value, and the verify loop must not read that as a failure.
+    try { element.setAttribute('data-ff-accepted-for', String(value).trim()); } catch (_) {}
     console.log('[fillCustomCombobox] Clicked option:', match.text);
     return true;
 }

@@ -19,9 +19,12 @@
     };
   
     ApiUtils.getDefaultLlmConfig = function() {
+      // Used only until the user saves a configuration. Claude Opus 5 via
+      // OpenRouter is the recommended default (vision-capable, best at
+      // ambiguous profile-to-field matching).
       return {
-        apiUrl: 'http://localhost:11434/api/generate',
-        model: 'llama3.1',
+        apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
+        model: 'anthropic/claude-opus-5',
         apiKey: ''
       };
     };

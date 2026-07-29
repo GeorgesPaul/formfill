@@ -15,16 +15,32 @@ function generateLoadingBar(percentage) {
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Fresh screenshot for the content script's mid-loop vision recall. Content
-  // scripts can't call tabs.captureVisibleTab; background can. Returning a
-  // Promise resolves it as the message response (Firefox WebExtensions).
+  // scripts can't call tabs.captureVisibleTab; background can. sendResponse +
+  // `return true` is the one async-reply pattern both Firefox and Chrome MV3
+  // support (returning a Promise works in Firefox only).
   if (message.action === "captureScreenshot") {
     const winId = sender && sender.tab ? sender.tab.windowId : null;
-    return browser.tabs.captureVisibleTab(winId, { format: 'png' })
-      .then(dataUrl => ({ dataUrl }))
+    Compat.captureVisibleTab(winId, { format: 'png' })
+      .then(dataUrl => sendResponse({ dataUrl }))
       .catch(err => {
         console.error("captureScreenshot failed:", err);
-        return { dataUrl: null };
+        sendResponse({ dataUrl: null });
       });
+    return true;
+  }
+
+  // Chrome MV3 can evict this service worker between messages, taking the
+  // session state with it. Rather than dropping the rest of a fill in progress,
+  // adopt the session the content script is reporting on.
+  const isFillMessage = typeof message.action === 'string' && message.action.startsWith('fillForm');
+  if (isFillMessage && currentSessionId === null && message.sessionId) {
+    currentSessionId = message.sessionId;
+    if (message.action !== "fillFormStart") {
+      console.log("[Background] Adopting in-flight session after restart:", message.sessionId);
+      isFilling = true;
+      if (!formFillStart) formFillStart = Date.now();
+      if (sender && sender.frameId !== undefined) activeFrames.add(sender.frameId);
+    }
   }
 
   let computedMessage = '';
@@ -125,13 +141,15 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         isFilling = false;
         const _filled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
         const _duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-        browser.runtime.sendMessage({
+        // Compat.notify: the panel may be closed, and an unhandled rejection
+        // per progress tick is noise, not a fault.
+        Compat.notify({
           action: "fillFormComplete",
           filled: _filled,
           total: totalFields,
           message: `Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${_filled} out of ${totalFields} fields in ${_duration} seconds.`,
           sessionId: _sid
-        }).catch(e => console.error("Error sending message to popup:", e));
+        });
       }, 400);
       return; // Relay handled by timer above
     }
@@ -146,14 +164,12 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (computedMessage) {
-    browser.runtime.sendMessage({
+    Compat.notify({
       action: message.action,
       filled: totalFilled,
       total: totalFields,
       message: computedMessage || message.message,
       sessionId: currentSessionId
-    }).catch(error => {
-      console.error("Error sending message to popup:", error);
     });
   }
 });
