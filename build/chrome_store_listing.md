@@ -97,14 +97,17 @@ Tick these types:
 | Personally identifiable information | yes | Profiles hold name, address, email, phone. |
 | Authentication information | yes | KeePass entries are read and typed into login forms. |
 | Website content | yes | Field labels and surrounding text (and a screenshot in vision mode) go to the model. |
-| Financial and payment information | see note | Only if you intend profiles to hold card details. |
+| Financial and payment information | yes | The heuristic filler targets card number, cardholder, expiry and CVV fields. |
 | Health, location, web history, personal communications, user activity | no | Never touched. The extension synthesizes keystrokes; it does not record the user's. |
 
-**Financial:** the profile is a free-text box, so a user *can* paste card details
-into it and the extension would fill them like anything else. It never asks for
-them and has no payment-specific handling. Tick the box if you want to advertise
-filling checkout forms; leave it unticked and say so in the listing if you do
-not. Do not leave it unticked while the screenshots show a card being filled.
+**Financial is not optional.** `heuristicFiller.js` has explicit rules for
+`cc_number`, `cc_name`, `cc_exp_month`, `cc_exp_year` and `cc_csc`, matched from
+autocomplete attributes and label patterns. The extension advertises card filling
+in its own README, so leaving the box unticked is a false declaration a reviewer
+can spot by reading the source. Note also that the heuristic path fills cards
+locally, but the full profile text still goes into the model prompt on every
+fill, so card details in a profile are transmitted: PRIVACY.md says so plainly
+and the listing should not imply otherwise.
 
 All three certification checkboxes can be ticked truthfully:
 
@@ -132,5 +135,9 @@ it in the code but not in the listing treats it as an undisclosed transfer:
 
 ### Privacy policy
 
-A privacy policy URL is **required** once any data type is ticked. It has to be a
-public page. The text above is the substance of it.
+A privacy policy URL is **required** once any data type is ticked. Use:
+
+    https://github.com/GeorgesPaul/formfill/blob/main/PRIVACY.md
+
+The source of that page is `PRIVACY.md` at the repo root. Keep it and this file
+saying the same thing: the reviewer reads both.
