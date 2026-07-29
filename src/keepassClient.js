@@ -60,8 +60,40 @@ async function loadDatabase() {
     } catch (err) {
         cachedDatabase = null;
         cacheTimestamp = 0;
-        throw err;
+        throw explainKdbxError(err);
     }
+}
+
+// kdbxweb raises terse errors ("Error InvalidKey", "Error NotImplemented:
+// argon2 not implemented") that surface verbatim in the popup. Turn the two
+// the user can actually hit into something actionable.
+//
+// On Argon2: kdbxweb ships no implementation and we deliberately do not bundle
+// one. A WASM build would need separate source disclosure for AMO review and a
+// CSP exception, and pure-JS Argon2 takes many seconds at KeePassXC's default
+// memory cost. Databases using AES-KDF (KDBX 3.1, and KDBX4 files whose KDF was
+// left at AES) work fine, which is why this has never been hit in practice.
+function explainKdbxError(err) {
+    const code = err && err.code;
+    const message = String((err && err.message) || err);
+
+    if (code === 'NotImplemented' && /argon2/i.test(message)) {
+        return new Error(
+            'This database uses the Argon2 key derivation function, which this extension cannot read. ' +
+            'In KeePassXC open Database > Database Settings > Encryption and set "Key Derivation Function" ' +
+            'to AES-KDF, then save. Your entries and master password stay the same.'
+        );
+    }
+    if (code === 'InvalidKey') {
+        return new Error('Wrong master password (or this file needs a key file as well).');
+    }
+    if (code === 'BadSignature') {
+        return new Error('That file is not a KeePass database (.kdbx).');
+    }
+    if (code === 'FileCorrupt') {
+        return new Error('The database file is truncated or corrupt. Re-select it in KeePass Config.');
+    }
+    return err;
 }
 
 function clearCache() {
