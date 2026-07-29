@@ -111,5 +111,5 @@ code: <https://github.com/GeorgesPaul/formfill>
 
 ## Contact
 
-Questions about privacy, or a mistake in this document: georges@megahard.pro, or
+Questions about privacy, or a mistake in this document: formfill@megahard.pro, or
 open an issue at <https://github.com/GeorgesPaul/formfill/issues>.
