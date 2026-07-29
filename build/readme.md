@@ -28,7 +28,41 @@ Load unpacked while developing:
 
 Credentials come from `AMO_JWT_ISSUER` / `AMO_JWT_SECRET` or `$HOME\.amo\credentials.ps1`, never from the repo.
 
-## Chrome Web Store
+## Release to the Chrome Web Store
 
-`build.ps1 -Target chrome -Zip` produces `dist\formfill-chrome-<version>.zip`, which is what the
-developer dashboard expects. There is no automated upload script for it.
+`publish_to_cws.bat` builds the Chrome package and submits it for review. It does **not**
+bump the version: `bump_version.ps1` derives the next number from AMO and writes it into
+both manifests, so after a Firefox release the Chrome package already carries the right one.
+Shipping to Chrome on its own? Run `bump_version.ps1` first.
+
+1. `create_Chrome_extension_zip.bat` - calls `build.ps1 -Target chrome -Zip`.
+2. `upload_to_cws.ps1` - replaces the store draft with `dist\formfill-chrome-<version>.zip`
+   and submits it for review.
+   - `-CheckOnly` talks to the API and prints what the store holds, uploads nothing.
+   - `-UploadOnly` updates the draft but does not submit, so you can eyeball the listing.
+   - `-Target trustedTesters` ships to the tester group instead of everyone.
+   - `-DeployPercentage 20` starts a staged rollout.
+
+Credentials come from `CWS_CLIENT_ID` / `CWS_CLIENT_SECRET` / `CWS_REFRESH_TOKEN` /
+`CWS_ITEM_ID`, or from `$HOME\.cws\credentials.ps1`, never from the repo.
+
+### One-time setup
+
+Google has no "copy your API key" page. You create an OAuth client once, approve it once
+in a browser, and keep the refresh token.
+
+1. [Google Cloud console](https://console.cloud.google.com/): create a project (any name).
+2. APIs & Services -> Library -> enable **Chrome Web Store API**.
+3. APIs & Services -> OAuth consent screen -> External -> fill in the required fields ->
+   **Publish** the app. Left in Testing, refresh tokens expire after 7 days.
+4. APIs & Services -> Credentials -> Create credentials -> OAuth client ID ->
+   application type **Desktop app**. Note the client ID and secret.
+5. `get_cws_refresh_token.ps1 -ClientId ... -ClientSecret ... -ItemId ...` opens the
+   consent screen, catches the redirect on a loopback port, and writes
+   `$HOME\.cws\credentials.ps1`.
+6. Verify with `upload_to_cws.ps1 -CheckOnly`.
+
+The item ID is the 32-letter string in the item's dashboard URL. The **first** submission
+has to be made by hand at the [developer dashboard](https://chrome.google.com/webstore/devconsole/)
+(one-off 5 USD developer fee, plus the store listing: description, screenshots, category,
+privacy declarations). The API only ships updates to an item that already exists.
