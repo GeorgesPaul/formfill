@@ -1,54 +1,29 @@
-// Event listeners
+// content.js -- message router for the page side, plus everything that has to
+// keep watching the page AFTER a fill: submit capture (what the form held when
+// the user pressed the button, and what the browser packed into FormData),
+// network bodies relayed from pageHook.js, and the page that followed.
+
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("Content script received message:", message);
-
   if (message.action === "fillForm") {
-    console.log("Filling form with profiles:", message.profiles || message.profile);
-
-    // Handle both new format (profiles array) and old format (single profile)
     let profilesToUse = [];
-    if (message.profiles) {
-      // New format: array of profiles
-      profilesToUse = message.profiles;
-    } else if (message.profile) {
-      // Old format: single profile, wrap in array for consistency
-      profilesToUse = [message.profile];
-    } else {
-      console.error("No profile data received");
+    if (message.profiles) profilesToUse = message.profiles;
+    else if (message.profile) profilesToUse = [message.profile];
+    else {
       sendResponse({ status: "error", message: "No profile data received" });
       return true;
     }
-
-    if (message.useVisualProcessing && message.screenshot) {
-      // Vision mode only makes sense in the top frame (screenshot is of the main page)
-      if (window.self !== window.top) {
-        console.log("[Content] Iframe detected with vision mode enabled — using DOM-only fallback");
-        fillForm(profilesToUse, message.customPrompt, message.sessionId).then(result => {
-          sendResponse(result);
-        }).catch(error => {
-          sendResponse({ status: "error", message: error.toString() });
-        });
-        return true;
-      }
-      console.log("Using vision-LLM form filling pipeline...");
-      visionFillForm(message.screenshot, profilesToUse, message.customPrompt, message.sessionId).then(result => {
-        sendResponse(result);
-      }).catch(error => {
-        sendResponse({ status: "error", message: error.toString() });
-      });
-    } else {
-      fillForm(profilesToUse, message.customPrompt, message.sessionId).then(result => {
-        sendResponse(result);
-      }).catch(error => {
-        sendResponse({ status: "error", message: error.toString() });
-      });
-    }
-
-    return true; // Indicate that we will send a response asynchronously
+    installPostFillWatchers();
+    FillAgent.run({
+      profiles: profilesToUse,
+      customPrompt: message.customPrompt || '',
+      sessionId: message.sessionId,
+      vision: !!message.useVisualProcessing && window === window.top,
+    }).then(result => sendResponse(result))
+      .catch(error => sendResponse({ status: "error", message: error.toString() }));
+    return true;
   }
 
   if (message.action === "fillCredentials") {
-    console.log("[Content] Filling credentials from KeePass...");
     fillCredentialsOnly(message.sessionId).then(result => {
       sendResponse(result);
     }).catch(error => {
@@ -58,31 +33,147 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "stopFilling") {
-    console.log("Stopping form filling...");
     window.stopFilling = true;
-    window.currentFillSessionId = null; // Invalidate session so isCancelled() triggers
+    window.currentFillSessionId = null;
     if (window.abortController) {
-      window.abortController.abort();
+      try { window.abortController.abort(); } catch (_) {}
     }
-    // Clean up visual processor overlay if present
-    if (typeof removeOverlay === 'function') {
-      removeOverlay();
-    }
-    // Clean up KeePass picker if present
-    if (typeof removeKeePassPicker === 'function') {
-      removeKeePassPicker();
-    }
+    if (typeof OverlayUtils !== 'undefined') OverlayUtils.clearAll();
+    if (typeof removeKeePassPicker === 'function') removeKeePassPicker();
     sendResponse({ status: "stopped" });
+    return true;
+  }
+
+  if (message.action === "ffSnapshot") {
+    // Debug helper: the panel (or a test) can ask what this frame sees.
+    try { sendResponse({ snapshot: FormKit.snapshot() }); } catch (e) { sendResponse({ error: String(e) }); }
     return true;
   }
 });
 
-// Fill only credentials from KeePass (username and password fields)
+// ---------------------------------------------------------------------------
+// Post-fill watchers: record what actually gets submitted.
+// ---------------------------------------------------------------------------
+let postFillWatchersInstalled = false;
+let lastCaptureAt = { };
+
+function installPostFillWatchers() {
+  if (postFillWatchersInstalled) return;
+  postFillWatchersInstalled = true;
+
+  const SUBMITTISH = /\b(submit|send|pay|order|buy|purchase|register|sign ?up|create|confirm|book|checkout|apply|save|finish|complete|continue|next|proceed|verstuur|verzend|bestel|betaal|opslaan|bevestig|verder|volgende|abschicken|senden|bestellen|zahlen|weiter|speichern|envoyer|payer|commander|suivant|valider)\b/i;
+
+  // Native form submission: this is exactly what the browser sends.
+  document.addEventListener('submit', (e) => {
+    try {
+      const form = e.target && e.target.tagName === 'FORM' ? e.target : null;
+      captureSubmission('submit-event', {
+        formAction: form ? form.action : undefined,
+        formMethod: form ? form.method : undefined,
+        formData: form ? FormKit.formDataOf(form) : undefined,
+        defaultPrevented: e.defaultPrevented,
+      });
+    } catch (_) {}
+  }, true);
+
+  // Clicks on anything that looks like a submit/next button (JS-driven forms
+  // never fire a submit event).
+  document.addEventListener('click', (e) => {
+    try {
+      const el = e.target && e.target.closest ? e.target.closest('button, input[type="submit"], input[type="button"], [role="button"], a') : null;
+      if (!el) return;
+      const text = (el.tagName === 'INPUT' ? el.value : (el.textContent || el.getAttribute('aria-label') || '')).trim().slice(0, 80);
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (type !== 'submit' && !SUBMITTISH.test(text)) return;
+      const form = el.form || (el.closest ? el.closest('form') : null);
+      captureSubmission('button-click', {
+        button: text, buttonType: type,
+        formAction: form ? form.action : undefined,
+        formData: form ? FormKit.formDataOf(form) : undefined,
+      });
+    } catch (_) {}
+  }, true);
+
+  // Enter in a field.
+  document.addEventListener('keydown', (e) => {
+    try {
+      if (e.key !== 'Enter') return;
+      const el = e.target;
+      if (!el || !el.matches || !el.matches('input, [role="textbox"], [role="combobox"]')) return;
+      const form = el.form || (el.closest ? el.closest('form') : null);
+      captureSubmission('enter-key', { field: el.getAttribute('data-ff-ref') || el.name || el.id, formData: form ? FormKit.formDataOf(form) : undefined });
+    } catch (_) {}
+  }, true);
+
+  // Request bodies, relayed from the page world (see pageHook.js).
+  document.addEventListener('ff-net-capture', (e) => {
+    try {
+      if (typeof FillLogger === 'undefined' || !FillLogger.hasSession()) return;
+      const rec = JSON.parse(e.detail);
+      FillLogger.event('networkSubmit', rec);
+    } catch (_) {}
+  });
+
+  // Leaving the page: last look at the form, and flag the next page load.
+  window.addEventListener('pagehide', () => {
+    try {
+      if (window.currentFillSessionId) {
+        Compat.notify({ action: 'fillFormComplete', filled: 0, total: 0, message: 'Page navigated during fill.', sessionId: window.currentFillSessionId });
+      }
+      if (typeof FillLogger !== 'undefined' && FillLogger.hasSession()) {
+        FillLogger.event('pagehide', { url: location.href, values: FormKit.valuesSnapshot() });
+        try { sessionStorage.setItem('ff-post-submit-pending', JSON.stringify({ sessionId: FillLogger.lastSessionId(), from: location.href, t: Date.now() })); } catch (_) {}
+      }
+    } catch (_) {}
+  });
+}
+
+function captureSubmission(trigger, extra) {
+  if (typeof FillLogger === 'undefined' || !FillLogger.hasSession()) return;
+  const now = Date.now();
+  // Dedupe rapid repeats of the SAME trigger only; a submit event right after
+  // a button click is kept, because it carries the authoritative FormData.
+  if (now - (lastCaptureAt[trigger] || 0) < 300) return;
+  lastCaptureAt[trigger] = now;
+  FillLogger.event('submitCapture', { trigger, url: location.href, values: FormKit.valuesSnapshot(), ...extra });
+}
+
+// A previous page in this tab was submitted after a fill: record where we
+// landed and what the page says (errors / success), then stop.
+(function logPostSubmitPage() {
+  try {
+    const raw = sessionStorage.getItem('ff-post-submit-pending');
+    if (!raw) return;
+    sessionStorage.removeItem('ff-post-submit-pending');
+    const pending = JSON.parse(raw);
+    if (!pending || !pending.sessionId || Date.now() - pending.t > 10 * 60 * 1000) return;
+    const collect = () => {
+      const texts = [];
+      try {
+        const cands = document.querySelectorAll('[role="alert"], [aria-live], [class*="error" i], [class*="invalid" i], [class*="success" i], [class*="thank" i], [class*="confirm" i], [class*="danger" i], [class*="warning" i], h1, h2');
+        for (const c of cands) {
+          const t = (c.textContent || '').replace(/\s+/g, ' ').trim();
+          if (t && t.length <= 300 && AccName.visible(c)) texts.push(t);
+          if (texts.length >= 25) break;
+        }
+      } catch (_) {}
+      let values = [];
+      try { values = FormKit.valuesSnapshot(); } catch (_) {}
+      try { sessionStorage.setItem('ff-last-session', pending.sessionId); } catch (_) {}
+      FillLogger.event('postSubmitPage', { from: pending.from, url: location.href, title: document.title, texts, fieldsOnNewPage: values.length, values: values.slice(0, 60) });
+    };
+    if (document.readyState === 'complete') setTimeout(collect, 800);
+    else window.addEventListener('load', () => setTimeout(collect, 800), { once: true });
+  } catch (_) {}
+})();
+
+// ---------------------------------------------------------------------------
+// KeePass credential fill (unchanged behaviour: typed, never assigned).
+// ---------------------------------------------------------------------------
 async function fillCredentialsOnly(sessionId) {
   window.currentFillSessionId = sessionId;
   window.stopFilling = false;
 
-  // Store credential fields globally for the picker
   window.keepassCredentialFields = { username: null, password: null };
   window.keepassEntries = [];
 
@@ -99,7 +190,6 @@ async function fillCredentialsOnly(sessionId) {
       sessionId: sessionId
     });
 
-    // Find credential fields
     const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
     let usernameField = null;
     let passwordField = null;
@@ -123,7 +213,6 @@ async function fillCredentialsOnly(sessionId) {
       }
     }
 
-    // If we found password but not username, look for text/email input before it
     if (passwordField && !usernameField) {
       const allInputs = Array.from(inputs);
       const pwIndex = allInputs.indexOf(passwordField);
@@ -158,7 +247,6 @@ async function fillCredentialsOnly(sessionId) {
       sessionId: sessionId
     });
 
-    // Query KeePass
     const keepassResult = await browser.runtime.sendMessage({
       action: "keepass-get-logins",
       url: window.location.href
@@ -178,9 +266,7 @@ async function fillCredentialsOnly(sessionId) {
 
     const entries = keepassResult.entries;
     window.keepassEntries = entries;
-    console.log(`[Content] Found ${entries.length} KeePass entries for this site`);
 
-    // If single match, auto-fill. If multiple matches, show picker.
     if (entries.length === 1) {
       const filledCount = await fillCredentialEntry(entries[0], usernameField, passwordField);
       Compat.notify({
@@ -192,7 +278,6 @@ async function fillCredentialsOnly(sessionId) {
       });
       return { status: "success", message: `Filled ${filledCount} credential field(s).` };
     } else {
-      // Multiple matches - show picker icon
       showKeePassPicker(entries, usernameField, passwordField, sessionId);
       Compat.notify({
         action: "fillFormComplete",
@@ -227,7 +312,6 @@ async function fillCredentialsOnly(sessionId) {
   }
 }
 
-// Fill credentials from a single entry.
 // Typed, not assigned: login forms are among the strictest about wanting real
 // keystrokes, and an assigned password often leaves the submit button disabled.
 async function fillCredentialEntry(entry, usernameField, passwordField) {
@@ -242,22 +326,18 @@ async function fillCredentialEntry(entry, usernameField, passwordField) {
     filledCount++;
   }
 
-  // Click outside to trigger validation
   document.body.click();
-  console.log(`[Content] Filled ${filledCount} credential field(s) from entry: ${entry.name}`);
   return filledCount;
 }
 
 // Show KeePass picker icon next to credential fields
 function showKeePassPicker(entries, usernameField, passwordField, sessionId) {
-  // Remove any existing picker
   removeKeePassPicker();
 
   const iconUrl = browser.runtime.getURL('icons/icon16.png');
   const targetField = usernameField || passwordField;
   if (!targetField) return;
 
-  // Create picker icon
   const icon = document.createElement('img');
   icon.id = 'keepass-picker-icon';
   icon.src = iconUrl;
@@ -276,7 +356,6 @@ function showKeePassPicker(entries, usernameField, passwordField, sessionId) {
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
   `;
 
-  // Position icon to the right of the field (left side of icon aligns with right side of field)
   function positionIcon() {
     const rect = targetField.getBoundingClientRect();
     const scrollX = window.scrollX || document.documentElement.scrollLeft;
@@ -288,21 +367,17 @@ function showKeePassPicker(entries, usernameField, passwordField, sessionId) {
   positionIcon();
   document.body.appendChild(icon);
 
-  // Update position on scroll/resize
   window.addEventListener('scroll', positionIcon, { passive: true });
   window.addEventListener('resize', positionIcon, { passive: true });
 
-  // Store cleanup function
   window.keepassPickerCleanup = () => {
     window.removeEventListener('scroll', positionIcon);
     window.removeEventListener('resize', positionIcon);
   };
 
-  // Handle icon hover
   icon.addEventListener('mouseenter', () => { icon.style.opacity = '1'; });
   icon.addEventListener('mouseleave', () => { icon.style.opacity = '0.9'; });
 
-  // Handle icon click - show dropdown
   icon.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -310,9 +385,7 @@ function showKeePassPicker(entries, usernameField, passwordField, sessionId) {
   });
 }
 
-// Show dropdown menu with KeePass entries
 function showKeePassDropdown(entries, usernameField, passwordField, icon) {
-  // Remove existing dropdown
   const existing = document.getElementById('keepass-picker-dropdown');
   if (existing) existing.remove();
 
@@ -333,7 +406,6 @@ function showKeePassDropdown(entries, usernameField, passwordField, icon) {
     font-size: 13px;
   `;
 
-  // Header
   const header = document.createElement('div');
   header.style.cssText = `
     padding: 8px 12px;
@@ -345,7 +417,6 @@ function showKeePassDropdown(entries, usernameField, passwordField, icon) {
   header.textContent = 'Select KeePass Entry';
   dropdown.appendChild(header);
 
-  // Entry list
   for (const entry of entries) {
     const item = document.createElement('div');
     item.style.cssText = `
@@ -380,14 +451,12 @@ function showKeePassDropdown(entries, usernameField, passwordField, icon) {
 
   document.body.appendChild(dropdown);
 
-  // Position dropdown below icon
   const iconRect = icon.getBoundingClientRect();
   const scrollX = window.scrollX || document.documentElement.scrollLeft;
   const scrollY = window.scrollY || document.documentElement.scrollTop;
   dropdown.style.left = `${iconRect.right + scrollX - dropdown.offsetWidth}px`;
   dropdown.style.top = `${iconRect.bottom + scrollY + 4}px`;
 
-  // Adjust if off-screen
   const dropdownRect = dropdown.getBoundingClientRect();
   if (dropdownRect.right > window.innerWidth) {
     dropdown.style.left = `${window.innerWidth - dropdownRect.width - 10 + scrollX}px`;
@@ -396,7 +465,6 @@ function showKeePassDropdown(entries, usernameField, passwordField, icon) {
     dropdown.style.left = `${10 + scrollX}px`;
   }
 
-  // Close on click outside
   function handleClickOutside(e) {
     if (!dropdown.contains(e.target) && e.target.id !== 'keepass-picker-icon') {
       dropdown.remove();
@@ -406,7 +474,6 @@ function showKeePassDropdown(entries, usernameField, passwordField, icon) {
   setTimeout(() => document.addEventListener('click', handleClickOutside), 0);
 }
 
-// Remove KeePass picker icon and dropdown
 function removeKeePassPicker() {
   const icon = document.getElementById('keepass-picker-icon');
   if (icon) icon.remove();

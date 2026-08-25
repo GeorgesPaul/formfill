@@ -326,6 +326,7 @@ const AutocompleteFiller = (function () {
 
         const options = optionsIn(popup);
         if (!options.length) return { handled: false, reason: 'no-options' };
+        const optionsSeen = options.slice(0, 25).map(o => o.text);
 
         const ranked = rank(options, value);
         const best = ranked[0];
@@ -346,7 +347,7 @@ const AutocompleteFiller = (function () {
             // Leave the typed text and close the popup so it does not swallow
             // the next field's clicks.
             TypingEngine.pressKey(element, 'Escape');
-            return { handled: false, reason: 'no-match' };
+            return { handled: false, reason: 'no-match', optionsSeen };
         }
 
         const before = TypingEngine.readValue(element);
@@ -374,7 +375,7 @@ const AutocompleteFiller = (function () {
             } catch (_) {}
         }
         console.log('[Autocomplete] selected:', chosen.text, '-> field now:', after, 'accepted:', accepted);
-        return { handled: accepted, selected: chosen.text, reason: accepted ? 'selected' : 'not-accepted' };
+        return { handled: accepted, selected: chosen.text, reason: accepted ? 'selected' : 'not-accepted', optionsSeen };
     }
 
     return { startWatch, resolve, looksLikeTypeahead, score, optionsIn, candidatePopups, mouseSequence };

@@ -7,3 +7,5 @@ be useful reference. Nothing here is copied into a build.
 - `idleMonitor.js` - unused idle/lock monitor, referenced keepassUI.js.
 - `keepassUI.js` - older KeePass picker UI; the live picker lives in `src/content.js`.
 - `profileFields.yaml` - reference list of profile field names from the pre-LLM era.
+- `formFiller.js` - the old one-shot DOM-only LLM fill path (one prompt, index-keyed JSON, verify/refill loop). Replaced by `src/fillAgent.js` + `src/formKit.js`.
+- `visionFiller.js` - the old screenshot + DOM one-shot vision path. Screenshots are now an optional attachment in `fillAgent.js`.

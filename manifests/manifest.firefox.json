@@ -1,11 +1,12 @@
 {
   "manifest_version": 2,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.25",
+  "version": "1.26",
   "description": "Intelligently fills forms based on user profiles",
   "browser_specific_settings": {
     "gecko": {
       "id": "{7d43f771-471b-4067-86f8-21812d277fa0}",
+      "strict_min_version": "128.0",
       "data_collection_permissions": {
         "required": [
           "personallyIdentifyingInfo",
@@ -17,6 +18,7 @@
   "permissions": [
     "activeTab",
     "storage",
+    "unlimitedStorage",
     "tabs",
     "<all_urls>",
     "http://localhost/*",
@@ -64,17 +66,31 @@
         "<all_urls>"
       ],
       "js": [
+        "pageHook.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
         "browserCompat.js",
         "apiUtils.js",
         "utils.js",
+        "accessibleName.js",
         "domUtils.js",
         "typingEngine.js",
         "autocompleteFiller.js",
         "llmClient.js",
-        "formFiller.js",
         "heuristicFiller.js",
         "overlayUtils.js",
-        "visionFiller.js",
+        "formKit.js",
+        "siteMemory.js",
+        "fillLogger.js",
+        "fillAgent.js",
         "content.js"
       ],
       "run_at": "document_idle",

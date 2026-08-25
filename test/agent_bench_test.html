@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FormFill test: agent loop bench</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 820px; }
+  .row { margin-bottom: 14px; position: relative; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  input[type=text], input[type=email], input[type=tel], select, textarea { width: 340px; padding: 6px 8px; font-size: 14px; border: 1px solid #999; border-radius: 3px; }
+  .err { color: #c00; font-size: 12px; margin-top: 3px; min-height: 15px; }
+  .hint { color: #666; font-size: 11px; }
+  fieldset { border: 1px solid #ccc; margin-bottom: 14px; }
+  .grid { display: grid; grid-template-columns: 140px 1fr; gap: 6px 10px; align-items: center; }
+  .grid .lbl { font-size: 13px; }
+  #step2 { display: none; }
+  .fake-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-weight: normal; }
+  .fake-check input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .fake-check .box { width: 14px; height: 14px; border: 1px solid #555; display: inline-block; background: #fff; }
+  .fake-check input:checked + .box { background: #2a7; }
+  #results { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 12px; background: #f4f4f4; border: 1px solid #ddd; padding: 10px; margin-top: 18px; }
+  button { padding: 6px 14px; font-size: 14px; }
+</style>
+</head>
+<body>
+<h2>Agent loop bench</h2>
+<p>Exercises what the one-shot filler could not handle: a typed-input check, a
+date mask, a radio group, a pre-filled select, a hidden custom consent checkbox,
+a country field with a validation message the page renders, a "Next" step that
+reveals more fields, and a submit that records what would be sent.</p>
+
+<form id="bench" autocomplete="off" action="/submitted" method="post">
+  <fieldset>
+    <legend>Your details</legend>
+    <div class="grid">
+      <span class="lbl">First name</span>
+      <span><input type="text" name="fn" data-check="typed"><div class="err" data-err="fn"></div></span>
+      <span class="lbl">Last name</span>
+      <span><input type="text" name="ln" data-check="typed"><div class="err" data-err="ln"></div></span>
+      <span class="lbl">Date of birth <span class="hint">(dd-mm-yyyy)</span></span>
+      <span><input type="text" name="dob" placeholder="dd-mm-yyyy" maxlength="10" data-check="typed"><div class="err" data-err="dob"></div></span>
+    </div>
+
+    <div class="row">
+      <div style="font-size:13px;font-weight:600;margin:8px 0 3px">Title</div>
+      <label class="fake-check" style="display:inline-flex;margin-right:12px"><input type="radio" name="title" value="mr"> Mr</label>
+      <label class="fake-check" style="display:inline-flex;margin-right:12px"><input type="radio" name="title" value="mrs"> Mrs</label>
+      <label class="fake-check" style="display:inline-flex"><input type="radio" name="title" value="dr"> Dr</label>
+      <div class="err" data-err="title"></div>
+    </div>
+
+    <div class="row">
+      <label for="country">Country</label>
+      <select id="country" name="country">
+        <option value="">Select a country</option>
+        <option value="BE">Belgium</option>
+        <option value="DE">Germany</option>
+        <option value="NL" selected>Netherlands</option>
+        <option value="US">United States</option>
+      </select>
+      <div class="err" data-err="country"></div>
+    </div>
+
+    <div class="row">
+      <label for="postcode">Postcode <span class="hint">(NL format: 1234 AB)</span></label>
+      <input type="text" id="postcode" name="postcode" data-check="typed">
+      <div class="err" data-err="postcode"></div>
+    </div>
+
+    <div class="row">
+      <label class="fake-check"><input type="checkbox" name="terms" id="terms"><span class="box"></span> I accept the terms and conditions (required)</label>
+      <div class="err" data-err="terms"></div>
+    </div>
+    <div class="row">
+      <label class="fake-check"><input type="checkbox" name="newsletter" id="newsletter"><span class="box"></span> Send me the weekly newsletter</label>
+    </div>
+
+    <button type="button" id="next">Next</button>
+  </fieldset>
+
+  <fieldset id="step2">
+    <legend>Contact</legend>
+    <div class="row">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" data-check="typed">
+      <div class="err" data-err="email"></div>
+    </div>
+    <div class="row">
+      <label for="phone">Phone</label>
+      <input type="tel" id="phone" name="phone" data-check="typed">
+      <div class="err" data-err="phone"></div>
+    </div>
+    <div class="row">
+      <label for="notes">Delivery notes</label>
+      <textarea id="notes" name="notes" rows="2"></textarea>
+    </div>
+    <button type="submit" id="submit">Place order</button>
+    <button type="button" id="jsSubmit">Send via fetch</button>
+  </fieldset>
+</form>
+
+<div id="results">(no run yet)</div>
+
+<script>
+// ---- "was it typed" tracking ------------------------------------------------
+const typed = {};
+for (const el of document.querySelectorAll('[data-check="typed"]')) {
+  typed[el.name] = { keydown: 0, input: 0 };
+  el.addEventListener('keydown', () => typed[el.name].keydown++);
+  el.addEventListener('input', () => typed[el.name].input++);
+}
+
+// ---- date mask ---------------------------------------------------------------
+const dob = document.querySelector('[name=dob]');
+dob.addEventListener('input', () => {
+  const digits = dob.value.replace(/\D/g, '').slice(0, 8);
+  let out = digits.slice(0, 2);
+  if (digits.length > 2) out += '-' + digits.slice(2, 4);
+  if (digits.length > 4) out += '-' + digits.slice(4, 8);
+  if (out !== dob.value) dob.value = out;
+});
+
+// ---- live validation on blur (what the agent must read back) -------------------
+function setErr(name, msg) {
+  const el = document.querySelector(`[data-err="${name}"]`);
+  if (el) el.textContent = msg || '';
+  const field = document.querySelector(`[name="${name}"]`);
+  if (field && field.type !== 'radio') field.setAttribute('aria-invalid', msg ? 'true' : 'false');
+}
+function validateField(name) {
+  const f = document.querySelector(`[name="${name}"]`);
+  if (!f) return true;
+  let msg = '';
+  const t = typed[name];
+  if (t && f.value && (t.keydown === 0 || t.input === 0)) msg = 'Please type into this field.';
+  if (name === 'postcode' && f.value && !/^\d{4}\s?[A-Z]{2}$/.test(f.value)) msg = 'Use the format 1234 AB.';
+  if (name === 'dob' && f.value && !/^\d{2}-\d{2}-\d{4}$/.test(f.value)) msg = 'Enter the date as dd-mm-yyyy.';
+  if (name === 'email' && f.value && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(f.value)) msg = 'That does not look like an email address.';
+  setErr(name, msg);
+  return !msg;
+}
+for (const name of ['fn', 'ln', 'dob', 'postcode', 'email', 'phone']) {
+  const f = document.querySelector(`[name="${name}"]`);
+  f.addEventListener('blur', () => validateField(name));
+  f.addEventListener('change', () => validateField(name));
+}
+
+// ---- Next: validate step 1, then reveal step 2 ---------------------------------
+document.getElementById('next').addEventListener('click', () => {
+  let ok = true;
+  for (const name of ['fn', 'ln', 'dob', 'postcode']) {
+    const f = document.querySelector(`[name="${name}"]`);
+    if (!f.value) { setErr(name, 'This field is required.'); ok = false; }
+    else if (!validateField(name)) ok = false;
+  }
+  if (!document.querySelector('[name=title]:checked')) { setErr('title', 'Please choose a title.'); ok = false; } else setErr('title', '');
+  if (!document.getElementById('terms').checked) { setErr('terms', 'You must accept the terms.'); ok = false; } else setErr('terms', '');
+  window.__benchNextClicked = (window.__benchNextClicked || 0) + 1;
+  if (ok) {
+    document.getElementById('step2').style.display = 'block';
+    document.getElementById('next').disabled = true;
+  }
+});
+
+// ---- submit: record FormData ---------------------------------------------------
+function record(kind) {
+  const fd = new FormData(document.getElementById('bench'));
+  const entries = Array.from(fd.entries());
+  window.__benchSubmitted = { kind, entries, t: Date.now() };
+  document.getElementById('results').textContent = kind + ' submitted:\n' + entries.map(([k, v]) => k + ' = ' + v).join('\n');
+}
+document.getElementById('bench').addEventListener('submit', (e) => { e.preventDefault(); record('form-submit'); });
+document.getElementById('jsSubmit').addEventListener('click', () => {
+  record('fetch');
+  const fd = new FormData(document.getElementById('bench'));
+  fetch('/api/orders', { method: 'POST', body: fd }).catch(() => {});
+});
+
+window.__benchState = () => ({
+  values: Object.fromEntries(Array.from(new FormData(document.getElementById('bench')).entries())),
+  errors: Object.fromEntries(Array.from(document.querySelectorAll('[data-err]')).map(e => [e.getAttribute('data-err'), e.textContent])),
+  typed,
+  step2Visible: document.getElementById('step2').style.display === 'block',
+});
+</script>
+</body>
+</html>

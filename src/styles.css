@@ -693,3 +693,25 @@ button.llm-config-button:active { /* Added a class for llmConfig buttons */
     background-size: 14px 100%; /* block width + gap */
     background-repeat: repeat-x;
 }
+
+/* Agent result: what still needs the user */
+#needsInput {
+    background: #fff;
+    border: 2px solid;
+    border-color: #808080 #ffffff #ffffff #808080;
+    padding: 4px 6px;
+    margin: 4px 0;
+    font-size: 11px;
+    max-height: 160px;
+    overflow-y: auto;
+}
+#needsInput .needs-title { font-weight: bold; margin-top: 3px; }
+#needsInput ul { padding-left: 14px; list-style: disc; margin: 2px 0; }
+#needsInput li { margin: 0 0 2px 0; }
+
+/* Fill logs section */
+#logsSection { margin-top: 6px; }
+#logsSection label { display: block; margin: 2px 0; }
+#logsSummary { font-size: 11px; margin-bottom: 4px; word-break: break-word; }
+#logButtons, #memoryButtons { display: flex; flex-wrap: wrap; gap: 2px; }
+#logButtons button, #memoryButtons button { width: auto; flex: 1 1 45%; }

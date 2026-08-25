@@ -4,7 +4,6 @@ window.abortController = null;
 window.currentFillSessionId = null;
 
 // Constants
-var response_Timeout_ms = 15000;
 var delay_after_dropdown_selection_ms = 100;
 
 // Utility functions
@@ -16,14 +15,13 @@ function logToUser(message, ...args) {
     let fullMessage = message;
     if (args.length > 0) {
         fullMessage += " " + args.map(arg => {
-            if (typeof arg === 'object') { // Check if arg is an object
+            if (typeof arg === 'object') {
                 return JSON.stringify(arg);
             } else {
                 return String(arg);
             }
         }).join(" ");
     }
-
     // Compat.notify, not sendMessage: nobody awaits these, and with the panel
     // closed (or a sleeping MV3 service worker) Chrome turns every one of them
     // into an unhandled promise rejection in the page console.
@@ -42,25 +40,6 @@ function updateFillProgress(processed, filled, total, message, sessionId = null)
         message: message,
         sessionId: sessionId
     });
-}
-
-function generateFieldInfoString(fieldInfo) {
-    let jsonObject = JSON.parse(JSON.stringify(fieldInfo));
-    removeEmptyValues(jsonObject);
-    return JSON.stringify(jsonObject, null, 2);
-}
-
-function removeEmptyValues(obj) {
-    for (let key in obj) {
-        if (obj[key] === null || obj[key] === undefined) {
-            delete obj[key];
-        } else if (typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
-            removeEmptyValues(obj[key]);
-            if (Object.keys(obj[key]).length === 0) {
-                delete obj[key];
-            }
-        }
-    }
 }
 
 function generateUUID() {

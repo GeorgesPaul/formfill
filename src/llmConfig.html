@@ -15,8 +15,12 @@
       <p><b>OpenRouter</b> provides access to many models through a single API.
         Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> and use
         <code>https://openrouter.ai/api/v1/chat/completions</code> as the API URL.</p>
-      <p><b>Vision mode</b> (enable with the "Use visual form processing" checkbox on the main panel) sends a page screenshot
-        alongside the DOM to a vision-capable model. Recommended models (click a preset below to autofill):</p>
+      <p>Filling runs as a short loop: the model receives the form's fields, answers with a batch of actions
+        (tool call), the extension executes them and reports back what the page did, and the model fixes or finishes.
+        <b>Turn budget</b> caps the number of model calls per fill (2 to 4 is typical). <b>Reasoning effort</b> applies to
+        OpenRouter (and OpenAI reasoning models); "low" is fine for most forms.</p>
+      <p>The optional screenshot checkbox on the main panel attaches one screenshot on the first turn; it needs a
+        vision-capable model. Recommended models (click a preset below to autofill):</p>
       <div id="visionPresets">
         <button type="button" class="llm-config-button preset-btn" data-name="Claude Opus 5" data-model="anthropic/claude-opus-5">Claude Opus 5 (default, best reasoning)</button>
         <button type="button" class="llm-config-button preset-btn" data-name="Claude Sonnet 5" data-model="anthropic/claude-sonnet-5">Claude Sonnet 5 (fast, much cheaper)</button>
@@ -48,6 +52,17 @@
         <input type="text" id="apiUrl" placeholder="API URL" required>
         <input type="text" id="model" placeholder="Model" required>
         <input type="password" id="apiKey" placeholder="API Key">
+        <label for="reasoningEffort">Reasoning effort:
+          <select id="reasoningEffort">
+            <option value="none">none</option>
+            <option value="low" selected>low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label for="maxTurns">Turn budget per fill (model calls):
+          <input type="number" id="maxTurns" min="1" max="10" value="4" style="width: 4em;">
+        </label>
         <button type="submit" class="llm-config-button">Save</button>
         <button type="button" id="cancelEdit" class="llm-config-button">Cancel</button>
     </form>

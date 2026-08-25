@@ -60,7 +60,9 @@ function createDefaultConfig() {
     'Claude Opus 5': {
       apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
       model: 'anthropic/claude-opus-5',
-      apiKey: ''
+      apiKey: '',
+      reasoningEffort: 'low',
+      maxTurns: 4
     }
   };
 }
@@ -171,6 +173,8 @@ function showConfigForm(configName = '') {
     document.getElementById('apiUrl').value = 'https://openrouter.ai/api/v1/chat/completions';
     document.getElementById('model').value = 'anthropic/claude-opus-5';
     document.getElementById('apiKey').value = '';
+    document.getElementById('reasoningEffort').value = 'low';
+    document.getElementById('maxTurns').value = 4;
   }
 }
 
@@ -181,6 +185,8 @@ async function populateFormWithConfig(configName) {
   document.getElementById('apiUrl').value = config.apiUrl;
   document.getElementById('model').value = config.model;
   document.getElementById('apiKey').value = config.apiKey;
+  document.getElementById('reasoningEffort').value = config.reasoningEffort || 'low';
+  document.getElementById('maxTurns').value = config.maxTurns || 4;
 }
 
 async function saveConfiguration(event) {
@@ -193,7 +199,9 @@ async function saveConfiguration(event) {
   const config = {
     apiUrl: apiUrl,
     model: document.getElementById('model').value,
-    apiKey: document.getElementById('apiKey').value
+    apiKey: document.getElementById('apiKey').value,
+    reasoningEffort: document.getElementById('reasoningEffort').value || 'low',
+    maxTurns: Math.max(1, Math.min(10, parseInt(document.getElementById('maxTurns').value, 10) || 4))
   };
   
   await saveConfigToStorage(configName, config);
@@ -205,11 +213,15 @@ async function saveConfiguration(event) {
   selectConfigByName(configName);
 }
 
+// A bare local host:port (Ollama, LM Studio) gets the OpenAI-compatible chat
+// path, which supports tool calls and images. Explicit paths are kept as-is:
+// /api/chat and /api/generate (Ollama native) are handled by apiUtils.js.
 function ensureCorrectApiUrl(apiUrl) {
-  if (apiUrl.includes('localhost') && !apiUrl.endsWith('/api/generate')) {
-    return apiUrl.replace(/\/?$/, '/api/generate');
+  const trimmed = apiUrl.trim();
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(trimmed)) {
+    return trimmed.replace(/\/?$/, '/v1/chat/completions');
   }
-  return apiUrl;
+  return trimmed;
 }
 
 async function saveConfigToStorage(configName, config) {

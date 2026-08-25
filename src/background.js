@@ -5,6 +5,7 @@ let isFilling = false;
 let currentSessionId = null;
 let activeFrames = new Set(); // Track frames that are actively filling
 let completionTimer = null;  // Grace-period timer before signalling fillFormComplete to popup
+let frameDetails = {};       // frameId -> details object from FillAgent (needs-input, skipped, ...)
 
 function generateLoadingBar(percentage) {
   const barLength = 20;
@@ -13,14 +14,113 @@ function generateLoadingBar(percentage) {
   return '[' + '█'.repeat(filledLength) + '░'.repeat(emptyLength) + ']';
 }
 
+function mergeDetails(all) {
+  const out = { needsUserInput: [], skipped: [], stillInvalid: [], emptyRequired: [], summaries: [], llmCalls: 0, memoryApplied: 0 };
+  for (const d of Object.values(all)) {
+    if (!d) continue;
+    for (const k of ['needsUserInput', 'skipped', 'stillInvalid', 'emptyRequired']) if (Array.isArray(d[k])) out[k].push(...d[k]);
+    if (d.summary) out.summaries.push(d.summary);
+    out.llmCalls += d.llmCalls || 0;
+    out.memoryApplied += d.memoryApplied || 0;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Fill logs: one storage key per session, serialized writes.
+// ---------------------------------------------------------------------------
+const LOG_INDEX_KEY = 'ffLogIndex';
+const LOG_PREFIX = 'ffLog:';
+const DEFAULT_MAX_SESSIONS = 30;
+let logQueue = Promise.resolve();
+
+function queued(fn) {
+  const p = logQueue.then(fn, fn);
+  logQueue = p.catch(() => {});
+  return p;
+}
+
+async function logStart(sessionId, meta) {
+  return queued(async () => {
+    const key = LOG_PREFIX + sessionId;
+    const existing = (await browser.storage.local.get(key))[key];
+    if (existing) {
+      // Another frame already opened this session: record its frame meta.
+      existing.frames = existing.frames || [];
+      existing.frames.push(meta);
+      await browser.storage.local.set({ [key]: existing });
+      return;
+    }
+    const session = { id: sessionId, meta, frames: [meta], entries: [], startedAt: Date.now(), bytes: 0 };
+    const idxData = await browser.storage.local.get([LOG_INDEX_KEY, 'ffLogMaxSessions']);
+    const index = idxData[LOG_INDEX_KEY] || [];
+    index.push({ id: sessionId, url: meta.url, title: meta.title, startedAt: session.startedAt });
+    const max = Number(idxData.ffLogMaxSessions) || DEFAULT_MAX_SESSIONS;
+    const toRemove = [];
+    while (index.length > max) toRemove.push(index.shift());
+    await browser.storage.local.set({ [key]: session, [LOG_INDEX_KEY]: index });
+    if (toRemove.length) await browser.storage.local.remove(toRemove.map(r => LOG_PREFIX + r.id));
+  });
+}
+
+async function logAppend(sessionId, entry) {
+  return queued(async () => {
+    const key = LOG_PREFIX + sessionId;
+    const session = (await browser.storage.local.get(key))[key];
+    if (!session) return;
+    session.entries.push(entry);
+    let size = 0;
+    try { size = JSON.stringify(entry).length; } catch (_) {}
+    session.bytes = (session.bytes || 0) + size;
+    session.updatedAt = Date.now();
+    await browser.storage.local.set({ [key]: session });
+    const idxData = await browser.storage.local.get(LOG_INDEX_KEY);
+    const index = idxData[LOG_INDEX_KEY] || [];
+    const row = index.find(r => r.id === sessionId);
+    if (row) { row.bytes = session.bytes; row.entries = session.entries.length; row.updatedAt = session.updatedAt; await browser.storage.local.set({ [LOG_INDEX_KEY]: index }); }
+  });
+}
+
+async function logEnd(sessionId, summary) {
+  return queued(async () => {
+    const key = LOG_PREFIX + sessionId;
+    const session = (await browser.storage.local.get(key))[key];
+    if (!session) return;
+    session.endedAt = Date.now();
+    session.summary = summary;
+    await browser.storage.local.set({ [key]: session });
+    const idxData = await browser.storage.local.get(LOG_INDEX_KEY);
+    const index = idxData[LOG_INDEX_KEY] || [];
+    const row = index.find(r => r.id === sessionId);
+    if (row) { row.status = summary && summary.status; row.filled = summary && summary.filled; row.total = summary && summary.total; await browser.storage.local.set({ [LOG_INDEX_KEY]: index }); }
+  });
+}
+
+async function logList() {
+  const idxData = await browser.storage.local.get(LOG_INDEX_KEY);
+  return idxData[LOG_INDEX_KEY] || [];
+}
+
+async function logGet(ids) {
+  const index = await logList();
+  const wanted = ids && ids.length ? ids : index.map(r => r.id);
+  const keys = wanted.map(id => LOG_PREFIX + id);
+  const data = await browser.storage.local.get(keys);
+  return wanted.map(id => data[LOG_PREFIX + id]).filter(Boolean);
+}
+
+async function logClear() {
+  return queued(async () => {
+    const index = await logList();
+    await browser.storage.local.remove(index.map(r => LOG_PREFIX + r.id).concat([LOG_INDEX_KEY]));
+  });
+}
+
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Fresh screenshot for the content script's mid-loop vision recall. Content
-  // scripts can't call tabs.captureVisibleTab; background can. sendResponse +
-  // `return true` is the one async-reply pattern both Firefox and Chrome MV3
-  // support (returning a Promise works in Firefox only).
+  // Screenshot on behalf of a content script (only background can capture).
   if (message.action === "captureScreenshot") {
     const winId = sender && sender.tab ? sender.tab.windowId : null;
-    Compat.captureVisibleTab(winId, { format: 'png' })
+    Compat.captureVisibleTab(winId, { format: 'jpeg', quality: 80 })
       .then(dataUrl => sendResponse({ dataUrl }))
       .catch(err => {
         console.error("captureScreenshot failed:", err);
@@ -29,9 +129,30 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "ffLog") {
+    let p;
+    if (message.op === 'start') p = logStart(message.sessionId, message.meta);
+    else if (message.op === 'append') p = logAppend(message.sessionId, message.entry);
+    else if (message.op === 'end') p = logEnd(message.sessionId, message.summary);
+    else p = Promise.resolve();
+    p.then(() => sendResponse({ ok: true })).catch(e => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+  if (message.action === "ffLogList") {
+    logList().then(list => sendResponse({ list })).catch(e => sendResponse({ list: [], error: String(e) }));
+    return true;
+  }
+  if (message.action === "ffLogGet") {
+    logGet(message.ids).then(sessions => sendResponse({ sessions })).catch(e => sendResponse({ sessions: [], error: String(e) }));
+    return true;
+  }
+  if (message.action === "ffLogClear") {
+    logClear().then(() => sendResponse({ ok: true })).catch(e => sendResponse({ ok: false, error: String(e) }));
+    return true;
+  }
+
   // Chrome MV3 can evict this service worker between messages, taking the
-  // session state with it. Rather than dropping the rest of a fill in progress,
-  // adopt the session the content script is reporting on.
+  // session state with it. Adopt the session the content script reports on.
   const isFillMessage = typeof message.action === 'string' && message.action.startsWith('fillForm');
   if (isFillMessage && currentSessionId === null && message.sessionId) {
     currentSessionId = message.sessionId;
@@ -48,22 +169,20 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let totalProcessed = 0;
   let percentage = 0;
 
-  // Enforce session ID check for all messages except the start message (which sets it)
   if (message.action !== "fillFormStart" && message.sessionId && message.sessionId !== currentSessionId) {
     return;
   }
 
   switch (message.action) {
     case "fillFormStart":
-      // Cancel any pending completion signal — a new frame is still registering
       if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
       if (message.sessionId !== currentSessionId) {
-        // New session - reset all tracking state
         currentSessionId = message.sessionId;
         formFillProgress = {};
         formFillStart = Date.now();
         totalFields = 0;
         activeFrames = new Set();
+        frameDetails = {};
       }
       isFilling = true;
       activeFrames.add(sender.frameId);
@@ -73,13 +192,12 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "fillFormStopped": {
       if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
       activeFrames.delete(sender.frameId);
-      // Update this frame's final state
       formFillProgress[sender.frameId] = {
         processed: message.processed || (formFillProgress[sender.frameId] || {}).processed || 0,
         filled: message.filled || (formFillProgress[sender.frameId] || {}).filled || 0,
         total: message.total || (formFillProgress[sender.frameId] || {}).total || 0
       };
-      if (activeFrames.size > 0) return; // Wait for other frames to finish
+      if (activeFrames.size > 0) return;
       isFilling = false;
       currentSessionId = null;
       const fill_duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
@@ -98,9 +216,6 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         totalFields -= formFillProgress[sender.frameId].total;
         totalFields += message.total;
       }
-      // Clamp per-frame counts to the frame's total. The multi-pass refill
-      // loop reports cumulative attempts that can exceed the field count;
-      // without clamping the bar pins at 100% while filling is still running.
       {
         const t = message.total || 0;
         formFillProgress[sender.frameId] = {
@@ -113,52 +228,51 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       totalFilled = Object.values(formFillProgress).reduce((sum, progress) => sum + progress.filled, 0);
       totalProcessed = Math.min(totalProcessed, totalFields);
       totalFilled = Math.min(totalFilled, totalFields);
-      // Never report a full bar from a progress message -- only the explicit
-      // fillFormComplete path is allowed to show 100%/done.
       percentage = totalFields > 0 ? Math.min(0.99, totalProcessed / totalFields) : 0;
-      computedMessage = `Processing form...\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%`;
+      computedMessage = `${message.message || 'Processing form...'}\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%`;
       break;
 
     case "fillFormComplete": {
       activeFrames.delete(sender.frameId);
-      // Update this frame's final state
-      formFillProgress[sender.frameId] = {
-        processed: message.total || (formFillProgress[sender.frameId] || {}).processed || 0,
-        filled: message.filled || (formFillProgress[sender.frameId] || {}).filled || 0,
-        total: message.total || (formFillProgress[sender.frameId] || {}).total || 0
-      };
-      if (activeFrames.size > 0) return; // Wait for other frames to finish
+      if (message.details) frameDetails[sender.frameId] = message.details;
+      const prev = formFillProgress[sender.frameId] || {};
+      const t = message.total || prev.total || 0;
+      if (!formFillProgress[sender.frameId]) totalFields += t;
+      else if (prev.total !== t) totalFields += t - prev.total;
+      formFillProgress[sender.frameId] = { processed: t, filled: message.filled || prev.filled || 0, total: t };
+      if (activeFrames.size > 0) return;
 
-      // Grace period: wait briefly before signalling completion to the popup.
-      // This guards against a race where a concurrent frame's fillFormStart message
-      // is still in-flight when we see the first fillFormComplete — without the delay,
-      // background would incorrectly treat the session as finished.
+      // Grace period: a concurrent frame's fillFormStart may still be in flight.
       const _sid = currentSessionId;
       if (completionTimer) clearTimeout(completionTimer);
       completionTimer = setTimeout(() => {
         completionTimer = null;
-        if (activeFrames.size > 0 || currentSessionId !== _sid) return; // state changed
+        if (activeFrames.size > 0 || currentSessionId !== _sid) return;
         isFilling = false;
         const _filled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
         const _duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-        // Compat.notify: the panel may be closed, and an unhandled rejection
-        // per progress tick is noise, not a fault.
+        const merged = mergeDetails(frameDetails);
+        const lines = [`Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${_filled} out of ${totalFields} fields in ${_duration} seconds (${merged.llmCalls} model call${merged.llmCalls === 1 ? '' : 's'}).`];
+        if (merged.summaries.length) lines.push(merged.summaries.join(' '));
         Compat.notify({
           action: "fillFormComplete",
           filled: _filled,
           total: totalFields,
-          message: `Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${_filled} out of ${totalFields} fields in ${_duration} seconds.`,
+          message: lines.join('\n'),
+          details: merged,
           sessionId: _sid
         });
+        currentSessionId = null;
       }, 400);
-      return; // Relay handled by timer above
+      return;
     }
 
     case "fillFormError":
       if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
       activeFrames.delete(sender.frameId);
-      if (activeFrames.size > 0) return; // Wait for other frames to finish
+      if (activeFrames.size > 0) return;
       isFilling = false;
+      currentSessionId = null;
       computedMessage = `Error filling form: ${message.error || "undefined"}`;
       break;
   }
@@ -169,7 +283,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       filled: totalFilled,
       total: totalFields,
       message: computedMessage || message.message,
-      sessionId: currentSessionId
+      sessionId: currentSessionId || message.sessionId
     });
   }
 });

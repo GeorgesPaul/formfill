@@ -40,6 +40,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.message) {
         updateStatusMessage(message.message);
       }
+      if (message.action === "fillFormComplete") {
+        renderNeedsInput(message.details);
+        refreshLogSummary();
+      }
+      if (message.action === "fillFormStart") {
+        renderNeedsInput(null);
+      }
       // Update progress bar
       if (message.action === "fillFormProgress") {
         const progressContainer = document.getElementById('progressContainer');
@@ -254,6 +261,9 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
     // Open the Stripe payment link in a new tab
     window.open(stripePaymentLink, '_blank');
   });
+
+  // Fill logs + site memory controls
+  initLogsSection();
 
   // Load previously selected profiles and load the first one into the form
   browser.storage.local.get(['selectedProfileIds', 'lastLoadedProfile']).then(data => {
@@ -573,32 +583,22 @@ async function fillForm() {
         sessionId: sessionId
       };
 
-      if (useVisualProcessing) {
-        // Capture screenshot of the visible tab
-        updateStatusMessage("Capturing screenshot...");
-        try {
-          const screenshotDataUrl = await Compat.captureVisibleTab(null, { format: 'png' });
-          console.log('[Popup] Screenshot captured, length:', screenshotDataUrl.length);
-          messagePayload.useVisualProcessing = true;
-          messagePayload.screenshot = screenshotDataUrl;
-        } catch (screenshotError) {
-          console.error('[Popup] Screenshot capture failed:', screenshotError);
-          throw new Error("Screenshot capture failed: " + screenshotError.message);
-        }
-      }
+      // The content script captures its own screenshot (via the background)
+      // when this is set; the panel only passes the preference along.
+      if (useVisualProcessing) messagePayload.useVisualProcessing = true;
 
       try {
         await browser.tabs.sendMessage(tabs[0].id, messagePayload);
       } catch (sendError) {
-        // Content script not available — try programmatic injection (e.g. PDF viewer pages)
+        // Content script not available: try programmatic injection (e.g. PDF viewer pages)
         console.warn('[Popup] sendMessage failed, attempting programmatic script injection:', sendError.message);
         updateStatusMessage("Content script not found, injecting scripts...");
 
         // Keep in step with the content_scripts list in both manifests.
         const scripts = [
-          'browserCompat.js', 'apiUtils.js', 'utils.js', 'domUtils.js',
-          'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'formFiller.js',
-          'heuristicFiller.js', 'overlayUtils.js', 'visionFiller.js', 'content.js'
+          'browserCompat.js', 'apiUtils.js', 'utils.js', 'accessibleName.js', 'domUtils.js',
+          'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'heuristicFiller.js',
+          'overlayUtils.js', 'formKit.js', 'siteMemory.js', 'fillLogger.js', 'fillAgent.js', 'content.js'
         ];
         try {
           await Compat.executeScriptFiles(tabs[0].id, scripts);
@@ -805,6 +805,149 @@ function updateStatusMessage(message) {
   const logMsg = document.getElementById('logMsg');
   if (logMsg) {
     logMsg.textContent = message;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "Needs your input" box: what the model could not fill and why.
+// ---------------------------------------------------------------------------
+function renderNeedsInput(details) {
+  const box = document.getElementById('needsInput');
+  if (!box) return;
+  box.replaceChildren();
+  if (!details) { box.style.display = 'none'; return; }
+  const groups = [
+    ['Needs your input', details.needsUserInput],
+    ['Still flagged by the page', details.stillInvalid],
+    ['Required and still empty', details.emptyRequired],
+    ['Skipped', details.skipped],
+  ];
+  let any = false;
+  for (const [title, items] of groups) {
+    if (!items || !items.length) continue;
+    any = true;
+    const h = document.createElement('div');
+    h.className = 'needs-title';
+    h.textContent = title + ':';
+    box.appendChild(h);
+    const ul = document.createElement('ul');
+    for (const it of items.slice(0, 12)) {
+      const li = document.createElement('li');
+      const label = it.label || it.ref || '?';
+      const why = it.reason || it.error || '';
+      li.textContent = why ? `${label}: ${why}` : label;
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  }
+  box.style.display = any ? 'block' : 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Fill logs (stored locally by the background script) and site memory.
+// ---------------------------------------------------------------------------
+function initLogsSection() {
+  const enabled = document.getElementById('logEnabled');
+  const redact = document.getElementById('logRedact');
+  browser.storage.local.get(['ffLogEnabled', 'ffLogRedact']).then(d => {
+    if (enabled) enabled.checked = d.ffLogEnabled !== false;
+    if (redact) redact.checked = !!d.ffLogRedact;
+  });
+  if (enabled) enabled.addEventListener('change', () => browser.storage.local.set({ ffLogEnabled: enabled.checked }));
+  if (redact) redact.addEventListener('change', () => browser.storage.local.set({ ffLogRedact: redact.checked }));
+
+  document.getElementById('exportLastLog').addEventListener('click', () => exportLogs('last'));
+  document.getElementById('exportAllLogs').addEventListener('click', () => exportLogs('all'));
+  document.getElementById('clearLogs').addEventListener('click', async () => {
+    if (!confirm('Delete all stored fill logs?')) return;
+    await browser.runtime.sendMessage({ action: 'ffLogClear' });
+    refreshLogSummary();
+    updateStatusMessage('Fill logs cleared.');
+  });
+  document.getElementById('forgetSite').addEventListener('click', async () => {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tabs[0] || !tabs[0].url) return;
+    const mem = (await browser.storage.local.get('ffSiteMemory')).ffSiteMemory || {};
+    const key = siteKeyOf(tabs[0].url);
+    if (mem[key]) { delete mem[key]; await browser.storage.local.set({ ffSiteMemory: mem }); updateStatusMessage('Forgot mapping for ' + key); }
+    else updateStatusMessage('No remembered mapping for ' + key);
+  });
+  document.getElementById('clearSiteMemory').addEventListener('click', async () => {
+    if (!confirm('Forget all remembered field mappings?')) return;
+    await browser.storage.local.set({ ffSiteMemory: {} });
+    updateStatusMessage('Site memory cleared.');
+  });
+  refreshLogSummary();
+}
+
+// Mirror of SiteMemory.siteKey (the panel does not load siteMemory.js).
+function siteKeyOf(url) {
+  try {
+    const u = new URL(url);
+    const path = u.pathname
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '*')
+      .replace(/\/\d+(?=\/|$)/g, '/*')
+      .replace(/\/[0-9a-f]{16,}(?=\/|$)/gi, '/*');
+    return u.origin + path;
+  } catch (_) { return String(url); }
+}
+
+async function refreshLogSummary() {
+  const el = document.getElementById('logsSummary');
+  if (!el) return;
+  try {
+    const res = await browser.runtime.sendMessage({ action: 'ffLogList' });
+    const list = (res && res.list) || [];
+    if (!list.length) { el.textContent = 'No fill logs yet.'; return; }
+    const bytes = list.reduce((s, r) => s + (r.bytes || 0), 0);
+    const last = list[list.length - 1];
+    el.textContent = `${list.length} session(s), ~${(bytes / (1024 * 1024)).toFixed(1)} MB. Last: ${new Date(last.startedAt).toLocaleString()} ${last.status || ''} ${last.url ? '(' + last.url.slice(0, 60) + ')' : ''}`;
+  } catch (e) {
+    el.textContent = 'Fill logs unavailable: ' + e.message;
+  }
+}
+
+function redactSessions(sessions) {
+  const replacements = [];
+  for (const s of sessions) {
+    const profiles = (s.meta && s.meta.profiles) || [];
+    for (const p of profiles) {
+      for (const line of String(p.data || '').split(/\r?\n/)) {
+        const m = line.match(/^\s*([A-Za-z0-9_\- ]+?)\s*:\s*(.+?)\s*$/);
+        if (m && m[2].length >= 3) replacements.push([m[2], '<' + m[1].trim() + '>']);
+      }
+    }
+  }
+  replacements.sort((a, b) => b[0].length - a[0].length);
+  let text = JSON.stringify(sessions, null, 1);
+  for (const [value, token] of replacements) {
+    const esc = JSON.stringify(value).slice(1, -1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(new RegExp(esc, 'g'), token);
+  }
+  return text;
+}
+
+async function exportLogs(which) {
+  try {
+    const listRes = await browser.runtime.sendMessage({ action: 'ffLogList' });
+    const list = (listRes && listRes.list) || [];
+    if (!list.length) { updateStatusMessage('No fill logs to export.'); return; }
+    const ids = which === 'last' ? [list[list.length - 1].id] : list.map(r => r.id);
+    const res = await browser.runtime.sendMessage({ action: 'ffLogGet', ids });
+    const sessions = (res && res.sessions) || [];
+    const redact = document.getElementById('logRedact').checked;
+    const text = redact ? redactSessions(sessions) : JSON.stringify(sessions, null, 1);
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.download = which === 'last' ? `formfill-log-${stamp}.json` : `formfill-logs-all-${stamp}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    updateStatusMessage(`Exported ${sessions.length} session(s)${redact ? ' (redacted)' : ''}.`);
+  } catch (e) {
+    updateStatusMessage('Export failed: ' + e.message);
   }
 }
 
