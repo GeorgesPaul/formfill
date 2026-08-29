@@ -65,7 +65,9 @@ and the Continue button stays disabled until you retype something by hand.
 - **Faithful input events** - the browser's own focus/typing/commit sequences are reproduced and verified, so blur-only validators, masks and framework-controlled inputs behave as if a person had typed
 - **Progress-gate check** - a Continue/submit button that stays disabled is treated as the page rejecting the fill, not as success
 - **"Needs your input" report** - fields the profile cannot answer are listed in the panel instead of silently skipped
+<!-- ff:logs:start -->
 - **Local fill logs** - every fill records what the site looked like, what the model was asked/answered, what the extension did, what the page did in response, and what was actually submitted afterwards (FormData + request bodies). Export as JSON from the panel; nothing leaves your machine
+<!-- ff:logs:end -->
 - **Optional screenshot** - a checkbox attaches one screenshot on the first turn for vision-capable models; off by default (slower, more expensive)
 - **KeePass integration** - fill username/password directly from a KeePass database
 - **Multiple profiles**, free-text `key: value` format
@@ -93,7 +95,7 @@ Install from [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/ll
 powershell -ExecutionPolicy Bypass -File build\build.ps1 -Target firefox
 ```
 then `about:debugging` -> This Firefox -> Load Temporary Add-on -> `dist\firefox\manifest.json`.
-Requires Firefox 128+ (the network-capture hook runs in the page's world).
+Requires Firefox 128+.
 
 ### Chrome
 ```powershell
@@ -120,7 +122,13 @@ The Chrome build uses the side panel (click the toolbar icon) instead of Firefox
 2. Upload your .kdbx database file and unlock it
 3. Use "Fill User/Pass" to fill credentials
 
-## Fill logs
+<!-- ff:logs:start -->
+## Fill logs (development builds only)
+
+This is a tool for improving the filling, and it is not published: the
+packages on AMO and the Chrome Web Store are built with
+`build.ps1 -Channel store`, which leaves the recording out entirely (see
+`build/readme.md`). Load an unpacked dev build to gather logs.
 
 Every fill session is recorded locally (toggle in the panel):
 
@@ -133,6 +141,7 @@ Every fill session is recorded locally (toggle in the panel):
 Export from the panel as JSON (optionally with profile values redacted) and feed
 the file to an LLM to analyse why a fill went wrong. Storage is
 `browser.storage.local` only; the last 30 sessions are kept.
+<!-- ff:logs:end -->
 
 ## Repository layout
 
@@ -157,7 +166,9 @@ Key source files:
 | `typingEngine.js` | Keystroke-level text entry: per-character typing, clearing, retyping, commit on blur |
 | `autocompleteFiller.js` | Detects suggestion popups, scores options against the intended value, selects one |
 | `siteMemory.js` | Remembers which profile key filled which field, per site+form signature |
+<!-- ff:logs:start -->
 | `fillLogger.js` / `pageHook.js` | Local fill logs; page-world hook that captures submitted request bodies |
+<!-- ff:logs:end -->
 | `heuristicFiller.js` | Deterministic suggestions from autocomplete attributes and label patterns |
 | `apiUtils.js` | One chat() for OpenRouter / OpenAI-compatible / Ollama, with tools, images, caching, reasoning effort |
 | `browserCompat.js` | Firefox/Chrome API shim |

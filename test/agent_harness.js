@@ -76,11 +76,13 @@
     }
 
     const harness = {
-        logs, storage, messages: [],
-        async load(base = '/src/') {
+        logs, storage, messages: [], FILES,
+        // `files` overrides the default list, so a built package can be driven
+        // as well as the source tree: load('/dist/chrome/', FFHarness.FILES.filter(f => f !== 'fillLogger.js'))
+        async load(base = '/src/', files = FILES) {
             window.browser = browserStub;
             window.chrome = window.chrome || browserStub;
-            for (const f of FILES) await loadScript(base + f);
+            for (const f of files) await loadScript(base + f);
             return true;
         },
         // Mock LLM: returns a scripted plan per call as a tool call.

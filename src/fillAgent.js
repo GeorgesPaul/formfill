@@ -16,9 +16,14 @@
 //      messages) go back to the model, which fixes, continues (e.g. clicks
 //      "Next") or declares done. Bounded by config.maxTurns.
 //
-// Everything is recorded through FillLogger so a failed fill can be replayed
-// and understood later. Models improve -> step 3 improves, with no code
-// change: the extension decides HOW to touch a widget, the model decides WHAT.
+// Models improve -> step 3 improves, with no code change: the extension
+// decides HOW to touch a widget, the model decides WHAT.
+// ff:logs:start
+//
+// In development builds every step is recorded through FillLogger, so a failed
+// fill can be replayed and understood later. Store builds are packaged without
+// it (build.ps1 -Channel store).
+// ff:logs:end
 const FillAgent = (function () {
     'use strict';
 
@@ -196,8 +201,10 @@ How to act:
         };
         progress(0, `Found ${total} field(s). Preparing...`);
 
-        // ---- logging: what the page looked like
+        // ---- fill logs (development builds only; see build.ps1 -Channel)
         let logOn = false;
+        let log = () => {};
+        // ff:logs:start
         if (logging && typeof FillLogger !== 'undefined') {
             logOn = await FillLogger.start(sessionId, {
                 model: config.model, apiUrl: config.apiUrl, reasoningEffort: config.reasoningEffort, maxTurns,
@@ -206,9 +213,12 @@ How to act:
                 userAgent: navigator.userAgent,
             });
         }
-        const log = (type, payload) => { if (logOn) { try { FillLogger.event(type, payload); } catch (_) {} } };
-        log('snapshot', { turn: 0, snapshot: snap, pageHtml: FormKit.capturePageHtml() });
-        try { document.dispatchEvent(new CustomEvent('ff-record', { detail: logOn ? 'on' : 'off' })); } catch (_) {}
+        if (logOn) {
+            log = (type, payload) => { try { FillLogger.event(type, payload); } catch (_) {} };
+            log('snapshot', { turn: 0, snapshot: snap, pageHtml: FormKit.capturePageHtml() });
+            try { document.dispatchEvent(new CustomEvent('ff-record', { detail: 'on' })); } catch (_) {}
+        }
+        // ff:logs:end
 
         let screenshotForModel = null;
         if (window === window.top && (logOn || vision)) {
@@ -443,7 +453,9 @@ How to act:
                 if (isCancelled()) throw new Error('Form filling stopped by user.');
                 details.turns = turn;
                 progress(countFilled(), `Turn ${turn}/${maxTurns}: asking ${config.model}...`);
-                log('llmRequest', { turn, messages: FillLogger.slim(messages, 20000), tools: jsonMode ? null : [TOOL.name] });
+                // ff:logs:start
+                if (logOn) log('llmRequest', { turn, messages: FillLogger.slim(messages, 20000), tools: jsonMode ? null : [TOOL.name] });
+                // ff:logs:end
 
                 let resp;
                 try {
@@ -548,7 +560,9 @@ How to act:
             } else {
                 notify({ action: 'fillFormError', error: String(error && error.message ? error.message : error) });
             }
+            // ff:logs:start
             if (logOn) FillLogger.end({ status: 'error', error: String(error && error.message), durationMs: Date.now() - t0 });
+            // ff:logs:end
             return { status: 'error', message: String(error && error.message) };
         } finally {
             if (window.abortController === abort) window.abortController = null;
@@ -585,7 +599,9 @@ How to act:
                 const raw = await FormKit.captureScreenshot();
                 if (raw) log('screenshot', { turn: 'final', image: await FormKit.shrinkImage(raw, 1024, 0.5) });
             }
+            // ff:logs:start
             if (logOn) FillLogger.end({ status, filled: filledOk, total, details, durationMs: details.durationMs });
+            // ff:logs:end
 
             const parts = [`Filled ${filledOk} of ${finalTotal} field(s) in ${(details.durationMs / 1000).toFixed(1)}s (${details.llmCalls} model call${details.llmCalls === 1 ? '' : 's'}).`];
             if (details.summary) parts.push(details.summary);

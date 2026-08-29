@@ -26,6 +26,7 @@ function mergeDetails(all) {
   return out;
 }
 
+// ff:logs:start
 // ---------------------------------------------------------------------------
 // Fill logs: one storage key per session, serialized writes.
 // ---------------------------------------------------------------------------
@@ -116,6 +117,8 @@ async function logClear() {
   });
 }
 
+// ff:logs:end
+
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Screenshot on behalf of a content script (only background can capture).
   if (message.action === "captureScreenshot") {
@@ -129,6 +132,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // ff:logs:start
   if (message.action === "ffLog") {
     let p;
     if (message.op === 'start') p = logStart(message.sessionId, message.meta);
@@ -150,6 +154,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     logClear().then(() => sendResponse({ ok: true })).catch(e => sendResponse({ ok: false, error: String(e) }));
     return true;
   }
+  // ff:logs:end
 
   // Chrome MV3 can evict this service worker between messages, taking the
   // session state with it. Adopt the session the content script reports on.

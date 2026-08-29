@@ -16,12 +16,25 @@
 
 .PARAMETER Zip
   Also produce dist\formfill-<target>-<version>.zip.
+
+.PARAMETER Channel
+  dev (default) keeps the fill logs: the local recording of what a form looked
+  like, what the model was asked, and what was actually submitted. That is a
+  development tool for improving the filling, not something to ship.
+
+  store strips it from the package: fillLogger.js and pageHook.js are left out,
+  every block between "ff:logs:start" and "ff:logs:end" markers is removed from
+  the remaining files, and the manifest loses the page-world content script and
+  the unlimitedStorage permission. The published extension therefore cannot
+  record page content, submissions or request bodies at all.
 #>
 [CmdletBinding()]
 param(
   [ValidateSet('firefox', 'chrome', 'all')]
   [string]$Target = 'all',
-  [switch]$Zip
+  [switch]$Zip,
+  [ValidateSet('dev', 'store')]
+  [string]$Channel = 'dev'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -33,6 +46,29 @@ $distDir = Join-Path $root 'dist'
 $targetOnlyFiles = @{
   chrome  = @('serviceWorker.js')   # MV3 entry point; Firefox uses background.scripts
   firefox = @()
+}
+
+# The fill logs, dropped from store packages.
+$logFiles = @('fillLogger.js', 'pageHook.js')
+$logMarked = @('popup.html', 'popup.js', 'background.js', 'content.js', 'fillAgent.js', 'README.md')
+
+# Remove every "ff:logs:start" .. "ff:logs:end" block, markers and all.
+function Remove-LogBlocks([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return }
+  $text = Get-Content -Raw -LiteralPath $path
+  if ($text -notmatch 'ff:logs:start') { return }
+  $stripped = [regex]::Replace($text, '(?s)[^\r\n]*ff:logs:start.*?ff:logs:end[^\r\n]*(\r?\n)?', '')
+  if ($stripped -match 'ff:logs:(start|end)') { throw "Unbalanced log markers in $path" }
+  [System.IO.File]::WriteAllText($path, $stripped, (New-Object System.Text.UTF8Encoding $false))
+}
+
+# Drop the page-world hook and the storage permission the logs needed.
+function Remove-LogManifestEntries([string]$path) {
+  $m = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+  $m.content_scripts = @($m.content_scripts | Where-Object { $_.js -notcontains 'pageHook.js' })
+  foreach ($cs in $m.content_scripts) { $cs.js = @($cs.js | Where-Object { $logFiles -notcontains $_ }) }
+  $m.permissions = @($m.permissions | Where-Object { $_ -ne 'unlimitedStorage' })
+  [System.IO.File]::WriteAllText($path, ($m | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
 }
 
 function Build-Target([string]$name) {
@@ -57,8 +93,23 @@ function Build-Target([string]$name) {
     }
   }
 
-  $version = (Get-Content -Raw -LiteralPath $manifest | ConvertFrom-Json).version
-  Write-Host ("Built {0} v{1} -> {2}" -f $name, $version, $out) -ForegroundColor Green
+  if ($Channel -eq 'store') {
+    foreach ($f in $logFiles) {
+      $p = Join-Path $out $f
+      if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
+    }
+    foreach ($f in $logMarked) { Remove-LogBlocks (Join-Path $out $f) }
+    Remove-LogManifestEntries (Join-Path $out 'manifest.json')
+
+    # Nothing that records may survive in a store package.
+    $leftovers = Get-ChildItem -LiteralPath $out -Recurse -File -Include *.js, *.html, *.json |
+      Select-String -Pattern 'FillLogger|ffLog|ff-record|ff-net-capture|pageHook' |
+      Select-Object -ExpandProperty Path -Unique
+    if ($leftovers) { throw ("Log code left in the store package: " + ($leftovers -join ', ')) }
+  }
+
+  $version = (Get-Content -Raw -LiteralPath (Join-Path $out 'manifest.json') | ConvertFrom-Json).version
+  Write-Host ("Built {0} v{1} ({2}) -> {3}" -f $name, $version, $Channel, $out) -ForegroundColor Green
 
   if ($Zip) {
     $zipPath = Join-Path $distDir ("formfill-{0}-{1}.zip" -f $name, $version)

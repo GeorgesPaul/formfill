@@ -1,7 +1,11 @@
-// content.js -- message router for the page side, plus everything that has to
-// keep watching the page AFTER a fill: submit capture (what the form held when
-// the user pressed the button, and what the browser packed into FormData),
-// network bodies relayed from pageHook.js, and the page that followed.
+// content.js -- message router for the page side.
+// ff:logs:start
+//
+// In development builds it also keeps watching the page AFTER a fill: submit
+// capture (what the form held when the user pressed the button, and what the
+// browser packed into FormData), network bodies relayed from pageHook.js, and
+// the page that followed. Store builds are packaged without all of that.
+// ff:logs:end
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "fillForm") {
@@ -61,6 +65,23 @@ function installPostFillWatchers() {
   if (postFillWatchersInstalled) return;
   postFillWatchersInstalled = true;
 
+  // Leaving the page mid-fill: tell the panel, so it stops waiting.
+  window.addEventListener('pagehide', () => {
+    try {
+      if (window.currentFillSessionId) {
+        Compat.notify({ action: 'fillFormComplete', filled: 0, total: 0, message: 'Page navigated during fill.', sessionId: window.currentFillSessionId });
+      }
+      // ff:logs:start
+      if (typeof FillLogger !== 'undefined' && FillLogger.hasSession()) {
+        FillLogger.event('pagehide', { url: location.href, values: FormKit.valuesSnapshot() });
+        try { sessionStorage.setItem('ff-post-submit-pending', JSON.stringify({ sessionId: FillLogger.lastSessionId(), from: location.href, t: Date.now() })); } catch (_) {}
+      }
+      // ff:logs:end
+    } catch (_) {}
+  });
+
+  // Everything below only exists to record what was submitted (fill logs).
+  // ff:logs:start
   const SUBMITTISH = /\b(submit|send|pay|order|buy|purchase|register|sign ?up|create|confirm|book|checkout|apply|save|finish|complete|continue|next|proceed|verstuur|verzend|bestel|betaal|opslaan|bevestig|verder|volgende|abschicken|senden|bestellen|zahlen|weiter|speichern|envoyer|payer|commander|suivant|valider)\b/i;
 
   // Native form submission: this is exactly what the browser sends.
@@ -114,20 +135,10 @@ function installPostFillWatchers() {
     } catch (_) {}
   });
 
-  // Leaving the page: last look at the form, and flag the next page load.
-  window.addEventListener('pagehide', () => {
-    try {
-      if (window.currentFillSessionId) {
-        Compat.notify({ action: 'fillFormComplete', filled: 0, total: 0, message: 'Page navigated during fill.', sessionId: window.currentFillSessionId });
-      }
-      if (typeof FillLogger !== 'undefined' && FillLogger.hasSession()) {
-        FillLogger.event('pagehide', { url: location.href, values: FormKit.valuesSnapshot() });
-        try { sessionStorage.setItem('ff-post-submit-pending', JSON.stringify({ sessionId: FillLogger.lastSessionId(), from: location.href, t: Date.now() })); } catch (_) {}
-      }
-    } catch (_) {}
-  });
+  // ff:logs:end
 }
 
+// ff:logs:start
 function captureSubmission(trigger, extra) {
   if (typeof FillLogger === 'undefined' || !FillLogger.hasSession()) return;
   const now = Date.now();
@@ -166,6 +177,7 @@ function captureSubmission(trigger, extra) {
     else window.addEventListener('load', () => setTimeout(collect, 800), { once: true });
   } catch (_) {}
 })();
+// ff:logs:end
 
 // ---------------------------------------------------------------------------
 // KeePass credential fill (unchanged behaviour: typed, never assigned).

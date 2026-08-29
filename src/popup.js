@@ -42,7 +42,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.action === "fillFormComplete") {
         renderNeedsInput(message.details);
+        // ff:logs:start
         refreshLogSummary();
+        // ff:logs:end
       }
       if (message.action === "fillFormStart") {
         renderNeedsInput(null);
@@ -263,7 +265,10 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
   });
 
   // Fill logs + site memory controls
+  // ff:logs:start
   initLogsSection();
+  // ff:logs:end
+  initMemorySection();
 
   // Load previously selected profiles and load the first one into the form
   browser.storage.local.get(['selectedProfileIds', 'lastLoadedProfile']).then(data => {
@@ -598,7 +603,11 @@ async function fillForm() {
         const scripts = [
           'browserCompat.js', 'apiUtils.js', 'utils.js', 'accessibleName.js', 'eventSim.js', 'domUtils.js',
           'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'heuristicFiller.js',
-          'overlayUtils.js', 'formKit.js', 'siteMemory.js', 'fillLogger.js', 'fillAgent.js', 'content.js'
+          'overlayUtils.js', 'formKit.js', 'siteMemory.js',
+          // ff:logs:start
+          'fillLogger.js',
+          // ff:logs:end
+          'fillAgent.js', 'content.js'
         ];
         try {
           await Compat.executeScriptFiles(tabs[0].id, scripts);
@@ -847,6 +856,7 @@ function renderNeedsInput(details) {
 // ---------------------------------------------------------------------------
 // Fill logs (stored locally by the background script) and site memory.
 // ---------------------------------------------------------------------------
+// ff:logs:start
 function initLogsSection() {
   const enabled = document.getElementById('logEnabled');
   const redact = document.getElementById('logRedact');
@@ -865,6 +875,11 @@ function initLogsSection() {
     refreshLogSummary();
     updateStatusMessage('Fill logs cleared.');
   });
+  refreshLogSummary();
+}
+// ff:logs:end
+
+function initMemorySection() {
   document.getElementById('forgetSite').addEventListener('click', async () => {
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     if (!tabs[0] || !tabs[0].url) return;
@@ -878,7 +893,6 @@ function initLogsSection() {
     await browser.storage.local.set({ ffSiteMemory: {} });
     updateStatusMessage('Site memory cleared.');
   });
-  refreshLogSummary();
 }
 
 // Mirror of SiteMemory.siteKey (the panel does not load siteMemory.js).
@@ -893,6 +907,7 @@ function siteKeyOf(url) {
   } catch (_) { return String(url); }
 }
 
+// ff:logs:start
 async function refreshLogSummary() {
   const el = document.getElementById('logsSummary');
   if (!el) return;
@@ -951,6 +966,8 @@ async function exportLogs(which) {
     updateStatusMessage('Export failed: ' + e.message);
   }
 }
+
+// ff:logs:end
 
 function addNewProfile() {
   const newProfileId = generateUUID();

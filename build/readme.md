@@ -9,12 +9,33 @@ is the manifest in `manifests\`.
 powershell -ExecutionPolicy Bypass -File build.ps1                 # both targets -> dist\firefox, dist\chrome
 powershell -ExecutionPolicy Bypass -File build.ps1 -Target chrome  # one target
 powershell -ExecutionPolicy Bypass -File build.ps1 -Zip            # also package dist\formfill-<target>-<version>.zip
+powershell -ExecutionPolicy Bypass -File build.ps1 -Channel store  # without the fill logs (what gets published)
 ```
 
 Load unpacked while developing:
 
 - Firefox: `about:debugging` -> This Firefox -> Load Temporary Add-on -> `dist\firefox\manifest.json`
 - Chrome: `chrome://extensions` -> Developer mode -> Load unpacked -> `dist\chrome`
+
+## Channels: what ships and what does not
+
+The fill logs (`fillLogger.js`, `pageHook.js`, the panel's "Fill logs" section,
+the submit/network watchers in `content.js`) record what a form looked like,
+what the model was asked, and what was actually submitted. That is a
+development tool for improving the filling, and it is **not published**.
+
+- `-Channel dev` (default): everything, for loading unpacked while working on
+  the extension. This is the build to use when gathering logs.
+- `-Channel store`: `fillLogger.js` and `pageHook.js` are left out, every block
+  between `ff:logs:start` and `ff:logs:end` markers is stripped from the other
+  files, and the manifest loses the page-world content script and the
+  `unlimitedStorage` permission. The build then greps the package for any
+  remaining log code and fails if it finds some, so a published version cannot
+  record page content, submissions or request bodies at all.
+
+Both `create_Firefox_extension_zip.bat` and `create_Chrome_extension_zip.bat`
+pass `-Channel store`, so everything the publish scripts upload is stripped.
+When you touch logging code, keep it inside the markers.
 
 ## Release to AMO (Firefox)
 
