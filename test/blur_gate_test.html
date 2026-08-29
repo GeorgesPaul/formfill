@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<title>Blur-gated checkout (bench)</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 720px; }
+  fieldset { margin-bottom: 1.2rem; }
+  .row { margin: .6rem 0; display: flex; flex-direction: column; gap: .2rem; }
+  label { font-size: .9rem; }
+  input, select { padding: .4rem; font-size: 1rem; }
+  .err { color: #b00020; font-size: .8rem; min-height: 1em; }
+  button[disabled] { opacity: .45; cursor: not-allowed; }
+  #state { white-space: pre; background: #f4f4f4; padding: .8rem; font-size: .8rem; }
+</style>
+</head>
+<body>
+<h1>Blur-gated checkout</h1>
+<p>Reproduces the failure seen on a real checkout: the value alone is not enough.
+The page records the field's <em>validity</em> only in its <code>blur</code>
+handler (its <code>input</code> handler just stores the text), and the
+"Continuar" button stays disabled until that flag is set. A fill that writes the
+value and fires <code>input</code> but never produces a real <code>blur</code>
+looks perfectly successful and still cannot proceed.</p>
+
+<form id="checkout" autocomplete="off" action="/submitted" method="post">
+  <fieldset>
+    <legend>Endereço de faturação</legend>
+
+    <div class="row">
+      <label for="fiscalCode">NIF*</label>
+      <input type="text" id="fiscalCode" name="fiscalCode" required>
+      <div class="err" data-err="fiscalCode"></div>
+    </div>
+
+    <div class="row">
+      <label for="holder">Nome do titular</label>
+      <input type="text" id="holder" name="holder">
+      <div class="err" data-err="holder"></div>
+    </div>
+
+    <div class="row">
+      <label for="country">País</label>
+      <select id="country" name="country">
+        <option value="PT" selected>Portugal</option>
+        <option value="ES">Espanha</option>
+        <option value="NL">Países Baixos</option>
+      </select>
+    </div>
+  </fieldset>
+
+  <button type="button" id="continue" disabled>Continuar</button>
+</form>
+
+<div id="state">(no run yet)</div>
+
+<script>
+// The page's model of the form, updated by two different handlers, exactly
+// like the framework this bench is modelled on.
+const store = { fiscalCode: '', holder: '', fiscalCodeValid: false, holderValid: false };
+const counts = { input: 0, blur: 0, change: 0, focus: 0 };
+
+function rule(name, value) {
+  if (name === 'fiscalCode') return /^\d{9}$/.test(value) ? '' : 'Número de contribuinte inválido.';
+  if (name === 'holder') return value.trim().length >= 3 ? '' : 'Indique o nome do titular.';
+  return '';
+}
+
+function wire(name) {
+  const el = document.getElementById(name);
+
+  // input: stores the value only. Validity is NOT decided here.
+  el.addEventListener('input', () => { counts.input++; store[name] = el.value; updateGate(); });
+  el.addEventListener('focus', () => { counts.focus++; });
+  el.addEventListener('change', () => { counts.change++; });
+
+  // blur: the only place validity is ever established.
+  el.addEventListener('blur', () => {
+    counts.blur++;
+    const msg = rule(name, el.value);
+    store[name + 'Valid'] = !msg;
+    document.querySelector(`[data-err="${name}"]`).textContent = msg;
+    el.setAttribute('aria-invalid', msg ? 'true' : 'false');
+    updateGate();
+  });
+}
+wire('fiscalCode');
+wire('holder');
+
+function updateGate() {
+  const ok = store.fiscalCode !== '' && store.fiscalCodeValid &&
+             store.holder !== '' && store.holderValid;
+  document.getElementById('continue').disabled = !ok;
+  render();
+}
+
+function render() {
+  document.getElementById('state').textContent = JSON.stringify({ store, counts, gateDisabled: document.getElementById('continue').disabled }, null, 1);
+}
+
+document.getElementById('continue').addEventListener('click', () => {
+  window.__gateClicked = (window.__gateClicked || 0) + 1;
+  document.getElementById('state').textContent = 'Continuar pressed with ' + JSON.stringify(store);
+});
+
+window.__gateState = () => ({
+  values: Object.fromEntries(Array.from(new FormData(document.getElementById('checkout')).entries())),
+  store: { ...store },
+  counts: { ...counts },
+  gateDisabled: document.getElementById('continue').disabled,
+  errors: Object.fromEntries(Array.from(document.querySelectorAll('[data-err]')).map(e => [e.getAttribute('data-err'), e.textContent])),
+});
+render();
+</script>
+</body>
+</html>

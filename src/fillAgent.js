@@ -78,6 +78,7 @@ How to act:
 - Never fill password fields (kind "password"); the user has a separate credential tool.
 - Never submit, pay, order, register, send, confirm or otherwise finalize. Buttons of kind "submit" are off limits. You MAY click buttons that reveal more of the form (kind "next" or "reveal": Next, Continue, Add address, Enter manually, Same as billing...), but only after the current fields are filled correctly, and at most one such click per turn.
 - After each batch you get the results: the value the field holds now, whether it was accepted, validation messages, which suggestion an autocomplete widget picked, and which fields appeared, changed or vanished. Fix what the page rejected (different format, a listed option, a different search text), fill new fields, then set done=true. Do not retry an identical value that was just rejected. If a field cannot be satisfied, skip it with a reason.
+- Buttons carry a "disabled" flag. A Next/Continue/submit button that stays disabled after everything is filled means the page is still waiting for something: a field you skipped or never saw, a required checkbox, a choice that did not register, or a value it silently rejected. When you are told this, do not set done=true just because the fields look right; look again at the whole field list and act. Only give up when nothing plausible is left, and then say in the summary what the user should check.
 - Optional fields you have data for are filled too. Fields you have no data for are simply not touched (list them under skipped only when they are required).
 - Keep summary short and useful for the user: what was filled, what they must complete themselves.`;
 
@@ -249,10 +250,13 @@ How to act:
         };
         let memSug = attachSuggestions(snap.fields);
 
-        const details = { needsUserInput: [], skipped: [], summary: '', turns: 0, llmCalls: 0, memoryApplied: 0, stillInvalid: [] };
+        const details = { needsUserInput: [], skipped: [], summary: '', turns: 0, llmCalls: 0, memoryApplied: 0, stillInvalid: [], blockedProgress: [] };
         const mappingsToRemember = new Map(); // ref -> { field, key, value }
         const messages = [];
         let filledOk = 0;
+        // Progression buttons we pressed ourselves: a Next that advanced the
+        // form and then greyed itself out is not the page blocking us.
+        const usedButtons = new Set();
         let prevSnap = snap;
         let lastResults = [];
         let lastObserved = null;
@@ -270,8 +274,9 @@ How to act:
                 onBefore: (a, target) => { if (overlays && target.el) OverlayUtils.pulseFilling(target.el, 600); },
                 onAfter: (a, target, res) => {
                     const okish = res.ok && (res.accepted !== false) && !(res.validation && res.validation.invalid);
+                    if (a.op === 'click' && res.ok) usedButtons.add(a.ref);
                     if (a.op !== 'click') markOverlay(a.ref, okish ? (turnLabel === 'memory' ? 'heuristic' : 'llm') : 'nomatch');
-                    if (okish && a.op !== 'click' && a.op !== 'clear') {
+                    if (okish && a.op !== 'click' && a.op !== 'clear' && a.op !== 'commit' && a.op !== 'retype') {
                         const f = FormKit.fieldByRef(a.ref);
                         if (f) mappingsToRemember.set(a.ref, { field: f, key: a.source ? normKey(a.source) : (turnLabel === 'memory' ? (a.source || 'none') : 'none'), value: a.value });
                     } else {
@@ -291,7 +296,9 @@ How to act:
                 removedFields: d.removed,
                 changedFields: d.changed,
                 newButtons: d.newButtons.map(FormKit.describeButton),
+                changedButtons: d.changedButtons,
                 invalidFields: invalid,
+                blockedProgress: FormKit.blockedProgress(after, { exclude: usedButtons }),
             };
             // Suggestion popups the autocomplete handler saw, for the log.
             log('observed', { turn: turnLabel, ...observed, url: location.href });
@@ -315,13 +322,87 @@ How to act:
             return n;
         }
 
+        // ---- the page's own verdict -------------------------------------
+        //
+        // No event simulation can be proven complete: the browser reserves
+        // default actions for trusted events, and a page can always want
+        // something we did not know to give it. So the loop does not trust its
+        // own view of "filled"; it reads the page's verdict, and the clearest
+        // verdict a form gives is whether its Continue/submit button is
+        // pressable. Every required field filled, nothing flagged invalid, and
+        // the button still greyed out means something never reached the page.
+        function gateStuck() {
+            const gate = FormKit.progressGate(snap, { exclude: usedButtons });
+            if (!gate || !gate.disabled) return null;
+            // The page has a better reason to refuse; leave it to the model.
+            if (targets.some(f => f.required && isEmptyValue(f.value))) return null;
+            if (targets.some(f => f.invalid)) return null;
+            return gate;
+        }
+
+        // The two things a person does when a form ignores what was filled:
+        // click into the field and out again (so a blur-only validator runs),
+        // then delete the last character and type it back. Both leave the
+        // value exactly as it was.
+        async function recoverGate(gate, turnLabel) {
+            const refs = Array.from(mappingsToRemember.keys()).filter(ref => {
+                const f = FormKit.fieldByRef(ref);
+                return f && fillableKinds(f) && !isEmptyValue(f.value) &&
+                       f.kind !== 'checkbox' && f.kind !== 'switch' && f.kind !== 'radio-group';
+            });
+            const tried = [];
+            if (!refs.length) return { recovered: false, tried };
+
+            for (const op of ['commit', 'retype']) {
+                if (isCancelled()) throw new Error('Form filling stopped by user.');
+                progress(countFilled(), `"${gate.text}" is still disabled; re-entering ${refs.length} field(s)...`);
+                const results = await FormKit.execute(refs.map(ref => ({ ref, op })), { isCancelled });
+                tried.push(op);
+                await waitForDomSettle(350, 2500);
+                const after = FormKit.snapshot();
+                attachSuggestions(after.fields);
+                prevSnap = after;
+                snap = after;
+                targets = snap.fields.filter(fillableKinds);
+                const now = FormKit.progressGate(snap, { exclude: usedButtons });
+                log('recovery', { turn: turnLabel, op, refs, results, gate: now });
+                if (!now || !now.disabled) return { recovered: true, tried, gate: now };
+            }
+            return { recovered: false, tried };
+        }
+
+        // Set when recovery could not unblock the page, so the next model turn
+        // is told about it. Consumed once.
+        let gateNote = '';
+        let gateHandled = false;
+
+        async function checkGate(turnLabel) {
+            if (gateHandled) return true;
+            const gate = gateStuck();
+            if (!gate) return true;
+            gateHandled = true;
+            const rec = await recoverGate(gate, turnLabel);
+            if (rec.recovered) {
+                details.recoveredGate = { ref: gate.ref, text: gate.text, by: rec.tried[rec.tried.length - 1] };
+                return true;
+            }
+            details.blockedProgress = FormKit.blockedProgress(snap, { exclude: usedButtons });
+            gateNote = `\n\nIMPORTANT: the page still keeps its "${gate.text}" button (${gate.ref}, kind ${gate.kind}) disabled, although every required field has a value and nothing is flagged invalid. The extension already re-entered and re-committed the fields it filled (${rec.tried.join(' then ') || 'nothing to re-enter'}) with no effect. The page is waiting for something else: a field that is not filled or that you skipped, a checkbox that must be ticked, a choice that never registered, or a value it silently rejected. Look at the whole field list again and act on it. Only if nothing is left, set done=true and tell the user in the summary what to check.`;
+            return false;
+        }
+
         try {
             // ---- memory fast path: everything empty is covered by memory
             // Unchecked boxes are a valid state, not a gap, so they do not
             // count against memory coverage (memory may still set them).
             const emptyTargets = targets.filter(f => isEmptyValue(f.value) && f.kind !== 'checkbox' && f.kind !== 'switch');
             const coveredByMemory = emptyTargets.filter(f => memSug.has(f.ref));
-            if (emptyTargets.length > 0 && coveredByMemory.length === emptyTargets.length && !targets.some(f => f.invalid)) {
+            // "Required and still empty" is the normal state of a fresh form,
+            // not a reason to distrust memory: it is exactly what memory is
+            // about to fill. Only a real rejection (a value the page refused)
+            // sends us to the model.
+            const realInvalid = f => f.invalid && !(f.required && isEmptyValue(f.value));
+            if (emptyTargets.length > 0 && coveredByMemory.length === emptyTargets.length && !targets.some(realInvalid)) {
                 progress(0, `Applying remembered mapping for this site (${coveredByMemory.length} field(s))...`);
                 const actions = coveredByMemory.map(f => {
                     const s = memSug.get(f.ref);
@@ -332,7 +413,9 @@ How to act:
                 details.memoryApplied = results.filter(r => r.ok && r.accepted !== false).length;
                 const allGood = results.every(r => r.ok && r.accepted !== false && !(r.validation && r.validation.invalid)) &&
                                 observed.invalidFields.length === 0 && observed.newFields.length === 0;
-                if (allGood) {
+                // Even a clean memory fill only counts if the page agrees; if
+                // it does not, fall through to the model with the reason.
+                if (allGood && await checkGate('memory')) {
                     details.summary = `Filled ${details.memoryApplied} field(s) from memory of a previous visit; no model call needed.`;
                     return await finish('success');
                 }
@@ -346,6 +429,7 @@ How to act:
             if (lastResults.length) {
                 firstUser += `\n\nThe extension already applied a remembered mapping. RESULTS:\n${JSON.stringify(lastResults.map(compactResult))}\nOBSERVED:\n${JSON.stringify(lastObserved)}\nFix what is wrong and fill what is missing.`;
             }
+            if (gateNote) { firstUser += gateNote; gateNote = ''; }
             firstUser += `\n\nFill this form now by calling ${TOOL.name}.`;
             if (screenshotForModel) {
                 messages.push({ role: 'user', content: [{ type: 'text', text: firstUser + '\nA screenshot of the visible part of the page is attached; field boxes in the snapshot are viewport coordinates.' }, { type: 'image_url', image_url: { url: screenshotForModel } }] });
@@ -422,15 +506,24 @@ How to act:
                 const { results, observed } = await executeBatch(safeActions, turn);
                 const stillInvalid = observed.invalidFields.filter(f => safeActions.some(a => a.ref === f.ref) || plan.actions.some(a => a.ref === f.ref));
                 const anyRejected = results.some(r => !r.ok || r.accepted === false || (r.validation && r.validation.invalid));
-                const finished = plan.done && !anyRejected && observed.newFields.length === 0 && stillInvalid.length === 0;
+                let finished = plan.done && !anyRejected && observed.newFields.length === 0 && stillInvalid.length === 0;
+                // The model thinks it is done; ask the page whether it agrees.
+                if (finished) finished = await checkGate(turn);
 
                 // Feed results back.
                 const feedback = {
                     results: results.map(compactResult).concat(refused),
                     observed,
-                    state: { fieldsWithValue: countFilled(), fillable: targets.length, invalid: observed.invalidFields.length, emptyRequired: targets.filter(f => f.required && isEmptyValue(f.value)).map(f => ({ ref: f.ref, label: f.label })) },
+                    state: {
+                        fieldsWithValue: countFilled(),
+                        fillable: targets.length,
+                        invalid: observed.invalidFields.length,
+                        emptyRequired: targets.filter(f => f.required && isEmptyValue(f.value)).map(f => ({ ref: f.ref, label: f.label })),
+                        progressGate: FormKit.progressGate(snap, { exclude: usedButtons }),
+                    },
                 };
                 let feedbackText = `RESULTS:\n${JSON.stringify(feedback.results)}\nOBSERVED after the actions:\n${JSON.stringify(feedback.observed)}\nSTATE: ${JSON.stringify(feedback.state)}`;
+                if (gateNote) { feedbackText += gateNote; gateNote = ''; }
                 if (finished || turn === maxTurns) {
                     // No further model call; record for the log only.
                     log('feedback', { turn, feedback, final: true });
@@ -473,6 +566,9 @@ How to act:
             details.stillInvalid = targets.filter(f => f.invalid).map(f => ({ ref: f.ref, label: f.label, value: f.value, error: f.error }));
             details.emptyRequired = targets.filter(f => f.required && isEmptyValue(f.value)).map(f => ({ ref: f.ref, label: f.label }));
             details.durationMs = Date.now() - t0;
+            const finalGate = FormKit.progressGate(snap, { exclude: usedButtons });
+            details.progressGate = finalGate;
+            details.blockedProgress = FormKit.blockedProgress(snap, { exclude: usedButtons }).map(b => ({ ...b, label: b.text, reason: 'the page still keeps this button disabled' }));
 
             try {
                 const mappings = Array.from(mappingsToRemember.values()).filter(m => {
@@ -484,7 +580,7 @@ How to act:
 
             try { simulateMouseClick(document.body, true); } catch (_) {}
 
-            log('finalState', { snapshot: finalSnap, details });
+            log('finalState', { snapshot: finalSnap, details, progressGate: finalGate, primaryButtonDisabled: !!(finalGate && finalGate.disabled) });
             if (window === window.top && logOn) {
                 const raw = await FormKit.captureScreenshot();
                 if (raw) log('screenshot', { turn: 'final', image: await FormKit.shrinkImage(raw, 1024, 0.5) });
@@ -495,6 +591,8 @@ How to act:
             if (details.summary) parts.push(details.summary);
             if (details.needsUserInput.length) parts.push('Needs your input: ' + details.needsUserInput.map(x => x.label || x.ref).join(', ') + '.');
             if (details.stillInvalid.length) parts.push('Still flagged by the page: ' + details.stillInvalid.map(x => `${x.label || x.ref}${x.error ? ' (' + x.error + ')' : ''}`).join('; ') + '.');
+            if (details.recoveredGate) parts.push(`"${details.recoveredGate.text}" only became clickable after re-entering the fields (${details.recoveredGate.by}).`);
+            if (details.blockedProgress.length) parts.push('The page still keeps ' + details.blockedProgress.map(b => `"${b.text}"`).join(', ') + ' disabled, so it is waiting for something more.');
             const message = parts.join(' ');
             try { updateFillProgress(finalTotal, filledOk, finalTotal, message, sessionId); } catch (_) {}
             notify({ action: 'fillFormComplete', filled: filledOk, total: finalTotal, message, details });

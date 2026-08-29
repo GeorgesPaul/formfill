@@ -1,4 +1,4 @@
-// autocompleteFiller.js — handles fields that answer typing with a dynamic
+// autocompleteFiller.js: handles fields that answer typing with a dynamic
 // suggestion list you are expected to pick from (address/street lookups, city
 // and country pickers, Google Places, react-select, select2, awesomplete, ...).
 //

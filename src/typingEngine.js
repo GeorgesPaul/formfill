@@ -1,4 +1,4 @@
-// typingEngine.js — keystroke-level text entry.
+// typingEngine.js: keystroke-level text entry.
 //
 // Why this exists: a growing share of forms validate that a field was actually
 // *typed into*. They watch for keydown/keyup, for `beforeinput`/`input` events
@@ -222,38 +222,60 @@ const TypingEngine = (function () {
         return false;
     }
 
+    const ES = () => (typeof EventSim !== 'undefined' ? EventSim : null);
+
     // Press one key: keydown -> (keypress) -> insert -> keyup.
     // Honours preventDefault on keydown/keypress exactly like the browser does,
     // so masks that implement their own insertion keep working.
+    //
+    // The value can also change without us inserting anything: a framework
+    // handler may swallow the keydown and write the value itself. If it does so
+    // without dispatching `input`, listeners further out never hear about it,
+    // so we watch and fill that gap (see eventSim.js for the reasoning).
     async function pressChar(el, char, useExec) {
         const init = keyInitFor(char);
-        const kd = fire(el, KeyboardEvent, 'keydown', init);
-        let inserted = false;
-        if (!kd.defaultPrevented) {
-            const kp = fire(el, KeyboardEvent, 'keypress', init);
-            if (!kp.defaultPrevented) inserted = insertChar(el, char, useExec);
-        } else {
-            // The page swallowed the keydown; it may have inserted the char itself.
-            inserted = true;
+        const before = readValue(el);
+        const sim = ES();
+        const w = sim ? sim.witness(el, ['beforeinput', 'input']) : null;
+        try {
+            const kd = fire(el, KeyboardEvent, 'keydown', init);
+            let inserted = false;
+            if (!kd.defaultPrevented) {
+                const kp = fire(el, KeyboardEvent, 'keypress', init);
+                if (!kp.defaultPrevented) inserted = insertChar(el, char, useExec);
+            } else {
+                // The page swallowed the keydown; it may have inserted the char itself.
+                inserted = true;
+            }
+            if (sim) sim.ensureInput(el, before, w, { inputType: 'insertText', data: char });
+            fire(el, KeyboardEvent, 'keyup', { ...init, cancelable: true });
+            return inserted || readValue(el) !== before;
+        } finally {
+            if (w) w.stop();
         }
-        fire(el, KeyboardEvent, 'keyup', { ...init, cancelable: true });
-        return inserted;
     }
 
     async function pressBackspace(el, useExec) {
         const init = { key: 'Backspace', code: 'Backspace', keyCode: 8, which: 8, bubbles: true, cancelable: true, composed: true };
-        const kd = fire(el, KeyboardEvent, 'keydown', init);
-        let changed = false;
-        if (!kd.defaultPrevented) {
-            changed = manualBackspace(el);
-            if (!changed && useExec) {
-                const before = readValue(el);
-                try { (el.ownerDocument || document).execCommand('delete', false); } catch (_) {}
-                changed = readValue(el) !== before;
+        const before = readValue(el);
+        const sim = ES();
+        const w = sim ? sim.witness(el, ['beforeinput', 'input']) : null;
+        try {
+            const kd = fire(el, KeyboardEvent, 'keydown', init);
+            let changed = false;
+            if (!kd.defaultPrevented) {
+                changed = manualBackspace(el);
+                if (!changed && useExec) {
+                    try { (el.ownerDocument || document).execCommand('delete', false); } catch (_) {}
+                    changed = readValue(el) !== before;
+                }
             }
+            if (sim) sim.ensureInput(el, before, w, { inputType: 'deleteContentBackward', data: null });
+            fire(el, KeyboardEvent, 'keyup', init);
+            return changed || readValue(el) !== before;
+        } finally {
+            if (w) w.stop();
         }
-        fire(el, KeyboardEvent, 'keyup', init);
-        return changed;
     }
 
     // Clear the field the way a person would: select-all + delete, then
@@ -327,11 +349,18 @@ const TypingEngine = (function () {
         return true;
     }
 
-    // Tell the page the field is finished: change + a real blur (which fires
-    // trusted focusout/blur, what most validators actually listen for).
-    function commitField(el) {
+    // Tell the page the field is finished: change, then blur and focusout.
+    //
+    // `el.blur()` alone is NOT enough: when the page is not the focused
+    // document (the fill runs from the sidebar), neither engine dispatches
+    // focus or blur events for it, so a validator listening on blur never
+    // runs. EventSim.leave() checks what actually fired and supplies the rest.
+    function commitField(el, opts) {
+        const sim = ES();
+        if (sim) return sim.leave(el, opts || {});
         try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
         try { el.blur(); } catch (_) {}
+        try { el.dispatchEvent(new FocusEvent('blur', { bubbles: false })); } catch (_) {}
         try { el.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); } catch (_) {}
     }
 

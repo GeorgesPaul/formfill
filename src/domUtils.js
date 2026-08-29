@@ -174,6 +174,11 @@ function simulateMouseClick(element, outsideClick = false) {
 // not satisfy them. Use this before mutating a text field's value, and to
 // press buttons/options (most widgets react to mousedown, not click).
 function simulateRealisticFocus(element) {
+    if (typeof EventSim !== 'undefined') return EventSim.focus(element);
+
+    // Fallback if eventSim.js did not load: the old flat sequence. It does not
+    // let the previously focused control leave, and it cannot tell whether the
+    // browser already dispatched focus, so it may double up.
     try { element.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
     const rect = element.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
@@ -449,6 +454,10 @@ async function fillField(element, value, info, attempt = 1) {
 
     if (isTextLike) {
         simulateRealisticFocus(element);
+    } else if (typeof EventSim !== 'undefined') {
+        // No pointer press here: for these controls the click itself is the
+        // action (toggle, open the list) and each branch below performs it.
+        EventSim.enter(element);
     } else {
         try { element.focus(); } catch (_) {}
     }
@@ -502,6 +511,13 @@ async function fillField(element, value, info, attempt = 1) {
     }
 
     await sleep(sleep_between_events_ms);
+    // Text-like fields are committed inside fillTextLikeField. The others are
+    // committed here, so that validators listening on blur (a very common
+    // pattern) run for selects, checkboxes, radios and comboboxes too. Their
+    // change event was already dispatched by the branch that set them.
+    if (!isTextLike) {
+        try { TypingEngine.commitField(element, { change: false }); } catch (_) {}
+    }
     element.setAttribute('data-filled-by-extension', 'true');
     return result;
 }

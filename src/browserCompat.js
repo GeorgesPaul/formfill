@@ -1,4 +1,4 @@
-// browserCompat.js — one shim so a single source tree runs on both
+// browserCompat.js: one shim so a single source tree runs on both
 // Firefox (MV2, `browser.*`, persistent background page) and
 // Chrome (MV3, `chrome.*`, service worker).
 //

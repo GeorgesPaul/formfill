@@ -34,7 +34,7 @@
     const OURS = '[data-formfill-overlay], #keepass-picker-icon, #keepass-picker-dropdown';
 
     const SUBMIT_RE = /\b(submit|send|pay|order|buy|purchase|register|sign ?up|create (my )?account|confirm|book|checkout|place order|apply|save|finish|complete|done|agree and|verstuur|verzend|bestel|betaal|opslaan|bevestig|afronden|abschicken|absenden|senden|bestellen|zahlen|speichern|envoyer|payer|commander|enregistrer|valider)\b/i;
-    const NEXT_RE = /\b(next|continue|proceed|go on|verder|volgende|doorgaan|weiter|fortfahren|suivant|continuer|siguiente)\b/i;
+    const NEXT_RE = /\b(next|continue|proceed|go on|verder|volgende|doorgaan|weiter|fortfahren|suivant|continuer|siguiente|continuar|prosseguir|avançar|avancar|continua|avanti|prosegui|procedi|nästa|fortsätt|neste|næste|videre|dalej|další|tovább|devam)\b/i;
     const REVEAL_RE = /\b(add|show|more|edit|change|expand|different|another|other|manual|enter (it )?manually|toevoegen|wijzig|meer|anders|handmatig|hinzuf|ändern|mehr|ajouter|modifier|plus)\b/i;
 
     let refSeq = 0;
@@ -618,6 +618,7 @@
     // action with the field's state afterwards.
     async function execute(actions, opts = {}) {
         const results = [];
+        const touched = new Set();
         const isCancelled = opts.isCancelled || (() => !!window.stopFilling);
         for (let i = 0; i < (actions || []).length; i++) {
             const a = actions[i] || {};
@@ -637,8 +638,12 @@
                 results.push(res);
                 continue;
             }
+            touched.add(el);
             if (opts.onBefore) { try { opts.onBefore(a, target); } catch (_) {} }
             const t0 = Date.now();
+            // Controls whose branch does not commit for itself (fillField does)
+            // are committed after the action, so blur-only validators run.
+            let commitEl = null;
             try {
                 if (target.button) {
                     if (op !== 'click') { res.error = 'buttons only accept op "click"'; results.push(res); continue; }
@@ -654,6 +659,29 @@
                 } else if (op === 'clear') {
                     res.ok = await clearControl(el, field.kind);
                     res.strategy = 'clear';
+                } else if (op === 'commit') {
+                    // Re-announce a field that already holds the right value:
+                    // enter it and leave it again, so a page that only
+                    // validates on blur validates now. Value is untouched.
+                    simulateRealisticFocus(el);
+                    await wait(60);
+                    TypingEngine.commitField(el, { change: true });
+                    res.ok = true;
+                    res.strategy = 'commit';
+                    await waitForDomSettle(200, 1500);
+                } else if (op === 'retype') {
+                    // What a person does when a form ignores what was filled:
+                    // delete the last character, type it again, then leave.
+                    // The value ends up unchanged.
+                    simulateRealisticFocus(el);
+                    await wait(60);
+                    let retyped = false;
+                    try { retyped = await TypingEngine.retypeLastChar(el); } catch (_) {}
+                    TypingEngine.commitField(el, { change: true });
+                    res.ok = !!retyped;
+                    res.strategy = 'retype';
+                    if (!retyped) res.error = 'nothing to retype (empty or not typable)';
+                    await waitForDomSettle(200, 1500);
                 } else if (field.kind === 'radio-group') {
                     const m = matchGroupOption(target.members, a.value);
                     if (!m) {
@@ -662,14 +690,17 @@
                         res.ok = await selectRadio(m.el);
                         res.strategy = 'radio';
                         res.selected = m.text;
+                        commitEl = m.el;
                         for (const mm of target.members) mm.el.setAttribute('data-filled-by-extension', 'true');
                     }
                 } else if (field.kind === 'multiselect') {
                     res.ok = await chooseMulti(el, a.value);
                     res.strategy = 'multiselect';
+                    commitEl = el;
                 } else if (field.kind === 'listbox') {
                     res.ok = await chooseListboxOption(el, a.value);
                     res.strategy = 'listbox';
+                    commitEl = el;
                 } else if (field.kind === 'file') {
                     res.error = 'file inputs cannot be filled';
                 } else if (field.kind === 'password') {
@@ -677,7 +708,7 @@
                 } else if (op === 'set') {
                     const b = parseBoolean(a.value);
                     if (b === null) res.error = `Not a boolean: ${a.value}`;
-                    else { res.ok = await setCheckbox(el, b); res.strategy = 'checkbox'; }
+                    else { res.ok = await setCheckbox(el, b); res.strategy = 'checkbox'; commitEl = el; }
                 } else {
                     // fill / choose on text, select, combobox, date, etc.
                     const info = { label: field.label, placeholder: field.placeholder };
@@ -692,6 +723,10 @@
                 if (e && e.message === 'Form filling stopped by user.') throw e;
                 res.error = (e && e.message) || String(e);
             }
+            if (commitEl && res.ok) {
+                // The change event was already dispatched by the branch above.
+                try { TypingEngine.commitField(commitEl, { change: false }); } catch (_) {}
+            }
             res.ms = Date.now() - t0;
             // Read back.
             try {
@@ -703,7 +738,7 @@
                 } else {
                     res.finalValue = readValue(el, k);
                 }
-                if (!target.button && op !== 'click' && op !== 'clear') {
+                if (!target.button && op !== 'click' && op !== 'clear' && op !== 'commit' && op !== 'retype') {
                     if (k === 'checkbox' || k === 'switch') {
                         res.accepted = (parseBoolean(a.value) === res.finalValue);
                     } else if (k === 'radio-group') {
@@ -719,6 +754,16 @@
             if (opts.onAfter) { try { opts.onAfter(a, target, res); } catch (_) {} }
             results.push(res);
         }
+
+        // The person moves on when the batch is done. Anything still focused
+        // (a field whose suggestion popup handled the selection, so nothing
+        // committed it) has to lose focus now, or a validator listening on
+        // blur never runs for it. Its change event was already dispatched by
+        // whatever set the value.
+        try {
+            const active = document.activeElement;
+            if (active && touched.has(active)) TypingEngine.commitField(active, { change: false });
+        } catch (_) {}
         return results;
     }
 
@@ -743,9 +788,47 @@
             if (Object.keys(c).length) changed.push({ ref, label: f.label, ...c });
         }
         for (const [ref, f] of b) if (!a.has(ref)) removed.push({ ref, label: f.label, kind: f.kind });
-        const bb = new Set((before && before.buttons || []).map(x => x.ref));
+        const bb = new Map((before && before.buttons || []).map(x => [x.ref, x]));
         const newButtons = (after && after.buttons || []).filter(x => !bb.has(x.ref));
-        return { added, removed, changed, newButtons };
+        // A button going from disabled to enabled (or back) is how most forms
+        // say "you have now satisfied me" / "something is still missing", so
+        // the loop needs to see it just like a validation message.
+        const changedButtons = [];
+        for (const x of (after && after.buttons || [])) {
+            const old = bb.get(x.ref);
+            if (!old) continue;
+            if ((old.disabled || false) !== (x.disabled || false)) {
+                changedButtons.push({ ref: x.ref, text: x.text, kind: x.kind, disabled: !!x.disabled });
+            }
+        }
+        return { added, removed, changed, newButtons, changedButtons };
+    }
+
+    // The button that carries the form forward, and whether the page is
+    // currently letting it be pressed. "next" wins over "submit": a wizard's
+    // Continue is the gate for the step we are filling, while a submit button
+    // may belong to an unrelated form (search box, newsletter) on the page.
+    // `exclude` holds buttons that already did their job (a Next we clicked and
+    // that advanced the form); such a button commonly disables itself
+    // afterwards, which says nothing about whether the page is satisfied.
+    function progressCandidates(snap, opts = {}) {
+        const skip = opts.exclude;
+        return ((snap && snap.buttons) || [])
+            .filter(b => (b.kind === 'next' || b.kind === 'submit') && !(skip && skip.has && skip.has(b.ref)));
+    }
+
+    function progressGate(snap, opts = {}) {
+        const candidates = progressCandidates(snap, opts);
+        if (!candidates.length) return null;
+        const b = candidates.find(x => x.kind === 'next') || candidates[0];
+        return { ref: b.ref, text: b.text, kind: b.kind, disabled: !!b.disabled };
+    }
+
+    // Every progression button the page is currently blocking.
+    function blockedProgress(snap, opts = {}) {
+        return progressCandidates(snap, opts)
+            .filter(b => b.disabled)
+            .map(b => ({ ref: b.ref, text: b.text, kind: b.kind }));
     }
 
     // ------------------------------------------------------------ capture
@@ -858,7 +941,8 @@
     }
 
     const FormKit = {
-        snapshot, execute, diff, describeField, describeButton, resolveRef, fieldByRef,
+        snapshot, execute, diff, progressGate, blockedProgress,
+        describeField, describeButton, resolveRef, fieldByRef,
         capturePageHtml, valuesSnapshot, formDataOf, captureScreenshot, shrinkImage,
         get lastSnapshot() { return lastSnapshot; },
         normalizeOp, matchGroupOption,

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GeorgesPaul Form Filler",
-  "version": "1.26",
+  "version": "1.27",
   "description": "Intelligently fills forms based on user profiles",
   "minimum_chrome_version": "114",
   "permissions": [
@@ -63,6 +63,7 @@
         "apiUtils.js",
         "utils.js",
         "accessibleName.js",
+        "eventSim.js",
         "domUtils.js",
         "typingEngine.js",
         "autocompleteFiller.js",

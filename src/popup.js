@@ -596,7 +596,7 @@ async function fillForm() {
 
         // Keep in step with the content_scripts list in both manifests.
         const scripts = [
-          'browserCompat.js', 'apiUtils.js', 'utils.js', 'accessibleName.js', 'domUtils.js',
+          'browserCompat.js', 'apiUtils.js', 'utils.js', 'accessibleName.js', 'eventSim.js', 'domUtils.js',
           'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'heuristicFiller.js',
           'overlayUtils.js', 'formKit.js', 'siteMemory.js', 'fillLogger.js', 'fillAgent.js', 'content.js'
         ];
@@ -819,6 +819,7 @@ function renderNeedsInput(details) {
   const groups = [
     ['Needs your input', details.needsUserInput],
     ['Still flagged by the page', details.stillInvalid],
+    ['The page still blocks', details.blockedProgress],
     ['Required and still empty', details.emptyRequired],
     ['Skipped', details.skipped],
   ];

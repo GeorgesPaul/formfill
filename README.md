@@ -29,9 +29,31 @@ Filling is a short closed loop, not a single guess:
 5. **Repeat.** The model fixes rejected values, fills newly revealed fields,
    and declares done. Bounded by the configurable turn budget (default 4;
    most forms finish in 1 or 2 calls, remembered forms in 0).
+6. **Ask the page, not ourselves.** Before accepting "done", the extension
+   checks the form's own verdict: if every required field has a value, nothing
+   is flagged, and the Next/Continue button is still greyed out, the page is
+   waiting for something. The fields are re-entered the way a person would
+   (click in, click out; then delete and retype the last character) and, if it
+   is still blocked, the model is told so instead of reporting success.
 
 Submit-type buttons are never clicked and password fields are never filled
 (credentials come from the separate KeePass button).
+
+### Why the events are simulated so carefully
+
+Events dispatched from an extension are `isTrusted: false`, and browsers run
+default actions only for trusted events: a synthetic keydown inserts nothing, a
+synthetic mousedown moves no focus. The extension therefore reproduces the
+sequences the browser itself would emit (`eventSim.js`), and for each step
+checks whether the event actually happened before adding it, so nothing is
+delivered twice when the browser does its own part.
+
+This matters most for focus. When the fill is driven from the sidebar or side
+panel, the page is not the focused document, and in that state `el.focus()` and
+`el.blur()` change `document.activeElement` without dispatching any event, in
+both Firefox and Chrome. Any form that validates on blur (a very common
+pattern) would never validate: the value is visibly correct, no error is shown,
+and the Continue button stays disabled until you retype something by hand.
 
 ## Features
 
@@ -40,6 +62,8 @@ Submit-type buttons are never clicked and password fields are never filled
 - **Simulated typing by default** - real keydown/keypress/beforeinput/input/keyup, then change + blur; modern forms reject values that merely appear
 - **Autocomplete dropdown handling** - suggestion lists are watched from the first keystroke, scored, and selected by keyboard or mouse (LLM tiebreak on ambiguity)
 - **Validation-aware** - aria-invalid, constraint validation and visible error text are read back after every action and fed to the model
+- **Faithful input events** - the browser's own focus/typing/commit sequences are reproduced and verified, so blur-only validators, masks and framework-controlled inputs behave as if a person had typed
+- **Progress-gate check** - a Continue/submit button that stays disabled is treated as the page rejecting the fill, not as success
 - **"Needs your input" report** - fields the profile cannot answer are listed in the panel instead of silently skipped
 - **Local fill logs** - every fill records what the site looked like, what the model was asked/answered, what the extension did, what the page did in response, and what was actually submitted afterwards (FormData + request bodies). Export as JSON from the panel; nothing leaves your machine
 - **Optional screenshot** - a checkbox attaches one screenshot on the first turn for vision-capable models; off by default (slower, more expensive)
@@ -128,6 +152,7 @@ Key source files:
 | `formKit.js` | The primitive layer: snapshot (refs, labels, validation, geometry), execute (fill/choose/set/click/clear), diff, page HTML capture |
 | `fillAgent.js` | The closed-loop driver: memory fast path, model turns via the `form_actions` tool, feedback, needs-input reporting |
 | `accessibleName.js` | Computed accessible names, helper/error text extraction, section context |
+| `eventSim.js` | The browser's input event sequences (press, focus, leave, key) reproduced and verified, so pages react as they would to a person |
 | `domUtils.js` | Per-element fill mechanics: realistic focus, typing cascade, selects, custom comboboxes, checkboxes/radios, validation reading |
 | `typingEngine.js` | Keystroke-level text entry: per-character typing, clearing, retyping, commit on blur |
 | `autocompleteFiller.js` | Detects suggestion popups, scores options against the intended value, selects one |
@@ -148,6 +173,12 @@ Then open, in any browser:
 - `http://localhost:8123/test/typing_and_autocomplete_test.html` - form that rejects untyped values and an address field requiring a suggestion pick
 - `http://localhost:8123/test/widget_variants_test.html` - mouse-only suggestions, non-matching suggestions, readonly combobox, controlled input
 - `http://localhost:8123/test/basic_controls_test.html` - select, checkbox, radio, textarea, contenteditable, date, number
+- `http://localhost:8123/test/blur_gate_test.html` - a checkout that only records a field's validity in its `blur` handler and keeps "Continuar" disabled until then; the regression test for filling from an unfocused page
+
+To reproduce the unfocused-page condition in a test (the sidebar case), stub
+`document.hasFocus` to false and make `focus()`/`blur()` update
+`document.activeElement` without dispatching events; see the header of
+`blur_gate_test.html`.
 
 `test/agent_harness.js` loads the real extension sources into any of those pages
 with a stubbed `browser` API and drives `FillAgent.run` with a scripted mock
