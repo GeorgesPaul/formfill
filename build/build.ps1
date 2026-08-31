@@ -50,7 +50,7 @@ $targetOnlyFiles = @{
 
 # The fill logs, dropped from store packages.
 $logFiles = @('fillLogger.js', 'pageHook.js')
-$logMarked = @('popup.html', 'popup.js', 'background.js', 'content.js', 'fillAgent.js', 'README.md')
+$logMarked = @('popup.html', 'popup.js', 'background.js', 'content.js', 'contextMenu.js', 'fillAgent.js', 'README.md')
 
 # Remove every "ff:logs:start" .. "ff:logs:end" block, markers and all.
 function Remove-LogBlocks([string]$path) {

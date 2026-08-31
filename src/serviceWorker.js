@@ -8,7 +8,8 @@ importScripts(
     'apiUtils.js',
     'lib/kdbxweb.min.js',
     'keepassClient.js',
-    'background.js'
+    'background.js',
+    'contextMenu.js'
 );
 
 // Chrome has no sidebar_action. The side panel is the equivalent, and this

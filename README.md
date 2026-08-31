@@ -64,6 +64,7 @@ and the Continue button stays disabled until you retype something by hand.
 - **Validation-aware** - aria-invalid, constraint validation and visible error text are read back after every action and fed to the model
 - **Faithful input events** - the browser's own focus/typing/commit sequences are reproduced and verified, so blur-only validators, masks and framework-controlled inputs behave as if a person had typed
 - **Progress-gate check** - a Continue/submit button that stays disabled is treated as the page rejecting the fill, not as success
+- **Right-click filling** - a "Fill this form" context menu with a submenu of your profiles. The sidebar and side panel only exist in ordinary browser windows, so this is the only way to fill a chrome-less popup window (payment and 3-D Secure flows), and it works inside iframes too
 - **"Needs your input" report** - fields the profile cannot answer are listed in the panel instead of silently skipped
 <!-- ff:logs:start -->
 - **Local fill logs** - every fill records what the site looked like, what the model was asked/answered, what the extension did, what the page did in response, and what was actually submitted afterwards (FormData + request bodies). Export as JSON from the panel; nothing leaves your machine
@@ -169,6 +170,7 @@ Key source files:
 <!-- ff:logs:start -->
 | `fillLogger.js` / `pageHook.js` | Local fill logs; page-world hook that captures submitted request bodies |
 <!-- ff:logs:end -->
+| `contextMenu.js` | The "Fill this form" right-click menu and its profile submenu; the only fill trigger that reaches chrome-less popup windows |
 | `heuristicFiller.js` | Deterministic suggestions from autocomplete attributes and label patterns |
 | `apiUtils.js` | One chat() for OpenRouter / OpenAI-compatible / Ollama, with tools, images, caching, reasoning effort |
 | `browserCompat.js` | Firefox/Chrome API shim |
