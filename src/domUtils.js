@@ -74,6 +74,15 @@ function elementHasCorrectValue(element, expectedValue) {
     if (normalizedCurrent === normalizedExpected) return true;
     if (normalizedCurrent.toLowerCase() === normalizedExpected.toLowerCase()) return true;
 
+    // A list widget keeps its choice outside the input (react-select clears
+    // the search box and shows the pick beside it). Ask the widget.
+    if (typeof ChoiceWidget !== 'undefined' && !normalizedCurrent) {
+        const sel = ChoiceWidget.readSelection(element);
+        if (sel && sel.source !== 'value' && ChoiceWidget.matches(sel.text, normalizedExpected)) return true;
+        const picked = element.getAttribute('data-ff-selected');
+        if (sel && picked && ChoiceWidget.matches(sel.text, picked) && element.getAttribute('data-ff-accepted-for') === normalizedExpected) return true;
+    }
+
     // Tolerant compare for masked / auto-reformatted fields (phone, date,
     // currency): "1234567890" vs "(123) 456-7890", "18041985" vs "18-04-1985".
     const strip = s => s.replace(/[^0-9a-z]/gi, '').toLowerCase();
@@ -103,9 +112,19 @@ function readValidation(element) {
     } catch (_) {}
     try {
         if (typeof element.checkValidity === 'function' && element.willValidate && !element.checkValidity()) {
-            out.invalid = true;
-            out.hints.push('constraint');
-            if (element.validationMessage) out.message = element.validationMessage;
+            // "Required and still empty" is how every fresh form starts; the
+            // `required` flag already says so. Only a value the browser
+            // refuses (format, range, pattern) is a verdict on what we did.
+            const v = element.validity;
+            const onlyMissing = v && v.valueMissing && !v.typeMismatch && !v.patternMismatch && !v.rangeUnderflow && !v.rangeOverflow && !v.stepMismatch && !v.tooLong && !v.tooShort && !v.badInput && !v.customError;
+            const empty = element.type === 'checkbox' || element.type === 'radio' ? !element.checked : !(element.value && String(element.value).trim());
+            if (onlyMissing && empty) {
+                out.hints.push('empty-required');
+            } else {
+                out.invalid = true;
+                out.hints.push('constraint');
+                if (element.validationMessage) out.message = element.validationMessage;
+            }
         }
     } catch (_) {}
     try {
@@ -464,7 +483,13 @@ async function fillField(element, value, info, attempt = 1) {
     await sleep(sleep_between_events_ms);
 
     let result = { ok: false };
-    if (tag === 'select') {
+    const dateDet = (isTextLike && typeof DateField !== 'undefined') ? DateField.detect(element, info || {}) : null;
+    if (dateDet && dateDet.isDate) {
+        // Dates have their own mechanics (masks, native inputs, calendars);
+        // typing the string and hoping is what produced "01-01-1900".
+        const r = await DateField.fill(element, value, info || {});
+        result = { ok: !!r.ok, strategy: r.strategy, tried: r.tried, format: r.format, error: r.ok ? undefined : (r.error || 'the date field did not accept the value') };
+    } else if (tag === 'select') {
         const ok = await fillSelectField(element, value);
         result = { ok, strategy: 'select' };
         await sleep(delay_after_dropdown_selection_ms);
@@ -495,15 +520,20 @@ async function fillField(element, value, info, attempt = 1) {
         }
         const ok = await selectRadio(target);
         result = { ok, strategy: 'radio', error: ok ? undefined : `No radio matched "${value}"` };
-    } else if (isCustomCombobox(element)) {
-        const ok = await fillCustomCombobox(element, value);
-        if (ok) {
-            result = { ok: true, strategy: 'combobox' };
+    } else if (isCustomCombobox(element) || (info && info.op === 'choose' && typeof ChoiceWidget !== 'undefined')) {
+        // One path for every list widget: open, enumerate, pick, confirm
+        // through the widget's own display of its choice. Typing to filter
+        // happens inside when the visible list does not hold the entry.
+        const r = await ChoiceWidget.choose(element, value, info || {});
+        if (r.ok) {
+            result = { ok: true, strategy: r.strategy, handled: true, selected: r.selected, reason: r.reason, optionsSeen: r.optionsSeen, shown: r.shown };
+        } else if (TypingEngine.isTypable(element) && r.reason === 'no-list') {
+            // Free-text combobox whose list never opened: type into it and
+            // take whatever suggestions that produces.
+            const t = await fillTextLikeField(element, value, info, attempt);
+            result = { ok: t.handled || t.filled, ...t, optionsSeen: t.optionsSeen || r.optionsSeen };
         } else {
-            // Free-text combobox, or one whose list never opened on click:
-            // type into it and take whatever suggestions that produces.
-            const r = await fillTextLikeField(element, value, info, attempt);
-            result = { ok: r.handled || r.filled, ...r };
+            result = { ok: false, strategy: r.strategy, handled: false, reason: r.reason, optionsSeen: r.optionsSeen, selected: r.selected, shown: r.shown, error: r.reason === 'no-match' ? `no option matched "${value}"` : undefined };
         }
     } else {
         const r = await fillTextLikeField(element, value, info, attempt);
@@ -643,68 +673,8 @@ function isVisible(el) {
     return true;
 }
 
-// Open a custom combobox and click the matching option. Generic, no
-// site-specific logic. Returns true when an option was picked.
-async function fillCustomCombobox(element, value) {
-    simulateRealisticFocus(element);
-
-    let listbox = null;
-    const deadline = Date.now() + 2000;
-    while (Date.now() < deadline) {
-        if (window.stopFilling) throw new Error("Form filling stopped by user.");
-        listbox = findAssociatedListbox(element);
-        if (listbox) break;
-        await sleep(50);
-    }
-    if (!listbox) {
-        console.warn('[fillCustomCombobox] No listbox appeared after clicking');
-        return false;
-    }
-
-    const optionEls = Array.from(listbox.querySelectorAll(
-        '[role="option"], [role="menuitem"], [role="treeitem"], [role="gridcell"], li, option'
-    )).filter(isVisible);
-
-    const entries = optionEls.map(el => ({
-        text: cleanText(el.textContent || ''),
-        value: el.getAttribute('data-value') || el.getAttribute('value') || cleanText(el.textContent || ''),
-        el
-    }));
-
-    let match = findMatchingOption(entries, value);
-
-    if (!match) {
-        const scored = entries
-            .map(e => ({ e, s: AutocompleteFiller.score(e.text, value) }))
-            .sort((a, b) => b.s - a.s)[0];
-        if (scored && scored.s >= 0.55) match = scored.e;
-    }
-
-    if (!match && TypingEngine.isTypable(element)) {
-        // Searchable combobox (react-select, select2, MUI Autocomplete): the
-        // full option list only appears after typing a query.
-        const watcher = AutocompleteFiller.startWatch(element);
-        await TypingEngine.typeText(element, value, {
-            clearFirst: true, isCancelled: () => window.stopFilling
-        });
-        const res = await AutocompleteFiller.resolve(watcher, element, value, {});
-        if (res.handled) return true;
-    }
-
-    if (!match) {
-        console.warn('[fillCustomCombobox] No matching option for', value, 'among', entries.map(e => e.text));
-        TypingEngine.pressKey(element, 'Escape');
-        simulateMouseClick(document.body, true);
-        return false;
-    }
-
-    match.el.scrollIntoView({ block: 'nearest' });
-    AutocompleteFiller.mouseSequence(match.el);
-    await sleep(50);
-    match.el.dispatchEvent(new Event('change', { bubbles: true }));
-    try { element.setAttribute('data-ff-accepted-for', String(value).trim()); } catch (_) {}
-    return true;
-}
+// Custom comboboxes are operated by ChoiceWidget.choose (choiceWidget.js):
+// one open/enumerate/pick/confirm path for every list widget.
 
 async function waitForOptions(selectElement, timeout = 2000) {
     const startTime = Date.now();

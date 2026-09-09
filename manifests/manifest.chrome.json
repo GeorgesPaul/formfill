@@ -68,6 +68,8 @@
         "domUtils.js",
         "typingEngine.js",
         "autocompleteFiller.js",
+        "choiceWidget.js",
+        "dateField.js",
         "llmClient.js",
         "heuristicFiller.js",
         "overlayUtils.js",

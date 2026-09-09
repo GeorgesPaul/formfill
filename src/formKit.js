@@ -40,6 +40,11 @@
     let refSeq = 0;
     let lastSnapshot = null;
     let refIndex = new Map();   // ref -> { el, field, members? }
+    // ref -> signature of the element it was given to. Frameworks re-render
+    // controls into fresh nodes (a date picker rebuilding its month select, a
+    // wizard step re-mounting its inputs); the person still sees the same
+    // field, so the ref must follow it instead of dying with the node.
+    const signatures = new Map();
 
     const clean = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
     const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -151,10 +156,56 @@
         return prefix + refSeq;
     }
 
-    function ensureRef(el, prefix) {
+    // What identifies a control across re-renders: what it is and what it is
+    // called, not which node currently renders it.
+    function signatureOf(el, label) {
+        const tag = el.tagName.toLowerCase();
+        const type = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : (el.getAttribute('role') || '').toLowerCase();
+        return {
+            tag, type,
+            id: el.id || '',
+            name: el.getAttribute('name') || '',
+            label: clean(label || '').toLowerCase().slice(0, 80),
+            placeholder: clean(el.getAttribute('placeholder') || '').toLowerCase().slice(0, 80),
+            autocomplete: el.getAttribute('autocomplete') || '',
+            ariaLabel: clean(el.getAttribute('aria-label') || '').toLowerCase().slice(0, 80),
+        };
+    }
+
+    // 0..1 how surely `sig` describes `el`. Identity attributes decide when
+    // present; otherwise the visible name plus the control type has to agree.
+    function signatureMatch(sig, el, label) {
+        const s = signatureOf(el, label);
+        if (s.tag !== sig.tag || s.type !== sig.type) return 0;
+        if (sig.id && s.id) return s.id === sig.id ? 1 : 0;
+        if (sig.name && s.name && s.name !== sig.name) return 0;
+        let score = 0;
+        if (sig.name && s.name === sig.name) score += 0.6;
+        if (sig.label && s.label === sig.label) score += 0.5;
+        if (sig.placeholder && s.placeholder === sig.placeholder) score += 0.3;
+        if (sig.ariaLabel && s.ariaLabel === sig.ariaLabel) score += 0.5;
+        if (sig.autocomplete && s.autocomplete === sig.autocomplete && !/^(on|off)$/.test(sig.autocomplete)) score += 0.3;
+        return Math.min(1, score);
+    }
+
+    // The ref a re-rendered control should inherit: one whose old node is
+    // gone and whose signature is this element's.
+    function inheritRef(el, prefix, label) {
+        let best = null, bestScore = 0;
+        for (const [ref, sig] of signatures) {
+            if (ref[0] !== prefix) continue;
+            const entry = refIndex.get(ref);
+            if (entry && entry.el && entry.el.isConnected && entry.el !== el) continue;   // still alive elsewhere
+            const s = signatureMatch(sig, el, label);
+            if (s > bestScore) { bestScore = s; best = ref; }
+        }
+        return bestScore >= 0.5 ? best : null;
+    }
+
+    function ensureRef(el, prefix, label) {
         let r = el.getAttribute('data-ff-ref');
         if (!r || r[0] !== prefix) {
-            r = nextRef(prefix);
+            r = inheritRef(el, prefix, label) || nextRef(prefix);
             try { el.setAttribute('data-ff-ref', r); } catch (_) {}
         }
         return r;
@@ -207,7 +258,15 @@
             if (kind === 'password') return el.value ? '[password]' : '';
             if (typeof el.value === 'string') {
                 if (el.value) return el.value.slice(0, 300);
-                // Custom comboboxes show the chosen value as text, not .value.
+                // List widgets keep their choice outside the input: react-select
+                // clears its search box and shows the pick beside it, a hidden
+                // input carries the model, a div combobox holds it as text.
+                // Reporting "" here made a correct pick look like an empty
+                // required field, and the loop re-picked it three times.
+                if (kind === 'combobox' && typeof ChoiceWidget !== 'undefined') {
+                    const s = ChoiceWidget.readSelection(el);
+                    if (s && s.text) return s.text.slice(0, 300);
+                }
                 if (kind === 'combobox') {
                     const t = clean(el.textContent);
                     if (t && t.length <= 120) return t;
@@ -250,9 +309,9 @@
         return null;
     }
 
-    function fieldInfoFor(el, headings) {
+    function fieldInfoFor(el, headings, opts = {}) {
         const kind = kindOf(el);
-        const acc = (typeof AccName !== 'undefined') ? AccName.compute(el) : { name: null, source: 'none' };
+        const acc = (typeof AccName !== 'undefined') ? AccName.compute(el, { exclude: opts.excludeLabels }) : { name: null, source: 'none' };
         const validation = (typeof readValidation === 'function') ? readValidation(el) : { invalid: false, message: '' };
         const f = {
             ref: null,
@@ -289,7 +348,55 @@
                 f.typeahead = true;
             }
         }
+        // A date field announces itself (mask, picker, label); the model is
+        // told the format it wants so the value arrives in that shape.
+        if (typeof DateField !== 'undefined' && (f.kind === 'text' || f.kind === 'combobox' || f.kind === 'tel' || f.kind === 'number' || f.kind === 'date' || f.kind === 'datetime-local' || f.kind === 'month')) {
+            try {
+                const det = DateField.detect(el, { label: f.label, placeholder: f.placeholder });
+                if (det.isDate) f.date = det.native ? 'native' : (DateField.describeFormat(det.mask) || true);
+            } catch (_) {}
+        }
+        if (acc.el) f._labelEl = acc.el;
         return f;
+    }
+
+    // Two controls reading their name from the same piece of layout text is
+    // a sure sign one of them is wrong (a floating label or a hint claimed by
+    // the neighbour). The control nearest the text keeps it; the others are
+    // re-labelled with that text excluded.
+    function dedupeLabels(fields, index, headings) {
+        const claims = new Map();
+        for (const f of fields) {
+            if (!f._labelEl || f.kind === 'radio-group') continue;
+            if (!claims.has(f._labelEl)) claims.set(f._labelEl, []);
+            claims.get(f._labelEl).push(f);
+        }
+        const exclude = new Set();
+        const redo = [];
+        for (const [labelEl, owners] of claims) {
+            if (owners.length < 2) continue;
+            let lr = null;
+            try { lr = labelEl.getBoundingClientRect(); } catch (_) { continue; }
+            const dist = f => {
+                const b = f.box || { x: 0, y: 0, w: 0, h: 0 };
+                const dx = Math.max(lr.left - (b.x + b.w), b.x - lr.right, 0);
+                const dy = Math.max(lr.top - (b.y + b.h), b.y - lr.bottom, 0);
+                return dx + dy;
+            };
+            owners.sort((a, b) => dist(a) - dist(b));
+            exclude.add(labelEl);
+            for (const f of owners.slice(1)) redo.push(f);
+        }
+        for (const f of redo) {
+            const entry = index.get(f.ref);
+            if (!entry || !entry.el) continue;
+            const again = fieldInfoFor(entry.el, headings, { excludeLabels: exclude });
+            f.label = again.label;
+            f.labelSource = again.labelSource;
+            f._labelEl = again._labelEl;
+            if (again.date !== undefined) f.date = again.date; else delete f.date;
+        }
+        for (const f of fields) delete f._labelEl;
     }
 
     function buttonInfoFor(el) {
@@ -366,12 +473,18 @@
             }
 
             const f = fieldInfoFor(el, headings);
-            f.ref = ensureRef(el, 'f');
+            f.ref = ensureRef(el, 'f', f.label);
             f.box = box(vis.rect);
             f.inViewport = inViewport(vis.rect, win);
             if (vis.viaLabel) f.viaLabel = true;
             fields.push(f);
             index.set(f.ref, { el, field: f });
+            signatures.set(f.ref, signatureOf(el, f.label));
+        }
+        dedupeLabels(fields, index, headings);
+        for (const f of fields) {
+            const e = index.get(f.ref);
+            if (e && e.el && f.kind !== 'radio-group') signatures.set(f.ref, signatureOf(e.el, f.label));
         }
 
         // Finish radio groups: group label/section from the first member's
@@ -453,11 +566,12 @@
                 if (!vis.visible) continue;
                 const b = buttonInfoFor(el);
                 if (!b) continue;
-                b.ref = ensureRef(el, 'b');
+                b.ref = ensureRef(el, 'b', b.text);
                 b.box = box(vis.rect);
                 b.inViewport = inViewport(vis.rect, win);
                 buttons.push(b);
                 index.set(b.ref, { el, button: b });
+                signatures.set(b.ref, signatureOf(el, b.text));
             }
             // Keep the list short: prefer next/reveal/submit, then the rest in
             // document order.
@@ -485,8 +599,74 @@
         return lastSnapshot;
     }
 
+    // The element a ref points at now. When the node the ref was given to has
+    // been replaced by a re-render, the control is looked up again by its
+    // signature and the ref is moved onto the new node. "element no longer in
+    // the page" then only means what it says.
+    function relocate(ref) {
+        const sig = signatures.get(ref);
+        if (!sig) return null;
+        const entry = refIndex.get(ref);
+        const isButton = ref[0] === 'b';
+        const nodes = [];
+        if (isButton) collectButtons(document, nodes, new Set(), 0);
+        else collectControls(document, nodes, new Set(), 0);
+        let best = null, bestScore = 0;
+        for (const el of nodes) {
+            if (el.closest && el.closest(OURS)) continue;
+            const existing = el.getAttribute('data-ff-ref');
+            if (existing && existing !== ref) {
+                const other = refIndex.get(existing);
+                if (other && other.el === el) continue;     // belongs to a live ref
+            }
+            if (!visibility(el).visible) continue;
+            let label = null;
+            try {
+                label = isButton ? (buttonInfoFor(el) || {}).text : (typeof AccName !== 'undefined' ? AccName.compute(el).name : null);
+            } catch (_) {}
+            const s = signatureMatch(sig, el, label);
+            if (s > bestScore) { bestScore = s; best = el; }
+        }
+        if (!best || bestScore < 0.5) return null;
+        try { best.setAttribute('data-ff-ref', ref); } catch (_) {}
+        const fresh = entry ? { ...entry, el: best, relocated: true } : { el: best, relocated: true };
+        if (fresh.members) {
+            // Radio group: rebuild members from the new node's group.
+            const key = radioGroupKey(best);
+            const members = [];
+            if (key) {
+                const all = [];
+                collectControls(document, all, new Set(), 0);
+                for (const m of all) if (radioGroupKey(m) === key) members.push({ el: m, ref: m.getAttribute('data-ff-ref') || '', text: (typeof AccName !== 'undefined' ? AccName.optionLabel(m) : m.value) || clean(m.value), value: m.value });
+            }
+            if (members.length) fresh.members = members;
+        }
+        refIndex.set(ref, fresh);
+        return fresh;
+    }
+
     function resolveRef(ref) {
-        return refIndex.get(ref) || null;
+        const entry = refIndex.get(ref) || null;
+        if (entry && entry.el && entry.el.isConnected) return entry;
+        return relocate(ref) || entry;
+    }
+
+    // Has the page moved on since `prev` was taken: a navigation, or most of
+    // its fields gone and not re-rendered anywhere? Acting on refs from before
+    // that point would type into fields that no longer exist.
+    function pageMoved(prev) {
+        if (!prev) return { moved: false };
+        const strip = u => String(u || '').replace(/#.*$/, '');
+        if (strip(prev.url) !== strip(location.href)) return { moved: true, reason: 'navigated', from: prev.url, to: location.href };
+        const refs = (prev.fields || []).map(f => f.ref);
+        if (!refs.length) return { moved: false };
+        let gone = 0;
+        for (const ref of refs) {
+            const e = resolveRef(ref);
+            if (!e || !e.el || !e.el.isConnected || !visibility(e.el).visible) gone++;
+        }
+        if (gone >= Math.max(2, Math.ceil(refs.length * 0.6))) return { moved: true, reason: 'fields-gone', gone, total: refs.length };
+        return { moved: false, gone, total: refs.length };
     }
 
     function fieldByRef(ref) {
@@ -513,6 +693,7 @@
         if (f.min) o.min = f.min;
         if (f.max) o.max = f.max;
         if (f.typeahead) o.typeahead = true;
+        if (f.date) o.date = f.date === true ? 'yes' : f.date;
         if (f.value !== '' && f.value !== undefined && f.value !== null && f.value !== false) o.value = f.value;
         if (f.options) {
             const opts = f.options.map(op => op.text + (op.checked ? ' (selected)' : ''));
@@ -579,11 +760,12 @@
     async function chooseListboxOption(el, value) {
         const opts = Array.from(el.querySelectorAll('[role="option"]'));
         const entries = opts.map(o => ({ text: clean(o.textContent), value: o.getAttribute('data-value') || o.getAttribute('value') || clean(o.textContent), el: o }));
-        const m = findMatchingOption(entries, value);
+        const m = (typeof ChoiceWidget !== 'undefined') ? ChoiceWidget.matchOption(entries, value) : findMatchingOption(entries, value);
         if (!m) return false;
         AutocompleteFiller.mouseSequence(m.el);
-        await wait(60);
-        return m.el.getAttribute('aria-selected') === 'true' || true;
+        await wait(80);
+        if (m.el.getAttribute('aria-selected') !== 'true') { try { m.el.click(); } catch (_) {} await wait(60); }
+        return m.el.getAttribute('aria-selected') === 'true' || !el.querySelector('[role="option"][aria-selected="true"]');
     }
 
     async function chooseMulti(el, value) {
@@ -620,13 +802,23 @@
         const results = [];
         const touched = new Set();
         const isCancelled = opts.isCancelled || (() => !!window.stopFilling);
+        const startUrl = String(location.href).replace(/#.*$/, '');
         for (let i = 0; i < (actions || []).length; i++) {
             const a = actions[i] || {};
             if (isCancelled()) throw new Error('Form filling stopped by user.');
+            const res = { ref: a.ref, op: String(a.op || 'fill').toLowerCase(), value: a.value, ok: false };
+            // The page left (a step advanced, a link was followed) part-way
+            // through the batch: the remaining refs describe a form that is
+            // no longer there.
+            if (String(location.href).replace(/#.*$/, '') !== startUrl) {
+                res.error = 'page navigated before this action ran';
+                results.push(res);
+                continue;
+            }
             const target = resolveRef(a.ref);
             const field = target && (target.field || target.button);
             const op = normalizeOp(a.op, target && target.field);
-            const res = { ref: a.ref, op, value: a.value, ok: false };
+            res.op = op;
             if (!target) {
                 res.error = 'unknown ref';
                 results.push(res);
@@ -638,6 +830,7 @@
                 results.push(res);
                 continue;
             }
+            if (target.relocated) { res.note = 'the page re-rendered this control; ref moved to the new node'; delete target.relocated; }
             touched.add(el);
             if (opts.onBefore) { try { opts.onBefore(a, target); } catch (_) {} }
             const t0 = Date.now();
@@ -711,12 +904,14 @@
                     else { res.ok = await setCheckbox(el, b); res.strategy = 'checkbox'; commitEl = el; }
                 } else {
                     // fill / choose on text, select, combobox, date, etc.
-                    const info = { label: field.label, placeholder: field.placeholder };
+                    const info = { label: field.label, placeholder: field.placeholder, op, kind: field.kind, errorText: field.error, date: field.date };
                     const r = await fillField(el, a.value, info, opts.attempt || 1);
                     res.ok = !!r.ok;
                     res.strategy = r.strategy;
-                    if (r.handled) { res.autocomplete = { handled: true, selected: r.selected, reason: r.reason, optionsSeen: r.optionsSeen }; }
-                    else if (r.reason && r.reason !== 'no-dom-change') { res.autocomplete = { handled: false, reason: r.reason, optionsSeen: r.optionsSeen }; }
+                    if (r.handled) { res.autocomplete = { handled: true, selected: r.selected, reason: r.reason, optionsSeen: r.optionsSeen, shown: r.shown }; }
+                    else if (r.reason && r.reason !== 'no-dom-change') { res.autocomplete = { handled: false, reason: r.reason, optionsSeen: r.optionsSeen, shown: r.shown }; }
+                    if (r.tried) res.tried = r.tried;
+                    if (r.format) res.format = r.format;
                     if (r.error) res.error = r.error;
                 }
             } catch (e) {
@@ -941,7 +1136,7 @@
     }
 
     const FormKit = {
-        snapshot, execute, diff, progressGate, blockedProgress,
+        snapshot, execute, diff, progressGate, blockedProgress, pageMoved,
         describeField, describeButton, resolveRef, fieldByRef,
         capturePageHtml, valuesSnapshot, formDataOf, captureScreenshot, shrinkImage,
         get lastSnapshot() { return lastSnapshot; },

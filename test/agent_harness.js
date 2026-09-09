@@ -61,7 +61,7 @@
 
     const FILES = [
         'browserCompat.js', 'apiUtils.js', 'utils.js', 'accessibleName.js', 'eventSim.js', 'domUtils.js',
-        'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'heuristicFiller.js',
+        'typingEngine.js', 'autocompleteFiller.js', 'choiceWidget.js', 'dateField.js', 'llmClient.js', 'heuristicFiller.js',
         'overlayUtils.js', 'formKit.js', 'siteMemory.js', 'fillLogger.js', 'fillAgent.js'
     ];
 

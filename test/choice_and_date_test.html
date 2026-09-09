@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<title>FormFill bench: choice widgets, dates, labels, re-renders</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 760px; }
+  .row { margin-bottom: 18px; position: relative; }
+  label, .lbl { display: block; font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  input, select { width: 340px; padding: 6px 8px; font-size: 14px; border: 1px solid #999; }
+  .req { color: #c00; }
+  .live { position: absolute; left: -9999px; }
+  /* react-select-like */
+  .rs { position: relative; width: 356px; }
+  .rs__control { display: flex; border: 1px solid #999; padding: 4px 8px; align-items: center; min-height: 32px; }
+  .rs__value-container { flex: 1; display: flex; position: relative; }
+  .rs__placeholder { color: #888; }
+  .rs__single-value { color: #000; }
+  .rs__input { width: 2px; border: none; outline: none; padding: 0; margin-left: 2px; }
+  .rs__indicator { padding: 0 4px; cursor: pointer; }
+  .rs__menu { position: absolute; top: 100%; left: 0; width: 100%; background: #fff; border: 1px solid #bbb; z-index: 5; }
+  .rs__option { padding: 6px 8px; cursor: pointer; }
+  .rs__option--focused { background: #d6e9ff; }
+  /* floating (animated) label */
+  .anim { position: relative; width: 356px; }
+  .anim .anim__label { position: absolute; left: 10px; top: 8px; font-size: 13px; color: #666; pointer-events: none; transition: all .1s; }
+  .anim.filled .anim__label { top: -8px; font-size: 10px; background: #fff; padding: 0 3px; }
+  .anim input { width: 356px; box-sizing: border-box; }
+  .anim .hint { display: block; font-size: 11px; color: #777; margin-top: 2px; }
+  /* calendar */
+  .cal { position: absolute; top: 100%; left: 0; background: #fff; border: 1px solid #bbb; padding: 6px; z-index: 5; display: none; width: 240px; }
+  .cal.open { display: block; }
+  .cal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .cal table { border-collapse: collapse; width: 100%; }
+  .cal td { text-align: center; padding: 3px; cursor: pointer; font-size: 12px; }
+  .cal td.other { color: #bbb; }
+  .cal td:hover { background: #eef; }
+  button[disabled] { opacity: .45; }
+</style>
+</head>
+<body>
+<h2>Choice widgets, dates, labels, re-renders</h2>
+
+<form id="f" autocomplete="off" action="/submitted" method="post">
+
+<!-- 1. react-select-like country picker: the input clears on select, the pick
+        is rendered in a sibling div, the model lives in a hidden input. -->
+<div class="row">
+  <label id="countryLabel">Country <span class="req">*</span></label>
+  <div class="rs" id="country">
+    <div class="rs__control">
+      <div class="rs__value-container">
+        <div class="rs__placeholder" id="countryPh">Select...</div>
+        <input class="rs__input" id="countryInput" role="combobox" aria-autocomplete="list"
+               aria-expanded="false" aria-haspopup="listbox" aria-labelledby="countryLabel" aria-controls="countryMenu">
+      </div>
+      <div class="rs__indicator" id="countryArrow">▾</div>
+    </div>
+    <input type="hidden" name="country" id="countryHidden" value="">
+    <span class="live" aria-live="polite" id="countryLive"></span>
+  </div>
+</div>
+
+<!-- 2. Nationality: react-select-like with emoji flags and a near-duplicate option. -->
+<div class="row">
+  <label id="natLabel">Nationality <span class="req">*</span></label>
+  <div class="rs" id="nat">
+    <div class="rs__control">
+      <div class="rs__value-container">
+        <div class="rs__placeholder" id="natPh">Select...</div>
+        <input class="rs__input" id="natInput" role="combobox" aria-autocomplete="list"
+               aria-expanded="false" aria-haspopup="listbox" aria-labelledby="natLabel" aria-controls="natMenu">
+      </div>
+      <div class="rs__indicator" id="natArrow">▾</div>
+    </div>
+    <span class="live" aria-live="polite" id="natLive"></span>
+  </div>
+</div>
+
+<!-- 3. Masked date input: typing separators corrupts it, digits are placed. -->
+<div class="row">
+  <label for="birth">Data de nascimento <span class="req">*</span></label>
+  <input id="birth" name="birthdate" placeholder="dd-mm-aaaa" maxlength="10" required>
+</div>
+
+<!-- 4. Calendar-only date: typed text is rejected, only a day click sets it. -->
+<div class="row">
+  <label for="issued">Data de emissão</label>
+  <input id="issued" name="issued" placeholder="Data" autocomplete="off">
+  <button type="button" id="issuedBtn" aria-label="Selecionar Data">📅</button>
+  <div class="cal" id="issuedCal" role="dialog">
+    <div class="cal-head">
+      <button type="button" class="prev" aria-label="Previous month">‹</button>
+      <span class="cal-title"></span>
+      <button type="button" class="next" aria-label="Next month">›</button>
+    </div>
+    <table><tbody></tbody></table>
+  </div>
+  <div class="req" id="issuedErr"></div>
+</div>
+
+<!-- 5. OutSystems-style animated labels: the label sits inside the input box
+        and the previous field's hint sits right above the next field. -->
+<div class="row anim" id="pcRow">
+  <div class="anim__label" id="pcLabel">Código postal</div>
+  <input id="pc" name="postal">
+  <span class="hint">Utilize 0000 para destinos sem código postal.</span>
+</div>
+<div class="row anim" id="streetRow">
+  <div class="anim__label" id="streetLabel">Morada, Nº da porta e Apt./Suite/Andar</div>
+  <input id="street" name="street">
+</div>
+<div class="row anim" id="cityRow">
+  <div class="anim__label" id="cityLabel">Localidade</div>
+  <input id="city" name="city">
+</div>
+
+<!-- 6. A field whose node is replaced by a re-render after each input. -->
+<div class="row" id="emailRow">
+  <label for="email">E-mail <span class="req">*</span></label>
+  <input id="email" name="email" type="email" required>
+</div>
+
+<button type="button" id="continue" disabled>Continuar</button>
+</form>
+
+<pre id="state"></pre>
+
+<script>
+const state = { country: '', nat: '', birth: '', issued: '', email: '' };
+const log = [];
+window.benchLog = log;
+
+// ---- react-select-like widget -------------------------------------------
+function reactSelect(rootId, inputId, phId, liveId, options, onPick, hiddenId) {
+  const root = document.getElementById(rootId), input = document.getElementById(inputId);
+  const ph = document.getElementById(phId), live = document.getElementById(liveId);
+  const hidden = hiddenId ? document.getElementById(hiddenId) : null;
+  let menu = null, items = [], focused = -1, single = null;
+  function close() { if (menu) { menu.remove(); menu = null; } items = []; focused = -1; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }
+  function render(query) {
+    close();
+    const q = (query || '').toLowerCase();
+    const list = options.filter(o => !q || o.toLowerCase().includes(q));
+    if (!list.length) { live.textContent = 'No results'; return; }
+    menu = document.createElement('div');
+    menu.className = 'rs__menu'; menu.id = rootId + 'Menu'; menu.setAttribute('role', 'listbox');
+    items = list.map((t, i) => {
+      const d = document.createElement('div');
+      d.className = 'rs__option'; d.setAttribute('role', 'option'); d.id = rootId + 'Opt' + i; d.textContent = t;
+      d.addEventListener('mousedown', e => { e.preventDefault(); pick(t); });
+      menu.appendChild(d); return d;
+    });
+    root.appendChild(menu);
+    input.setAttribute('aria-expanded', 'true');
+    live.textContent = list.length + ' result' + (list.length === 1 ? '' : 's') + ' available for search term ' + (query || '') + '. Use Up and Down to choose options, press Enter to select the currently focused option.';
+    setFocused(0);
+  }
+  function setFocused(i) {
+    items.forEach(d => d.classList.remove('rs__option--focused'));
+    focused = i; if (items[i]) { items[i].classList.add('rs__option--focused'); input.setAttribute('aria-activedescendant', items[i].id); }
+  }
+  function pick(t) {
+    single = t; input.value = ''; ph.style.display = 'none';
+    root.querySelectorAll('.rs__single-value').forEach(n => n.remove());
+    const sv = document.createElement('div'); sv.className = 'rs__single-value'; sv.textContent = t;
+    ph.parentElement.insertBefore(sv, ph);
+    if (hidden) hidden.value = t;
+    live.textContent = 'option ' + t + ', selected.';
+    close(); onPick(t); log.push(rootId + ' picked ' + t);
+  }
+  input.addEventListener('input', () => { ph.style.display = input.value ? 'none' : (single ? 'none' : ''); render(input.value); });
+  input.addEventListener('mousedown', () => { if (!menu) render(''); });
+  document.getElementById(rootId).querySelector('.rs__indicator').addEventListener('mousedown', e => { e.preventDefault(); if (menu) close(); else render(''); input.focus(); });
+  input.addEventListener('keydown', ev => {
+    if (!menu) { if (ev.key === 'ArrowDown') { render(input.value); ev.preventDefault(); } return; }
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); setFocused((focused + 1) % items.length); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); setFocused((focused - 1 + items.length) % items.length); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); if (focused >= 0) pick(items[focused].textContent); }
+    else if (ev.key === 'Escape') close();
+  });
+  input.addEventListener('blur', () => { setTimeout(close, 50); if (!single) ph.style.display = ''; });
+  return { value: () => single };
+}
+window.countryWidget = reactSelect('country', 'countryInput', 'countryPh', 'countryLive',
+  ['Portugal', 'Spain', 'Netherlands', 'Caribbean Netherlands', 'Germany', 'France'], v => { state.country = v; update(); }, 'countryHidden');
+window.natWidget = reactSelect('nat', 'natInput', 'natPh', 'natLive',
+  ['🇧🇶 Caribbean Netherlands', '🇳🇱 Netherlands', '🇵🇹 Portugal', '🇪🇸 Spain'], v => { state.nat = v; update(); });
+
+// ---- masked date: only digits are accepted, dashes are placed by the mask --
+const birth = document.getElementById('birth');
+birth.addEventListener('beforeinput', ev => {
+  if (ev.inputType !== 'insertText') return;
+  if (!/^\d$/.test(ev.data || '')) { ev.preventDefault(); log.push('birth rejected ' + JSON.stringify(ev.data)); return; }
+  ev.preventDefault();
+  const d = (birth.value.replace(/\D/g, '') + ev.data).slice(0, 8);
+  birth.value = d.replace(/^(\d{2})(\d{0,2})(\d{0,4}).*$/, (_, a, b, c) => a + (b ? '-' + b : '') + (c ? '-' + c : ''));
+  birth.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ev.data }));
+});
+birth.addEventListener('input', () => { state.birth = birth.value; update(); });
+birth.addEventListener('blur', () => { if (birth.value && !/^\d{2}-\d{2}-\d{4}$/.test(birth.value)) { birth.value = '01-01-1900'; state.birth = birth.value; update(); } });
+
+// ---- calendar-only date ------------------------------------------------
+const issued = document.getElementById('issued'), cal = document.getElementById('issuedCal'), issuedErr = document.getElementById('issuedErr');
+let view = { y: 2026, m: 9 };
+const MONTHS = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+function drawCal() {
+  cal.querySelector('.cal-title').textContent = MONTHS[view.m - 1] + ' de ' + view.y;
+  const tb = cal.querySelector('tbody'); tb.replaceChildren();
+  const first = new Date(view.y, view.m - 1, 1); const start = (first.getDay() + 6) % 7;
+  const dim = new Date(view.y, view.m, 0).getDate(); const prevDim = new Date(view.y, view.m - 1, 0).getDate();
+  let day = 1 - start, tr;
+  for (let i = 0; i < 42; i++) {
+    if (i % 7 === 0) { tr = document.createElement('tr'); tb.appendChild(tr); }
+    const td = document.createElement('td'); td.setAttribute('role', 'gridcell');
+    if (day < 1) { td.textContent = prevDim + day; td.className = 'other'; }
+    else if (day > dim) { td.textContent = day - dim; td.className = 'other'; }
+    else { const d = day; td.textContent = d; td.addEventListener('mousedown', e => { e.preventDefault(); setIssued(view.y, view.m, d); }); }
+    tr.appendChild(td); day++;
+  }
+}
+function openCal() { drawCal(); cal.classList.add('open'); }
+function closeCal() { cal.classList.remove('open'); }
+function setIssued(y, m, d) { issued.value = String(d).padStart(2, '0') + '/' + String(m).padStart(2, '0') + '/' + y; state.issued = issued.value; issuedErr.textContent = ''; closeCal(); log.push('issued picked ' + issued.value); update(); }
+issued.addEventListener('focus', openCal);
+issued.addEventListener('mousedown', openCal);
+document.getElementById('issuedBtn').addEventListener('click', openCal);
+cal.querySelector('.prev').addEventListener('click', () => { view.m--; if (view.m < 1) { view.m = 12; view.y--; } drawCal(); });
+cal.querySelector('.next').addEventListener('click', () => { view.m++; if (view.m > 12) { view.m = 1; view.y++; } drawCal(); });
+issued.addEventListener('input', () => { issuedErr.textContent = 'Data inválida: selecione no calendário.'; state.issued = ''; update(); });
+issued.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeCal(); });
+issued.addEventListener('blur', () => setTimeout(closeCal, 80));
+
+// ---- animated labels -----------------------------------------------------
+for (const id of ['pc', 'street', 'city']) {
+  const el = document.getElementById(id), row = el.closest('.anim');
+  const upd = () => row.classList.toggle('filled', !!el.value || document.activeElement === el);
+  el.addEventListener('input', upd); el.addEventListener('focus', upd); el.addEventListener('blur', upd);
+}
+
+// ---- re-rendering email: the node is replaced after every input ---------
+function mountEmail(value) {
+  const row = document.getElementById('emailRow');
+  const old = row.querySelector('input');
+  const fresh = document.createElement('input');
+  fresh.id = 'email'; fresh.name = 'email'; fresh.type = 'email'; fresh.required = true; fresh.value = value;
+  fresh.addEventListener('input', () => { state.email = fresh.value; setTimeout(() => { mountEmail(fresh.value); const n = document.getElementById('email'); if (document.activeElement === old || document.activeElement === fresh) { n.focus(); try { n.setSelectionRange(n.value.length, n.value.length); } catch (_) {} } }, 0); update(); });
+  old.replaceWith(fresh);
+}
+mountEmail('');
+
+function update() {
+  const ok = state.country && state.nat && /^\d{2}-\d{2}-\d{4}$/.test(state.birth) && state.birth !== '01-01-1900' && state.issued && /@/.test(state.email);
+  document.getElementById('continue').disabled = !ok;
+  document.getElementById('state').textContent = JSON.stringify(state, null, 1);
+}
+update();
+window.benchState = state;
+</script>
+</body>
+</html>

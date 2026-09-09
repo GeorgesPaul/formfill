@@ -166,6 +166,8 @@ Key source files:
 | `domUtils.js` | Per-element fill mechanics: realistic focus, typing cascade, selects, custom comboboxes, checkboxes/radios, validation reading |
 | `typingEngine.js` | Keystroke-level text entry: per-character typing, clearing, retyping, commit on blur |
 | `autocompleteFiller.js` | Detects suggestion popups, scores options against the intended value, selects one |
+| `choiceWidget.js` | One path for every list widget (select, ARIA combobox, react-select, MUI, select2): open, enumerate, pick, and read the choice from wherever the widget shows it; also the rule that a suggestion list never contains the form's own fields or buttons |
+| `dateField.js` | Date fields: masks, native pickers, the page's own format hints, and calendar popups (month/year, day cell) |
 | `siteMemory.js` | Remembers which profile key filled which field, per site+form signature |
 <!-- ff:logs:start -->
 | `fillLogger.js` / `pageHook.js` | Local fill logs; page-world hook that captures submitted request bodies |

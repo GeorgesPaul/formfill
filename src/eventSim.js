@@ -143,6 +143,10 @@ const EventSim = (function () {
         };
     }
 
+    // What a real mouse reports: a 1x1 contact with pressure while pressed,
+    // detail 1 on the press/release/click events, 0 on hover and move. Some
+    // accessibility toolkits use exactly these fields to tell a mouse from a
+    // screen reader's "virtual click" and handle the two differently.
     function mouseInit(el, coords, extra) {
         const doc = el.ownerDocument || document;
         return {
@@ -153,10 +157,16 @@ const EventSim = (function () {
             pointerId: 1,
             pointerType: 'mouse',
             isPrimary: true,
+            width: 1,
+            height: 1,
+            pressure: 0.5,
+            screenX: coords ? coords.clientX : 0,
+            screenY: coords ? coords.clientY : 0,
             ...coords,
             ...extra,
         };
     }
+    const HOVER = new Set(['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']);
 
     // Value the control held when it was last focused, so that `change` can be
     // fired exactly when the HTML spec says it should: on losing focus after
@@ -190,14 +200,16 @@ const EventSim = (function () {
     function press(el, coords) {
         let md = { defaultPrevented: false };
         for (const t of SEQ_PRESS) {
-            const ev = fire(el, t, mouseInit(el, coords, t === 'mouseenter' || t === 'pointerenter' ? { bubbles: false } : null));
+            const extra = HOVER.has(t) ? { detail: 0, buttons: 0, pressure: 0 } : {};
+            if (t === 'mouseenter' || t === 'pointerenter') extra.bubbles = false;
+            const ev = fire(el, t, mouseInit(el, coords, extra));
             if (t === 'mousedown') md = ev;
         }
         return md;
     }
 
     function release(el, coords) {
-        for (const t of SEQ_RELEASE) fire(el, t, mouseInit(el, coords, { buttons: 0 }));
+        for (const t of SEQ_RELEASE) fire(el, t, mouseInit(el, coords, { buttons: 0, pressure: 0 }));
     }
 
     // A control loses focus. `change` first (only when its value was actually

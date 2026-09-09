@@ -19,8 +19,10 @@ const AutocompleteFiller = (function () {
 
     const wait = ms => new Promise(r => setTimeout(r, ms));
 
+    // No grids here: a grid of numbers is a calendar, and calendars belong to
+    // dateField.js. Seen once: a week row "selected" as if it were an address.
     const POPUP_SELECTOR = [
-        '[role="listbox"]', '[role="menu"]', '[role="grid"]', '[role="tree"]',
+        '[role="listbox"]', '[role="menu"]', '[role="tree"]',
         '.pac-container',                 // Google Places
         '[class*="autocomplete"]', '[class*="typeahead"]', '[class*="suggestion"]',
         '[class*="Suggestion"]', '[class*="dropdown-menu"]', '[class*="menu-list"]',
@@ -28,7 +30,7 @@ const AutocompleteFiller = (function () {
     ].join(',');
 
     const OPTION_SELECTOR = [
-        '[role="option"]', '[role="menuitem"]', '[role="treeitem"]', '[role="row"]',
+        '[role="option"]', '[role="menuitem"]', '[role="treeitem"]',
         'li', '.pac-item', '[class*="option"]', '[class*="Option"]',
         '[class*="suggestion"]', '[class*="item"]'
     ].join(',');
@@ -89,6 +91,9 @@ const AutocompleteFiller = (function () {
     }
 
     function optionsIn(popup) {
+        // The shared enumerator knows which "options" are really buttons,
+        // headers or placeholders, and strips pictographs from the text.
+        if (typeof ChoiceWidget !== 'undefined') return ChoiceWidget.optionsIn(popup);
         let candidates = Array.from(popup.querySelectorAll(OPTION_SELECTOR)).filter(visible);
         if (candidates.length === 0) {
             // Popups built from plain divs: take visible leaf-ish children with text.
@@ -117,6 +122,11 @@ const AutocompleteFiller = (function () {
             if (!el || el.nodeType !== 1) return;
             if (el === element || el.contains(element)) return;   // not a popup for this field
             if (!visible(el)) return;
+            // A list holds options and nothing else: not the form's fields,
+            // not its Continue button, not a calendar. A container that
+            // re-rendered around "Continue" while we typed once passed as a
+            // one-option popup, and "selecting" it pressed the button.
+            if (typeof ChoiceWidget !== 'undefined' && !ChoiceWidget.isSafePopup(el, element)) return;
             found.add(el);
         };
 
@@ -143,7 +153,7 @@ const AutocompleteFiller = (function () {
                 else if (node.querySelector) {
                     const inner = node.querySelector(POPUP_SELECTOR);
                     if (inner) consider(inner);
-                    else if (visible(node) && optionsIn(node).length >= 1 && near(node, element)) consider(node);
+                    else if (visible(node) && near(node, element) && optionsIn(node).length >= 1) consider(node);
                 }
             }
         }
@@ -265,21 +275,27 @@ const AutocompleteFiller = (function () {
         return false;
     }
 
+    // A real mouse click, event for event. The details matter: a mouse press
+    // carries detail 1, pressure 0.5 and a 1x1 contact; a pointerdown without
+    // them is what accessibility libraries classify as a "virtual" (screen
+    // reader) click and route differently, or ignore.
     function mouseSequence(el) {
         const r = el.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
-        const base = { view: window, bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 };
+        const view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+        const base = { view, bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, detail: 1 };
+        const ptr = { pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1 };
         const fire = (Ctor, type, init) => { try { el.dispatchEvent(new Ctor(type, init)); } catch (_) {} };
         try { el.scrollIntoView({ block: 'nearest' }); } catch (_) {}
-        fire(PointerEvent, 'pointerover', { ...base, pointerType: 'mouse' });
-        fire(MouseEvent, 'mouseover', base);
-        fire(PointerEvent, 'pointermove', { ...base, pointerType: 'mouse' });
-        fire(MouseEvent, 'mousemove', base);
-        fire(PointerEvent, 'pointerdown', { ...base, pointerType: 'mouse', buttons: 1, isPrimary: true });
+        fire(PointerEvent, 'pointerover', { ...base, ...ptr, detail: 0 });
+        fire(MouseEvent, 'mouseover', { ...base, detail: 0 });
+        fire(PointerEvent, 'pointermove', { ...base, ...ptr, detail: 0 });
+        fire(MouseEvent, 'mousemove', { ...base, detail: 0 });
+        fire(PointerEvent, 'pointerdown', { ...base, ...ptr, buttons: 1, pressure: 0.5 });
         fire(MouseEvent, 'mousedown', { ...base, buttons: 1 });
-        fire(PointerEvent, 'pointerup', { ...base, pointerType: 'mouse', isPrimary: true });
-        fire(MouseEvent, 'mouseup', base);
-        fire(MouseEvent, 'click', base);
+        fire(PointerEvent, 'pointerup', { ...base, ...ptr, buttons: 0, pressure: 0 });
+        fire(MouseEvent, 'mouseup', { ...base, buttons: 0 });
+        fire(MouseEvent, 'click', { ...base, buttons: 0 });
     }
 
     // ---------------------------------------------------------------- resolve
@@ -341,7 +357,10 @@ const AutocompleteFiller = (function () {
             const idx = await askLLM(info.label || info.placeholder || '', value, options);
             if (idx >= 0) chosen = { ...options[idx], index: idx, s: 1 };
         }
-        if (!chosen && options.length === 1) chosen = best;
+        // A lone entry is taken on faith only from a real list (role/class
+        // says so); an unlabeled container that happened to re-render near
+        // the field must at least resemble the value.
+        if (!chosen && options.length === 1 && (popup.matches(POPUP_SELECTOR) || best.s >= 0.3)) chosen = best;
 
         if (!chosen) {
             // Leave the typed text and close the popup so it does not swallow
@@ -365,7 +384,14 @@ const AutocompleteFiller = (function () {
         await wait(150);
 
         const after = TypingEngine.readValue(element);
-        const accepted = !visible(popup) || after !== before;
+        // Accepted when the list went away, the input changed, or the widget
+        // shows the pick somewhere else (react-select clears the input and
+        // renders the choice beside it).
+        let accepted = !visible(popup) || after !== before;
+        if (!accepted && typeof ChoiceWidget !== 'undefined') {
+            const sel = ChoiceWidget.readSelection(element);
+            accepted = !!(sel && (ChoiceWidget.matches(sel.text, chosen.text) || ChoiceWidget.matches(sel.text, value)));
+        }
         if (accepted) {
             // Record what the widget settled on so the verify/refill loop does
             // not keep "correcting" a field that is already accepted.
@@ -378,7 +404,7 @@ const AutocompleteFiller = (function () {
         return { handled: accepted, selected: chosen.text, reason: accepted ? 'selected' : 'not-accepted', optionsSeen };
     }
 
-    return { startWatch, resolve, looksLikeTypeahead, score, optionsIn, candidatePopups, mouseSequence };
+    return { startWatch, resolve, looksLikeTypeahead, score, optionsIn, candidatePopups, mouseSequence, askLLM };
 })();
 
 if (typeof window !== 'undefined') window.AutocompleteFiller = AutocompleteFiller;

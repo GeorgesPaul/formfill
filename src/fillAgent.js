@@ -76,6 +76,9 @@ How to act:
 - Call the form_actions tool with a batch of actions for every field you can fill from the profile. Refs must come from the snapshot.
 - fill: text-like fields. choose: select, combobox, radio-group, listbox (value = the option text exactly as listed; for a searchable combobox without a listed option, give the text to search for). set: checkbox/switch (true/false). click: buttons. clear: empty a field.
 - Match the value format the field expects: placeholder patterns ("dd-mm-yyyy"), maxlength, min/max, the options list, split fields (day/month/year, country code + number, first/last name), local conventions of the page language.
+- Fields marked "date" are handled by the extension's date mechanics (masks, native pickers, calendars): give the date in the format shown when one is shown, otherwise as dd-mm-yyyy, and do not retry other formats yourself when it is rejected.
+- Comboboxes keep their choice inside the widget, not necessarily in the text box: "value" and "now" report what the widget shows as chosen. A choose that reports selected=... and accepted=true is done, even when the box looks empty.
+- If a turn reports PAGE CHANGED, the earlier refs are gone; work only from the new snapshot in that message.
 - Never invent data. When the profile lacks something the form needs, list it under skipped with needs_user_input=true so the user can fill it in themselves. Names, addresses, dates and numbers must come from the profile; you may reformat and combine them.
 - Fields that already hold a correct value (see "value") are left alone. Fix a pre-filled value only when it is clearly wrong for this profile.
 - "suggested" values were proposed by the extension's deterministic matching or by memory of a previous fill of this same form. Use them unless the label or context says otherwise.
@@ -136,6 +139,9 @@ How to act:
         if (r.selected) o.selected = r.selected;
         if (r.autocomplete) o.autocomplete = r.autocomplete;
         if (r.validation) o.validation = r.validation;
+        if (r.tried) o.tried = r.tried;
+        if (r.format) o.format = r.format;
+        if (r.note) o.note = r.note;
         if (r.error) o.error = r.error;
         return o;
     }
@@ -277,7 +283,44 @@ How to act:
             if (r && r.el) OverlayUtils.setStatus(r.el, status);
         };
 
+        // The page moved on since the snapshot the model is answering to (a
+        // step advanced, the person clicked Continue, the form re-mounted):
+        // the batch would type into fields that no longer exist. Take a fresh
+        // snapshot and tell the model instead of firing stale actions.
+        const pageChanged = (turnLabel) => {
+            const moved = FormKit.pageMoved(prevSnap);
+            if (!moved.moved) return null;
+            log('pageChanged', { turn: turnLabel, ...moved });
+            return moved;
+        };
+
         const executeBatch = async (actions, turnLabel) => {
+            const moved = pageChanged(turnLabel);
+            if (moved) {
+                const after = FormKit.snapshot();
+                attachSuggestions(after.fields);
+                const results = actions.map(a => ({ ref: a.ref, op: a.op, value: a.value, ok: false, error: 'not executed: the page changed before this batch' }));
+                log('results', { turn: turnLabel, results });
+                const d = FormKit.diff(prevSnap, after);
+                const observed = {
+                    pageChanged: moved,
+                    newFields: after.fields.filter(fillableKinds).map(FormKit.describeField),
+                    removedFields: d.removed,
+                    changedFields: [],
+                    newButtons: after.buttons.map(FormKit.describeButton),
+                    changedButtons: [],
+                    invalidFields: [],
+                    blockedProgress: FormKit.blockedProgress(after, { exclude: usedButtons }),
+                };
+                log('observed', { turn: turnLabel, ...observed, url: location.href });
+                prevSnap = after;
+                snap = after;
+                targets = snap.fields.filter(fillableKinds);
+                lastResults = results;
+                lastObserved = observed;
+                gateHandled = false;
+                return { results, observed, after, moved };
+            }
             log('actions', { turn: turnLabel, actions });
             const results = await FormKit.execute(actions, {
                 isCancelled,
@@ -301,7 +344,9 @@ How to act:
             attachSuggestions(after.fields);
             const d = FormKit.diff(prevSnap, after);
             const invalid = after.fields.filter(f => fillableKinds(f) && f.invalid).map(f => ({ ref: f.ref, label: f.label, value: f.value, error: f.error }));
+            const navigated = String(after.url).replace(/#.*$/, '') !== String(prevSnap.url).replace(/#.*$/, '');
             const observed = {
+                ...(navigated ? { pageChanged: { moved: true, reason: 'navigated', from: prevSnap.url, to: after.url } } : {}),
                 newFields: d.added.filter(fillableKinds).map(FormKit.describeField),
                 removedFields: d.removed,
                 changedFields: d.changed,
@@ -342,6 +387,7 @@ How to act:
         // pressable. Every required field filled, nothing flagged invalid, and
         // the button still greyed out means something never reached the page.
         function gateStuck() {
+            if (FormKit.pageMoved(snap).moved) return null;    // nothing to recover on a page that left
             const gate = FormKit.progressGate(snap, { exclude: usedButtons });
             if (!gate || !gate.disabled) return null;
             // The page has a better reason to refuse; leave it to the model.
@@ -515,12 +561,14 @@ How to act:
                     if (b && b.kind === 'submit' && b.text !== undefined) { refused.push({ ref: a.ref, error: 'refused: submit-type button' }); continue; }
                     safeActions.push(a);
                 }
-                const { results, observed } = await executeBatch(safeActions, turn);
+                const { results, observed, moved } = await executeBatch(safeActions, turn);
                 const stillInvalid = observed.invalidFields.filter(f => safeActions.some(a => a.ref === f.ref) || plan.actions.some(a => a.ref === f.ref));
                 const anyRejected = results.some(r => !r.ok || r.accepted === false || (r.validation && r.validation.invalid));
                 let finished = plan.done && !anyRejected && observed.newFields.length === 0 && stillInvalid.length === 0;
                 // The model thinks it is done; ask the page whether it agrees.
                 if (finished) finished = await checkGate(turn);
+                // A page that moved on with nothing left to fill is done too.
+                if (moved && targets.length === 0) finished = true;
 
                 // Feed results back.
                 const feedback = {
@@ -534,14 +582,22 @@ How to act:
                         progressGate: FormKit.progressGate(snap, { exclude: usedButtons }),
                     },
                 };
-                let feedbackText = `RESULTS:\n${JSON.stringify(feedback.results)}\nOBSERVED after the actions:\n${JSON.stringify(feedback.observed)}\nSTATE: ${JSON.stringify(feedback.state)}`;
+                let feedbackText;
+                if (moved) {
+                    feedbackText = `PAGE CHANGED before your actions ran (${moved.reason}${moved.to ? ': now ' + moved.to : ''}); none of them were executed and their refs are gone.\n\n${describeSnapshot(snap)}\n\nSTATE: ${JSON.stringify(feedback.state)}`;
+                    lastActionsKey = null;
+                } else {
+                    feedbackText = `RESULTS:\n${JSON.stringify(feedback.results)}\nOBSERVED after the actions:\n${JSON.stringify(feedback.observed)}\nSTATE: ${JSON.stringify(feedback.state)}`;
+                }
                 if (gateNote) { feedbackText += gateNote; gateNote = ''; }
                 if (finished || turn === maxTurns) {
                     // No further model call; record for the log only.
                     log('feedback', { turn, feedback, final: true });
                     break;
                 }
-                feedbackText += `\n\nFix rejected/invalid fields (use a different format or a listed option; do not repeat a rejected value), fill any new fields, or set done=true with no actions if the form is complete as far as the profile allows.`;
+                feedbackText += moved
+                    ? `\n\nFill this page now by calling ${TOOL.name} with refs from the snapshot above, or set done=true with no actions if nothing on it belongs to the profile.`
+                    : `\n\nFix rejected/invalid fields (use a different format or a listed option; do not repeat a rejected value), fill any new fields, or set done=true with no actions if the form is complete as far as the profile allows.`;
                 messages.push(resp.assistantMessage);
                 if (call && call.id && !jsonMode) {
                     messages.push({ role: 'tool', tool_call_id: call.id, content: feedbackText });

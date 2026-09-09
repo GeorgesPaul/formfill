@@ -98,6 +98,12 @@
         return out;
     }
 
+    // A button in a field's row (calendar icon, clear, show password) belongs
+    // to that field; it does not make the row "another field's".
+    function isButtonish(c) {
+        return c.tagName === 'BUTTON' || (c.getAttribute('role') || '') === 'button';
+    }
+
     // Smallest ancestor that contains this control and no other control: the
     // field's own row/group as a human sees it.
     function ownContainer(el, maxUp = 6) {
@@ -109,7 +115,7 @@
             try { controls = node.querySelectorAll(CONTROLS); } catch (_) { return prev; }
             // Controls nested inside the field itself (a combobox wrapper) don't count.
             let others = 0;
-            for (const c of controls) if (c !== el && !el.contains(c) && !c.contains(el)) others++;
+            for (const c of controls) if (c !== el && !el.contains(c) && !c.contains(el) && !isButtonish(c)) others++;
             // This ancestor spans other fields: the previous one was the field's own.
             if (others > 0) return prev;
         }
@@ -126,7 +132,7 @@
             let others = 0;
             try {
                 for (const c of parent.querySelectorAll(CONTROLS)) {
-                    if (c !== el && !el.contains(c) && !c.contains(el)) { others++; break; }
+                    if (c !== el && !el.contains(c) && !c.contains(el) && !isButtonish(c)) { others++; break; }
                 }
             } catch (_) {}
             if (others > 0) return node;
@@ -175,8 +181,36 @@
     function overlapsV(a, b) { return a.top < b.bottom && b.top < a.bottom; }
     function overlapsH(a, b) { return a.left < b.right && b.left < a.right; }
 
+    const HINT_HINT = /(^|[\s_-])(hint|help|helper|description|desc|note|info|tooltip|subtext|caption|counter)([\s_-]|$)/i;
+    const hasLetters = t => /\p{L}/u.test(t || '');
+
+    // The label a person reads for a control whose label sits INSIDE its box:
+    // floating labels, OutSystems "animated labels", Material text fields. The
+    // geometric search below wants the text left of or above the input, but a
+    // floating label overlaps the input, so that search skips it and lands on
+    // the neighbour's hint text instead (a street went into the city field on
+    // a postal form for exactly that reason). Inside the field's own row, the
+    // closest preceding short text is the label.
+    function precedingContainerText(el, exclude) {
+        const own = ownContainer(el, 4);
+        if (!own) return null;
+        const doc = el.ownerDocument || document;
+        let best = null;
+        for (const leaf of leafTexts(doc)) {
+            const n = leaf.el;
+            if (n === el || n.contains(el) || el.contains(n) || !own.contains(n)) continue;
+            if (exclude && exclude.has(n)) continue;
+            if (!(n.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;   // must precede the control
+            if (ERROR_HINT.test(n.className || '') || HINT_HINT.test((n.className || '') + ' ' + (n.id || ''))) continue;
+            if (n.tagName === 'SMALL' || n.getAttribute('aria-live') || n.getAttribute('role') === 'alert') continue;
+            if (!hasLetters(leaf.text) || leaf.text.length > 80) continue;
+            best = leaf;   // document order: the last one before the control is the closest
+        }
+        return best;
+    }
+
     // Nearest short text to the left of, or above, the control.
-    function geometricLabel(el) {
+    function geometricLabel(el, exclude) {
         let r;
         try { r = el.getBoundingClientRect(); } catch (_) { return null; }
         if (r.width < 1 && r.height < 1) return null;
@@ -185,6 +219,8 @@
         let best = null, bestScore = Infinity;
         for (const leaf of leaves) {
             if (leaf.el === el || leaf.el.contains(el) || el.contains(leaf.el)) continue;
+            if (exclude && exclude.has(leaf.el)) continue;
+            if (!hasLetters(leaf.text)) continue;   // "*" is a marker, not a name
             const lr = leaf.rect;
             if (ERROR_HINT.test(leaf.el.className || '')) continue;
             let score = Infinity;
@@ -198,7 +234,7 @@
             }
             if (score < bestScore) { bestScore = score; best = leaf; }
         }
-        return best ? best.text : null;
+        return best;
     }
 
     // Table layouts: header cell of this column, or the previous cell in the row.
@@ -239,10 +275,14 @@
             .trim();
     }
 
-    // Main entry: { name, source }. `name` may be null when nothing visible
+    // Main entry: { name, source, el }. `name` may be null when nothing visible
     // identifies the field; callers should then fall back to name/id hints.
-    function compute(el) {
+    // `el` is the text element the name was read from, when it was read from
+    // the layout rather than from explicit markup, so a caller can notice two
+    // controls claiming the same text and pass it back in opts.exclude.
+    function compute(el, opts = {}) {
         if (!el) return { name: null, source: 'none' };
+        const exclude = opts.exclude;
 
         const lb = byIds(el, 'aria-labelledby').map(n => textWithoutControls(n, 160)).filter(Boolean);
         if (lb.length) return { name: lb.join(' '), source: 'aria-labelledby' };
@@ -260,18 +300,21 @@
         const own = ownContainer(el, 4);
         if (own) {
             let lbl = null;
-            try { lbl = own.querySelector('label, legend, [class*="label" i]'); } catch (_) {}
-            if (lbl && !lbl.contains(el) && !ERROR_HINT.test(lbl.className || '')) {
+            try { lbl = own.querySelector('label, legend, [class*="label" i], [id*="label" i]'); } catch (_) {}
+            if (lbl && !lbl.contains(el) && !ERROR_HINT.test(lbl.className || '') && !(exclude && exclude.has(lbl))) {
                 const t = textWithoutControls(lbl, 160);
-                if (t) return { name: t, source: 'container-label' };
+                if (t && hasLetters(t)) return { name: t, source: 'container-label', el: lbl };
             }
         }
 
         const tl = tableLabel(el);
         if (tl) return { name: tl, source: 'table' };
 
-        const geo = geometricLabel(el);
-        if (geo) return { name: geo, source: 'layout' };
+        const pre = precedingContainerText(el, exclude);
+        if (pre) return { name: pre.text, source: 'container-text', el: pre.el };
+
+        const geo = geometricLabel(el, exclude);
+        if (geo) return { name: geo.text, source: 'layout', el: geo.el };
 
         const ph = clean(el.getAttribute('placeholder') || el.getAttribute('aria-placeholder'));
         if (ph) return { name: ph, source: 'placeholder' };
@@ -350,6 +393,20 @@
         } catch (_) { return false; }
     }
 
+    // Text that is not a complaint about the value: screen-reader narration
+    // from live regions ("1 result available for search term Portugal. Use Up
+    // and Down to choose options"), and bare markers ("*"). Both were reported
+    // as validation errors and sent the model chasing fields that were fine.
+    const NARRATION = /\b(results? available|use up and down|arrow keys|press enter|suggestions? (are|is) available|is expanded|is collapsed|screen reader)\b/i;
+    function isNoise(text, node) {
+        if (!text || !hasLetters(text)) return true;           // "*", "!", "---"
+        if (text.replace(/[^\p{L}]/gu, '').length < 2) return true;
+        if (NARRATION.test(text)) return true;
+        if (node && (node.getAttribute('aria-live') || /^(status|log)$/.test(node.getAttribute('role') || '')) && !ERROR_HINT.test(node.className || '')) return true;
+        if (node && /(^|[\s_-])(a11y|sr-only|visually-hidden|screen-reader)([\s_-]|$)/i.test(node.className || '')) return true;
+        return false;
+    }
+
     // Visible validation text belonging to this field, or null.
     function errorText(el) {
         const seen = new Set();
@@ -358,7 +415,7 @@
             if (!n || seen.has(n) || !visible(n) || n.contains(el)) return;
             seen.add(n);
             const t = textWithoutControls(n, 240);
-            if (t) parts.push(t);
+            if (t && !isNoise(t, n)) parts.push(t);
         };
 
         for (const n of byIds(el, 'aria-errormessage')) add(n);
@@ -374,10 +431,11 @@
             if (scope) {
                 let cands = [];
                 try {
-                    cands = scope.querySelectorAll('[role="alert"], [aria-live], [class*="error" i], [class*="invalid" i], [class*="danger" i], [class*="warning" i], [class*="feedback" i], [class*="validation" i], [id*="error" i], [id*="err-" i]');
+                    cands = scope.querySelectorAll('[role="alert"], [class*="error" i], [class*="invalid" i], [class*="danger" i], [class*="warning" i], [class*="feedback" i], [class*="validation" i], [id*="error" i], [id*="err-" i]');
                 } catch (_) {}
                 for (const c of cands) {
                     if (parts.length >= 2) break;
+                    if (/valid-feedback/i.test(c.className || '') && !/invalid-feedback/i.test(c.className || '')) continue;
                     add(c);
                 }
                 if (!parts.length) {
@@ -386,6 +444,8 @@
                     for (const leaf of leafTexts(doc)) {
                         if (!scope.contains(leaf.el) || leaf.el.contains(el)) continue;
                         if (leaf.text.length > 160 || !isReddish(leaf.el)) continue;
+                        // A red star next to the label is "required", not an error.
+                        if (isNoise(leaf.text, leaf.el)) continue;
                         add(leaf.el);
                         if (parts.length >= 2) break;
                     }
@@ -433,7 +493,7 @@
         return out;
     }
 
-    const AccName = { compute, optionLabel, describe, errorText, section, collectHeadings, humanize, textWithoutControls, visible, clean, rootOf, ownContainer, rowContainer, clearCache, CONTROLS };
+    const AccName = { compute, optionLabel, describe, errorText, isNoise, section, collectHeadings, humanize, textWithoutControls, visible, clean, rootOf, ownContainer, rowContainer, clearCache, CONTROLS };
 
     if (typeof window !== 'undefined') window.AccName = AccName;
     else if (typeof global !== 'undefined') global.AccName = AccName;
