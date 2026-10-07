@@ -64,6 +64,13 @@ Shipping to Chrome on its own? Run `bump_version.ps1` first.
    - `-Target trustedTesters` ships to the tester group instead of everyone.
    - `-DeployPercentage 20` starts a staged rollout.
 
+The submit step fails with "Publish condition not met ... mandatory privacy information"
+whenever the listing's **Privacy practices** tab is out of date, which happens as soon as the
+manifest asks for a permission the store has not seen a justification for (1.28 added
+`contextMenus`). The upload itself succeeds and the draft holds the new version; open the
+item in the dashboard, fill in the Privacy practices tab, then submit there or re-run
+`upload_to_cws.ps1`.
+
 Credentials come from `CWS_CLIENT_ID` / `CWS_CLIENT_SECRET` / `CWS_REFRESH_TOKEN` /
 `CWS_ITEM_ID`, or from `$HOME\.cws\credentials.ps1`, never from the repo.
 
