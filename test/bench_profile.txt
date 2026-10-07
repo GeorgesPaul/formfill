@@ -1,0 +1,30 @@
+Personal Details
+
+Full name: Maria Fonseca Duarte
+Given names: Maria
+Family name: Fonseca Duarte
+Date of birth: 18 April 1985
+Gender: Female
+Nationality: Portuguese
+
+Contact
+
+Email: maria.duarte@example.com
+Phone: +351 912 345 678
+
+Address
+Rua das Flores 120
+Postal code: 2800-010
+City: Almada
+State: Setúbal
+Country: Portugal
+
+Identification
+Portuguese Tax Number (NIF): 123456789
+Passport number: XN12AB345
+
+Credit card:
+Cardholder: Maria F Duarte
+Number: 4111 1111 1111 1111
+Expires: 07/2029
+CVV: 123

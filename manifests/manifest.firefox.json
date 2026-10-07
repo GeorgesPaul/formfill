@@ -80,23 +80,18 @@
       ],
       "js": [
         "browserCompat.js",
-        "apiUtils.js",
-        "utils.js",
-        "accessibleName.js",
-        "eventSim.js",
-        "domUtils.js",
-        "typingEngine.js",
-        "autocompleteFiller.js",
-        "choiceWidget.js",
-        "dateField.js",
-        "llmClient.js",
-        "heuristicFiller.js",
-        "overlayUtils.js",
-        "formKit.js",
-        "siteMemory.js",
-        "fillLogger.js",
-        "fillAgent.js",
-        "content.js"
+      "apiUtils.js",
+      "eventSim.js",
+      "trustedInput.js",
+      "typingEngine.js",
+      "pageView.js",
+      "hands.js",
+      "overlayUtils.js",
+      "fillLogger.js",
+      "fillAgent.js",
+      "credentialFill.js",
+      "selftest.js",
+      "content.js"
       ],
       "run_at": "document_idle",
       "all_frames": true
@@ -111,5 +106,21 @@
     },
     "default_title": "GeorgesPaul Form Filler",
     "default_popup": "popup.html"
+  },
+  "experiment_apis": {
+    "ffInput": {
+      "schema": "experiments/input/schema.json",
+      "parent": {
+        "scopes": [
+          "addon_parent"
+        ],
+        "paths": [
+          [
+            "ffInput"
+          ]
+        ],
+        "script": "experiments/input/api.js"
+      }
+    }
   }
 }

@@ -4,6 +4,7 @@ let isFilling = false; // Track filling state
 let timerInterval = null;
 let startTime = null;
 let currentSessionId = null; // Track the current session ID for strict isolation
+const stoppedSessions = new Set(); // sessions the user stopped: their stragglers are ignored
 
 // Add message listener to handle messages from background script
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -24,14 +25,18 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.warn(`[Popup] Ignoring message without sessionId: ${message.action}`);
         return;
       }
+      {
+        // Work still in progress that the panel is not showing: a fill started
+        // from the context menu or before this panel was opened, or a frame
+        // that outlived the others after "complete". Show it again, with Cancel.
+        const working = message.action === "fillFormStart" || message.action === "fillFormProgress";
+        if (working && !isFilling && !stoppedSessions.has(message.sessionId)) {
+          currentSessionId = message.sessionId;
+          enterFillingState(message.startedAt);
+        }
+      }
       if (message.sessionId !== currentSessionId) {
         console.warn(`[Popup] Ignoring message from stale session: ${message.sessionId} (current: ${currentSessionId})`);
-        return;
-      }
-
-      // STRICT STATE CHECK: If we stopped, ignore progress updates
-      if (!isFilling && message.action === "fillFormProgress") {
-        console.warn(`[Popup] Ignoring progress message while stopped.`);
         return;
       }
 
@@ -237,6 +242,7 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
   }
 
   document.getElementById('stopFilling').addEventListener('click', stopFilling);
+  restoreFillState();
 
   // Initialize KeePass button state (with delay to ensure background script is ready)
   setTimeout(() => {
@@ -264,11 +270,9 @@ function initializeUI({ profiles, lastLoadedProfileId }) {
     window.open(stripePaymentLink, '_blank');
   });
 
-  // Fill logs + site memory controls
   // ff:logs:start
   initLogsSection();
   // ff:logs:end
-  initMemorySection();
 
   // Load previously selected profiles and load the first one into the form
   browser.storage.local.get(['selectedProfileIds', 'lastLoadedProfile']).then(data => {
@@ -599,18 +603,8 @@ async function fillForm() {
         console.warn('[Popup] sendMessage failed, attempting programmatic script injection:', sendError.message);
         updateStatusMessage("Content script not found, injecting scripts...");
 
-        // Keep in step with the content_scripts list in both manifests.
-        const scripts = [
-          'browserCompat.js', 'apiUtils.js', 'utils.js', 'accessibleName.js', 'eventSim.js', 'domUtils.js',
-          'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'heuristicFiller.js',
-          'overlayUtils.js', 'formKit.js', 'siteMemory.js',
-          // ff:logs:start
-          'fillLogger.js',
-          // ff:logs:end
-          'fillAgent.js', 'content.js'
-        ];
         try {
-          await Compat.executeScriptFiles(tabs[0].id, scripts);
+          await Compat.injectContentScripts(tabs[0].id);
           // Retry the message now that scripts are injected
           await browser.tabs.sendMessage(tabs[0].id, messagePayload);
         } catch (injectError) {
@@ -644,6 +638,10 @@ function stopFilling() {
   isFilling = false;
 
   // 2. INVALIDATE SESSION (Ignore future messages)
+  if (currentSessionId) {
+    stoppedSessions.add(currentSessionId);
+    Compat.notify({ action: "fillStop", sessionId: currentSessionId });
+  }
   currentSessionId = null;
 
   // 3. IMMEDIATE UI UPDATE
@@ -676,9 +674,37 @@ function stopFilling() {
   });
 }
 
-function startTimer() {
+// Show a fill as running: Cancel enabled, bar active, timer counting from
+// when the fill started (it may have started before this panel opened).
+function enterFillingState(startedAt) {
+  isFilling = true;
+  updateButtonStates();
+  const progressContainer = document.getElementById('progressContainer');
+  const progressLabel = document.getElementById('progressLabel');
+  const elapsedTimeSpan = document.getElementById('elapsedTime');
+  if (progressContainer) progressContainer.style.opacity = '1';
+  if (progressLabel) progressLabel.style.color = 'black';
+  if (elapsedTimeSpan) elapsedTimeSpan.style.display = 'inline';
+  startTimer(startedAt);
+}
+
+// A fill may be running in the active tab although this panel did not start
+// it (a reopened popup, the context menu). Ask the background.
+async function restoreFillState() {
+  try {
+    const st = await browser.runtime.sendMessage({ action: 'fillStatus' });
+    if (!st || !st.filling || !st.sessionId || isFilling) return;
+    currentSessionId = st.sessionId;
+    enterFillingState(st.startedAt);
+    if (st.message) updateStatusMessage(st.message);
+  } catch (e) {
+    console.warn('[Popup] fillStatus failed:', e);
+  }
+}
+
+function startTimer(startedAt) {
   stopTimer(); // Clear any existing
-  startTime = Date.now();
+  startTime = (typeof startedAt === 'number' && startedAt > 0) ? startedAt : Date.now();
   const elapsedTimeSpan = document.getElementById('elapsedTime');
 
   timerInterval = setInterval(() => {
@@ -828,9 +854,7 @@ function renderNeedsInput(details) {
   const groups = [
     ['Needs your input', details.needsUserInput],
     ['Still flagged by the page', details.stillInvalid],
-    ['The page still blocks', details.blockedProgress],
     ['Required and still empty', details.emptyRequired],
-    ['Skipped', details.skipped],
   ];
   let any = false;
   for (const [title, items] of groups) {
@@ -854,7 +878,7 @@ function renderNeedsInput(details) {
 }
 
 // ---------------------------------------------------------------------------
-// Fill logs (stored locally by the background script) and site memory.
+// Fill logs (stored locally by the background script).
 // ---------------------------------------------------------------------------
 // ff:logs:start
 function initLogsSection() {
@@ -878,34 +902,6 @@ function initLogsSection() {
   refreshLogSummary();
 }
 // ff:logs:end
-
-function initMemorySection() {
-  document.getElementById('forgetSite').addEventListener('click', async () => {
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (!tabs[0] || !tabs[0].url) return;
-    const mem = (await browser.storage.local.get('ffSiteMemory')).ffSiteMemory || {};
-    const key = siteKeyOf(tabs[0].url);
-    if (mem[key]) { delete mem[key]; await browser.storage.local.set({ ffSiteMemory: mem }); updateStatusMessage('Forgot mapping for ' + key); }
-    else updateStatusMessage('No remembered mapping for ' + key);
-  });
-  document.getElementById('clearSiteMemory').addEventListener('click', async () => {
-    if (!confirm('Forget all remembered field mappings?')) return;
-    await browser.storage.local.set({ ffSiteMemory: {} });
-    updateStatusMessage('Site memory cleared.');
-  });
-}
-
-// Mirror of SiteMemory.siteKey (the panel does not load siteMemory.js).
-function siteKeyOf(url) {
-  try {
-    const u = new URL(url);
-    const path = u.pathname
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '*')
-      .replace(/\/\d+(?=\/|$)/g, '/*')
-      .replace(/\/[0-9a-f]{16,}(?=\/|$)/gi, '/*');
-    return u.origin + path;
-  } catch (_) { return String(url); }
-}
 
 // ff:logs:start
 async function refreshLogSummary() {

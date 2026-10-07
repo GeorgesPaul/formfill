@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>Hosted card fields</title>
+<style>
+  body { font: 15px sans-serif; max-width: 560px; margin: 40px auto; }
+  .row { margin: 14px 0; }
+  .box { border: 1px solid #999; padding: 6px 8px; border-radius: 4px; }
+  iframe { border: 0; width: 100%; height: 25px; display: block; }
+</style>
+</head>
+<body>
+<!--
+  A checkout whose card fields each live in their own cross-origin iframe
+  (served from 127.0.0.1 while this page is on localhost), like HiPay's hosted
+  fields on mauser.pt. Every frame runs its own fill at the same time; the
+  keyboard focus they type into is shared by the whole tab.
+  Drive with: node tools/floorp_rig.mjs --page test/hosted_fields_test.html --scenario hosted
+-->
+<h2>Pagamento</h2>
+<div class="row">Número do cartão<div class="box"><iframe src="http://127.0.0.1:8123/test/hosted_field.html?type=cardNumber"></iframe></div></div>
+<div class="row">Nome Apelido<div class="box"><iframe src="http://127.0.0.1:8123/test/hosted_field.html?type=cardHolder"></iframe></div></div>
+<div class="row" style="display:flex; gap:12px">
+  <div style="flex:1">Data de validade<div class="box"><iframe src="http://127.0.0.1:8123/test/hosted_field.html?type=expiryDate"></iframe></div></div>
+  <div style="flex:1">CVC<div class="box"><iframe src="http://127.0.0.1:8123/test/hosted_field.html?type=cvc"></iframe></div></div>
+</div>
+</body>
+</html>

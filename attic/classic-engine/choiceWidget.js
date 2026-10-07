@@ -368,24 +368,65 @@ const ChoiceWidget = (function () {
         return matches(sel.text, option.text) || matches(sel.text, value) || (option.value !== undefined && normalise(sel.text) === normalise(option.value));
     }
 
-    async function pickByKeyboard(el, popup, option) {
-        const live = optionsIn(popup);
-        const target = live.findIndex(o => o.text === option.text);
+    // Where the widget's cursor is: the focused option (menus that move
+    // focus), the aria-activedescendant (comboboxes that keep focus in the
+    // input), or a highlight class. -1 when nothing is marked.
+    function cursorIndex(el, popup, options) {
+        const doc = el.ownerDocument || document;
+        const a = doc.activeElement;
+        if (a && popup.contains(a)) {
+            const i = options.findIndex(o => o.el === a || o.el.contains(a) || a.contains(o.el));
+            if (i >= 0) return i;
+        }
+        let ad = el.getAttribute('aria-activedescendant');
+        if (!ad && a && a !== el && a.getAttribute) ad = a.getAttribute('aria-activedescendant');
+        if (ad) {
+            const i = options.findIndex(o => o.el.id === ad || (o.el.querySelector && o.el.querySelector('#' + CSS.escape(ad))));
+            if (i >= 0) return i;
+        }
+        return highlightedIndex(options);
+    }
+
+    // Keyboard selection on the element that has focus (TypingEngine.pressKey
+    // sends keys where the browser would). Type-ahead first for lists that
+    // jump to the entry starting with what is typed; then arrows, giving up as
+    // soon as the cursor stops moving: a widget that ignores our arrows does
+    // not start honouring them on press 200. The Sedo country list cost 17
+    // seconds that way.
+    async function pickByKeyboard(el, popup, option, deadline) {
+        let live = optionsIn(popup);
+        let target = live.findIndex(o => o.text === option.text);
         if (target < 0) return false;
-        const presses = live.length + 2;
-        for (let i = 0; i < presses; i++) {
-            TypingEngine.pressKey(el, 'ArrowDown');
-            await wait(70);
-            const now = optionsIn(popup);
-            const hi = highlightedIndex(now);
-            const ad = el.getAttribute('aria-activedescendant');
-            const onTarget = (ad && now[target] && now[target].el.id === ad) || hi === target;
-            if (i === 0 && hi === -1 && !ad) return false;          // widget ignores arrows
-            if (onTarget) {
-                TypingEngine.pressKey(el, 'Enter');
-                await wait(200);
-                return true;
+        const enter = async () => { await TypingEngine.pressKey(el, 'Enter'); await wait(200); return true; };
+
+        // Type-ahead: only when the keys cannot land in a text box.
+        const doc = el.ownerDocument || document;
+        const a = doc.activeElement;
+        const typingIntoText = a && (TypingEngine.isTypable(a) || a.isContentEditable);
+        if (!typingIntoText && !TypingEngine.isTypable(el) && live.length > 8) {
+            const head = plainText(option.text).replace(/^[^\p{L}\p{N}]+/u, '').slice(0, 3);
+            if (head) {
+                for (const ch of head) { await TypingEngine.pressKey(el, ch); await wait(60); }
+                await wait(120);
+                live = optionsIn(popup);
+                target = live.findIndex(o => o.text === option.text);
+                if (target >= 0 && cursorIndex(el, popup, live) === target) return enter();
             }
+        }
+
+        const presses = Math.min(live.length + 2, 80);
+        let last = cursorIndex(el, popup, live), stalls = 0;
+        for (let i = 0; i < presses; i++) {
+            if (Date.now() > deadline) return false;
+            await TypingEngine.pressKey(el, 'ArrowDown');
+            await wait(60);
+            live = optionsIn(popup);
+            target = live.findIndex(o => o.text === option.text);
+            if (target < 0) return false;
+            const pos = cursorIndex(el, popup, live);
+            if (pos === target) return enter();
+            if (pos === last) { if (++stalls >= 3) return false; } else stalls = 0;
+            last = pos;
         }
         return false;
     }
@@ -397,24 +438,39 @@ const ChoiceWidget = (function () {
         return hit ? hit.el : null;
     }
 
-    async function pick(el, popup, option, value) {
-        const done = () => listClosed(popup) || selectionMatches(el, option, value);
-        // 1. Arrow keys + Enter, for widgets that track a highlight.
-        if (await pickByKeyboard(el, popup, option)) { if (done()) return true; }
-        // 2. A real pointer press on the option (most widgets select on mousedown).
+    // The pick landed on something else: the widget now shows a real value
+    // that is not ours (a neighbour in a scrolled menu).
+    function wrongPick(el, option, value) {
+        const sel = readSelection(el);
+        if (!sel) return false;
+        return !(matches(sel.text, option.text) || matches(sel.text, value) || (option.value !== undefined && normalise(sel.text) === normalise(option.value)));
+    }
+
+    async function pick(el, popup, option, value, deadline) {
+        const done = () => selectionMatches(el, option, value) || (listClosed(popup) && !wrongPick(el, option, value));
+        // 1. Point at the option and press it, what a person does. With
+        //    trusted input this is the browser's own click.
         let target = liveOption(popup, option);
         if (target) {
-            AutocompleteFiller.mouseSequence(target);
+            if (typeof TrustedInput !== 'undefined') TrustedInput.scrollInstant(target, 'nearest');
+            else { try { target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (_) {} }
+            await wait(40);
+            await AutocompleteFiller.mouseSequence(target);
             await wait(250);
             if (done()) return true;
+            if (listClosed(popup)) return false;   // closed on a neighbour: caller reopens
+        }
+        // 2. The keyboard, on whatever has focus.
+        if (!listClosed(popup) && Date.now() < deadline) {
+            if (await pickByKeyboard(el, popup, option, deadline)) { if (done()) return true; }
         }
         // 3. The innermost element under the option's centre, then the DOM click.
         target = liveOption(popup, option);
-        if (target) {
+        if (target && Date.now() < deadline) {
             try {
                 const r = target.getBoundingClientRect();
                 const deep = (el.ownerDocument || document).elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-                if (deep && deep !== target && target.contains(deep)) { AutocompleteFiller.mouseSequence(deep); await wait(200); if (done()) return true; }
+                if (deep && deep !== target && target.contains(deep)) { await AutocompleteFiller.mouseSequence(deep); await wait(200); if (done()) return true; }
             } catch (_) {}
             try { target.click(); } catch (_) {}
             await wait(200);
@@ -456,16 +512,21 @@ const ChoiceWidget = (function () {
             return result(ok, { strategy: 'select', selected: sel ? sel.text : undefined, reason: ok ? 'selected' : 'no-match' });
         }
 
+        // The whole choice, open to confirm, gets one time budget: a widget we
+        // cannot drive is reported quickly, and the model or the person takes
+        // over. (Default 8 s; FormKit.execute passes info.budgetMs.)
+        const deadline = Date.now() + Math.max(2000, Number(info.budgetMs) || 8000);
+
         // Open by clicking into it, like a person.
-        if (typeof EventSim !== 'undefined') EventSim.focus(el); else { try { el.focus(); } catch (_) {} }
+        await simulateRealisticFocus(el);
         await wait(90);
         let popup = await waitForList(el, 600);
         if (!popup) {
             const ind = openIndicator(el);
-            if (ind) { AutocompleteFiller.mouseSequence(ind); popup = await waitForList(el, 600); }
+            if (ind) { await AutocompleteFiller.mouseSequence(ind); popup = await waitForList(el, 600); }
         }
         if (!popup && !TypingEngine.isTypable(el)) {
-            TypingEngine.pressKey(el, 'ArrowDown');
+            await TypingEngine.pressKey(el, 'ArrowDown');
             popup = await waitForList(el, 500);
         }
 
@@ -500,14 +561,29 @@ const ChoiceWidget = (function () {
         }
 
         if (!picked) {
-            TypingEngine.pressKey(el, 'Escape');
+            await TypingEngine.pressKey(el, 'Escape');
             return result(false, { strategy: 'choose', reason: popup ? 'no-match' : 'no-list' });
         }
 
-        const ok = await pick(el, popup, picked, want);
+        let ok = await pick(el, popup, picked, want, deadline);
         await wait(120);
-        const sel = readSelection(el);
-        const accepted = ok && (listClosed(popup) || selectionMatches(el, picked, want));
+        let sel = readSelection(el);
+        const judge = () => ok && (selectionMatches(el, picked, want) || (listClosed(popup) && !wrongPick(el, picked, want)));
+        let accepted = judge();
+        if (!accepted && Date.now() < deadline && wrongPick(el, picked, want)) {
+            // A neighbour got picked (the list moved under the pointer). Once
+            // more, from a reopened list.
+            await TypingEngine.pressKey(el, 'Escape');
+            await wait(150);
+            await simulateRealisticFocus(el);
+            await wait(90);
+            popup = await waitForList(el, 600);
+            if (!popup && !TypingEngine.isTypable(el)) { await TypingEngine.pressKey(el, 'ArrowDown'); popup = await waitForList(el, 500); }
+            if (popup) {
+                const again = matchOption(optionsIn(popup), want);
+                if (again) { picked = again; ok = await pick(el, popup, picked, want, deadline); await wait(120); sel = readSelection(el); accepted = judge(); }
+            }
+        }
         if (accepted) {
             try {
                 el.setAttribute('data-ff-accepted-for', String(value).trim());
@@ -515,10 +591,10 @@ const ChoiceWidget = (function () {
                 el.setAttribute('data-filled-by-extension', 'true');
             } catch (_) {}
         } else {
-            TypingEngine.pressKey(el, 'Escape');
+            await TypingEngine.pressKey(el, 'Escape');
         }
         return result(accepted, {
-            strategy: 'choose', selected: picked.text, reason: accepted ? 'selected' : 'not-accepted',
+            strategy: 'choose', selected: picked.text, reason: accepted ? 'selected' : (Date.now() > deadline ? 'timeout' : 'not-accepted'),
             shown: sel ? sel.text : undefined,
         });
     }

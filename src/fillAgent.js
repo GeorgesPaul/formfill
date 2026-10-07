@@ -1,679 +1,466 @@
-// fillAgent.js -- the closed-loop driver that replaces the one-shot
-// "map every field, fill, hope" pass.
+// fillAgent.js -- look, act, look again.
 //
-//   1. FormKit.snapshot() describes every visible field with a stable ref.
-//   2. Site memory and the deterministic heuristics attach suggested values.
-//      If memory covers every empty field, it is applied without any model
-//      call; the model is only consulted when something is missing/invalid.
-//   3. Otherwise the model receives the snapshot and the profile and answers
-//      with the form_actions tool: a batch of {ref, op, value} actions plus
-//      what it deliberately skipped (and why, and whether the user must
-//      supply it).
-//   4. FormKit.execute() runs the batch (typing, autocomplete, comboboxes,
-//      radio groups, checkboxes, clicks) and reports per action what the
-//      field holds now and whether the page flagged it invalid.
-//   5. The results, the page's reaction (new/removed/changed fields, error
-//      messages) go back to the model, which fixes, continues (e.g. clicks
-//      "Next") or declares done. Bounded by config.maxTurns.
+// The whole of form filling is this loop, run once in every frame that has
+// fields:
 //
-// Models improve -> step 3 improves, with no code change: the extension
-// decides HOW to touch a widget, the model decides WHAT.
+//   1. PageView.capture() shows the page as text, top to bottom, with a
+//      number on everything that can be acted on.
+//   2. The model reads that text next to the user's profile and answers
+//      with a batch of human actions: type, choose, check, click, press.
+//   3. Hands.run() performs them and reports what each control shows now.
+//   4. The page is captured again, with what is new since the last look
+//      marked. Back to 2, until the model has nothing left to do.
+//
+// The extension does not classify widgets, guess labels, verify values or
+// repair fields. A dropdown that opens a list, a date in three parts, a field
+// that appears after a choice: the model sees what happened and acts on it,
+// like a person, so a widget nobody has met before needs no new code here.
+// What it costs is one more look for every change of the page; a plain form
+// is one look.
 // ff:logs:start
 //
-// In development builds every step is recorded through FillLogger, so a failed
-// fill can be replayed and understood later. Store builds are packaged without
-// it (build.ps1 -Channel store).
+// In development builds every step is recorded through FillLogger. Store
+// builds are packaged without it (build.ps1 -Channel store).
 // ff:logs:end
 const FillAgent = (function () {
     'use strict';
 
     const TOOL = {
         name: 'form_actions',
-        description: 'Fill, choose, set, click or clear form fields identified by their ref. Report fields you deliberately skip. Set done=true when the form is filled as far as the profile allows (or nothing more can be done).',
+        description: 'Act on the page: type into fields, choose from lists, check boxes, click, press keys. Set done=true when nothing is left for you to do.',
         parameters: {
             type: 'object',
             properties: {
                 actions: {
                     type: 'array',
-                    description: 'Actions to execute in order. Use fill for text-like fields (value = text), choose for select/combobox/radio-group/listbox (value = option text exactly as listed), set for checkbox/switch (value = true/false), click for buttons (and fields that need a click), clear to empty a field.',
+                    description: 'Actions to perform in order, top to bottom as a person would go through the form.',
                     items: {
                         type: 'object',
                         properties: {
-                            ref: { type: 'string', description: 'Field or button ref from the snapshot, e.g. "f12", "g3", "b2".' },
-                            op: { type: 'string', enum: ['fill', 'choose', 'set', 'click', 'clear'] },
-                            value: { description: 'Text for fill/choose; true/false for set; omit for click/clear.' },
-                            source: { type: 'string', description: 'Profile key the value came from (the text left of the colon in the profile, e.g. "email"), "derived" when reformatted/combined, "none" for fixed choices (consent boxes, defaults).' },
-                            note: { type: 'string', description: 'Optional short reasoning, e.g. why you chose this option.' },
+                            op: { type: 'string', enum: ['type', 'choose', 'check', 'click', 'press'] },
+                            ref: { type: 'integer', description: 'The number in brackets of the thing to act on. Not needed for press, nor for a click on something without a number.' },
+                            value: { description: 'type: the text. choose: the visible text of the entry. check: true or false. press: the key name. click: omit, or (with no ref) the exact visible text of the thing to click.' },
+                            note: { type: 'string', description: 'Optional, a few words: why, when it is not obvious.' },
                         },
-                        required: ['ref', 'op'],
+                        required: ['op'],
                     },
                 },
-                skipped: {
+                needs_user: {
                     type: 'array',
-                    description: 'Fields you deliberately leave alone this turn.',
+                    description: 'Things the form needs that the profile does not have, for the user to fill in.',
                     items: {
                         type: 'object',
                         properties: {
-                            ref: { type: 'string' },
+                            ref: { type: 'integer', description: 'Its number, when it has one.' },
+                            what: { type: 'string', description: 'The field or choice, as the user would call it.' },
                             reason: { type: 'string' },
-                            needs_user_input: { type: 'boolean', description: 'true when the profile lacks the information and the user must fill it in themselves.' },
                         },
-                        required: ['ref', 'reason'],
+                        required: ['what'],
                     },
                 },
-                done: { type: 'boolean', description: 'true when nothing more should be done after these actions.' },
-                summary: { type: 'string', description: 'One or two sentences for the user: what was filled, what they still need to do.' },
+                done: { type: 'boolean', description: 'true when, once these actions have run, nothing is left for you to do.' },
+                summary: { type: 'string', description: 'One or two sentences for the user: what was filled, what they still have to do.' },
             },
             required: ['actions', 'done'],
         },
     };
 
-    const RULES = `You are the decision-maker inside a browser extension that fills web forms with the user's own profile data. The extension does the mechanical work (real keystrokes, suggestion dropdowns, comboboxes, radio buttons, clicks) and reports back what the page did. You decide WHAT goes where.
+    const RULES = `You fill in web forms for the user, the way a person would who sits at the page with the user's profile data next to them. You see the page as text and act on it through the form_actions tool. After your actions have run you are shown the page again, and so on until the form is filled.
 
-You receive a snapshot of the visible form fields. Each field has a stable ref ("f12" for a field, "g3" for a radio-button group, "b2" for a button) and what a person can see: label, section, placeholder, description, options, current value, and any validation error the page shows. The name/id/autocomplete attributes are hints only; some forms set them wrong or reuse them.
+HOW THE PAGE IS SHOWN
+- Top to bottom, as a person reads it. Anything you can act on starts with a number in brackets, for example: [12] text field = "current value" (details).
+- A field's label is the text next to it: usually just before it, sometimes right after it, sometimes inside it as a placeholder. Text in quotes directly after the kind of control is the control's own built-in name. "name=" and "autocomplete=" are the page's internal names: useful hints, not always right.
+- "…" stands for parts of the page left out because nothing fillable is there.
+- shows "..." is what a control's box displays while the control itself holds no typed text. For a field that opens a list it is the chosen entry (or a prompt such as "Select..."): such a field is filled, not empty. For a plain text box it is usually its label.
+- Lines starting with "+" are new or changed since you last looked: a list that opened, fields that appeared, an error message, a field whose content changed (its earlier content is shown as: was "...").
+- "ON TOP OF THE PAGE" lists what lies over the page right now (an open list, a pop-up, a banner). Fields marked "covered" cannot be reached until that is dealt with.
+- You see one frame of the page. "(embedded frame ...)" marks a part that lives in another frame. It is filled by a separate run of this tool: never tell the user to fill it in and never report it as missing.
 
-How to act:
-- Call the form_actions tool with a batch of actions for every field you can fill from the profile. Refs must come from the snapshot.
-- fill: text-like fields. choose: select, combobox, radio-group, listbox (value = the option text exactly as listed; for a searchable combobox without a listed option, give the text to search for). set: checkbox/switch (true/false). click: buttons. clear: empty a field.
-- Match the value format the field expects: placeholder patterns ("dd-mm-yyyy"), maxlength, min/max, the options list, split fields (day/month/year, country code + number, first/last name), local conventions of the page language.
-- Fields marked "date" are handled by the extension's date mechanics (masks, native pickers, calendars): give the date in the format shown when one is shown, otherwise as dd-mm-yyyy, and do not retry other formats yourself when it is rejected.
-- Comboboxes keep their choice inside the widget, not necessarily in the text box: "value" and "now" report what the widget shows as chosen. A choose that reports selected=... and accepted=true is done, even when the box looks empty.
-- If a turn reports PAGE CHANGED, the earlier refs are gone; work only from the new snapshot in that message.
-- Never invent data. When the profile lacks something the form needs, list it under skipped with needs_user_input=true so the user can fill it in themselves. Names, addresses, dates and numbers must come from the profile; you may reformat and combine them.
-- Fields that already hold a correct value (see "value") are left alone. Fix a pre-filled value only when it is clearly wrong for this profile.
-- "suggested" values were proposed by the extension's deterministic matching or by memory of a previous fill of this same form. Use them unless the label or context says otherwise.
-- Consent checkboxes: tick the ones required to proceed (terms, privacy). Do NOT tick optional marketing/newsletter/third-party boxes unless the profile or the user's instructions say so.
-- Never fill password fields (kind "password"); the user has a separate credential tool.
-- Never submit, pay, order, register, send, confirm or otherwise finalize. Buttons of kind "submit" are off limits. You MAY click buttons that reveal more of the form (kind "next" or "reveal": Next, Continue, Add address, Enter manually, Same as billing...), but only after the current fields are filled correctly, and at most one such click per turn.
-- After each batch you get the results: the value the field holds now, whether it was accepted, validation messages, which suggestion an autocomplete widget picked, and which fields appeared, changed or vanished. Fix what the page rejected (different format, a listed option, a different search text), fill new fields, then set done=true. Do not retry an identical value that was just rejected. If a field cannot be satisfied, skip it with a reason.
-- Buttons carry a "disabled" flag. A Next/Continue/submit button that stays disabled after everything is filled means the page is still waiting for something: a field you skipped or never saw, a required checkbox, a choice that did not register, or a value it silently rejected. When you are told this, do not set done=true just because the fields look right; look again at the whole field list and act. Only give up when nothing plausible is left, and then say in the summary what the user should check.
-- Optional fields you have data for are filled too. Fields you have no data for are simply not touched (list them under skipped only when they are required).
-- Keep summary short and useful for the user: what was filled, what they must complete themselves.`;
+ACTIONS (each has op, ref = the number, value)
+- type: click into the field and type value on the keyboard. In a text box this replaces what was there; value "" empties it. A field that says "type it as yyyy-mm-dd" (or another pattern) takes exactly that pattern.
+- choose: pick from a dropdown, a combobox, or any field that opens a list. value is the visible text of the entry you want. When the list has no such entry you are shown the entries it does have; choose again with one of those, or click the entry by its number.
+- check: value true or false for a checkbox or switch; value true on a radio button selects it.
+- click: press a button, a tab, an entry in an open list, a day in a calendar. Something a person would click that carries no number (a card, a tile, a row of an option list) is clicked by its words: leave ref out and give its exact visible text as value.
+- press: one key wherever the cursor is (Tab, Escape, ArrowDown, ArrowUp, Enter, Backspace). Enter only to accept the highlighted entry of an open list.
+Put the actions in the order a person would go through the form, top to bottom. They run one after another on the page as it is at that moment, so a later action may rely on what an earlier one causes (choose the country, then the region whose list fills because of it).
+When a click or a key makes something new appear (a list, a dialog, more fields), the batch stops there and you are shown the page: the actions after it are not run. A click that only makes something go away (closing a banner) lets the batch carry on.
 
-    const wait = ms => new Promise(r => setTimeout(r, ms));
+WHAT COMES BACK
+- For each action: what the control shows now ("now"), or why it could not be done. Pages reformat what is typed (spaces in a card number, capitals, a date mask); that is fine while it still means the same. When it does not, fix it.
+- "suggestions" means a list opened under the field while typing, and the batch stopped there. Deal with it first, because acting elsewhere closes it: click the entry that fits (its number is in the new page view), or carry on if none is needed.
+- Actions listed as not run were skipped because the page had to be looked at first. Issue them again if they are still wanted.
+- A click noted as "nothing visible on the page changed" did nothing. Do not press it again; finish, and mention it in the summary if it matters.
+- Then the page as it is now.
 
-    function normKey(k) {
-        return String(k == null ? '' : k).toLowerCase().trim().replace(/[\s-]+/g, '_');
+RULES
+- Use only the user's profile data. Never invent names, addresses, dates or numbers. You may reformat and combine what the profile has.
+- Fill every field you have data for, required or not. Leave alone what you have no data for, and list under needs_user what the form requires but the profile lacks.
+- Fields that already hold the right value are left alone. Correct a pre-filled value only when it is clearly wrong for this profile.
+- Give values in the shape the field shows it wants: its placeholder or example, its length limit, the language and conventions of the page, the entries of its list. Keep the profile's own capitalisation and spacing for names and other words; numbers (phone, card, tax, bank) are typed as plain digits unless the field shows a pattern.
+- Split fields get split values: day / month / year, first and last name, street and house number. A date shown as separate small parts next to each other is typed part by part. A phone number whose country prefix has its own box, or is already shown, is typed without that prefix.
+- Consent boxes: tick the ones required to proceed (terms, privacy). Do not tick optional marketing, newsletter or third-party boxes unless the profile or the user's instructions say so.
+- Never fill password fields; the user has a separate tool for those.
+- Never send the form. Buttons such as Submit, Pay, Order, Buy, Register, Sign in, Save, Confirm or Send are the user's to press. You may click what only reveals or leads to more fields (Next, Continue, Add, Edit, "enter manually"), once the visible fields are filled. When such a button stays disabled after everything is filled, do not wait for it: say so in the summary, with your best reading of what the page still wants.
+- A choice the profile says nothing about and that matters to the user (a paid option, a delivery method, a plan) is not yours to make: leave it and list it under needs_user.
+- Something lying on top of the page (a cookie banner, a pop-up) is dismissed only when it covers fields you need, and then in the least committing way it offers (Reject, Only necessary, Close). What is not in the way is left alone.
+- Do not repeat an action that has just failed in the same way. If a field cannot be satisfied, leave it and say so in the summary.
+- done=true means that once the actions of this answer have run, nothing is left for you to do. When you are shown the page and everything is in order, answer with no actions and done=true.
+- summary: short and useful for the user. What was filled, and what they must still do themselves (including pressing the button that sends the form).`;
+
+    const STOPPED = 'Form filling stopped by user.';
+    const notifyPanel = msg => { try { Compat.notify(msg); } catch (_) {} };
+
+    // The fill running in this frame, if any: { sessionId, abort, stopped }.
+    let current = null;
+
+    function stop() {
+        if (!current) return;
+        current.stopped = true;
+        current.abort.abort();
     }
 
-    function fillableKinds(f) {
-        return f.kind !== 'password' && f.kind !== 'file' && !f.disabled;
-    }
-
-    function isEmptyValue(v) {
-        if (v === undefined || v === null) return true;
-        if (typeof v === 'boolean') return v === false;
-        if (Array.isArray(v)) return v.length === 0;
-        return String(v).trim() === '';
-    }
-
-    function profileText(profiles) {
-        return (profiles || []).map(p => `=== ${p.name || 'Profile'} ===\n${(p.data || '').trim()}`).join('\n\n');
-    }
+    // ------------------------------------------------------------ what the model is told
 
     function systemPrompt(profiles, customPrompt, jsonMode) {
-        const today = new Date();
-        const parts = [RULES];
-        parts.push(`\nToday's date: ${today.toISOString().slice(0, 10)}. Browser language: ${navigator.language || 'unknown'}. Page language: ${document.documentElement.lang || 'unknown'}.`);
-        parts.push(`\nUSER PROFILE DATA (key: value lines; the key is the "source" you report):\n${profileText(profiles)}`);
+        const profileText = profiles.map(p => `=== ${p.name || 'Profile'} ===\n${(p.data || '').trim()}`).join('\n\n');
+        const parts = [
+            RULES,
+            `\nToday's date: ${new Date().toISOString().slice(0, 10)}. Browser language: ${navigator.language || 'unknown'}. Page language: ${document.documentElement.lang || 'unknown'}.`,
+            `\nUSER PROFILE DATA:\n${profileText}`,
+        ];
         if (customPrompt) parts.push(`\nADDITIONAL INSTRUCTIONS FROM THE USER (these override the rules above where they conflict):\n${customPrompt}`);
         if (jsonMode) {
-            parts.push(`\nThis endpoint does not support tools. Respond with ONE JSON object only, no prose, no markdown fences, with this shape:\n${JSON.stringify({ actions: [{ ref: 'f1', op: 'fill', value: '...', source: 'email' }], skipped: [{ ref: 'f9', reason: '...', needs_user_input: true }], done: true, summary: '...' })}`);
+            parts.push(`\nThis endpoint does not support tools. Respond with ONE JSON object only, no prose, no markdown fences, with this shape:\n${JSON.stringify({ actions: [{ op: 'type', ref: 12, value: '...' }], needs_user: [{ ref: 9, what: '...', reason: '...' }], done: true, summary: '...' })}`);
         }
         return parts.join('\n');
     }
 
-    function describeSnapshot(snap, opts = {}) {
-        const fields = snap.fields.filter(f => opts.all || fillableKinds(f)).map(FormKit.describeField);
-        const buttons = snap.buttons.map(FormKit.describeButton);
-        const head = `PAGE: ${snap.title || ''} (${snap.url})${snap.frame === 'iframe' ? ' [this is an embedded frame]' : ''}\nVIEWPORT: ${snap.viewport.w}x${snap.viewport.h}, scrolled ${snap.viewport.scrollY}px of ${snap.viewport.pageH}px`;
-        return `${head}\nFIELDS (${fields.length}):\n${JSON.stringify(fields)}\nBUTTONS (${buttons.length}):\n${JSON.stringify(buttons)}`;
+    function pageText(view) {
+        const head = `PAGE: ${view.title || ''} (${view.url})${view.frame === 'iframe' ? ' [this is a frame embedded in another page]' : ''}`;
+        return head + '\n\n' + (view.text || '(nothing fillable is visible)');
     }
 
-    function compactResult(r) {
-        const o = { ref: r.ref, op: r.op };
-        if (r.value !== undefined && r.op !== 'click') o.value = r.value;
-        o.ok = !!r.ok;
-        if (r.accepted !== undefined) o.accepted = r.accepted;
-        if (r.finalValue !== undefined && r.op !== 'click') o.now = r.finalValue;
-        if (r.selected) o.selected = r.selected;
-        if (r.autocomplete) o.autocomplete = r.autocomplete;
-        if (r.validation) o.validation = r.validation;
-        if (r.tried) o.tried = r.tried;
-        if (r.format) o.format = r.format;
-        if (r.note) o.note = r.note;
-        if (r.error) o.error = r.error;
-        return o;
+    // What the hands did, as the model is told it.
+    function resultsText(exec) {
+        const lines = ['RESULTS:'];
+        for (const r of exec.results) {
+            const line = { op: r.op };
+            if (r.ref !== undefined) line.ref = r.ref;
+            if (r.value !== undefined && r.op !== 'click') line.value = r.value;
+            line.ok = !!r.ok;
+            if (r.now !== undefined) line.now = r.now;
+            if (r.picked) line.picked = r.picked;
+            if (r.note) line.note = r.note;
+            if (r.suggestions) line.suggestions = r.suggestions;
+            if (r.shown) line.entries_it_has = r.shown;
+            if (r.error) line.error = r.error;
+            lines.push(JSON.stringify(line));
+        }
+        if (exec.notExecuted.length) {
+            lines.push(`NOT RUN (${exec.stopped || 'the batch ended early'}):`);
+            for (const a of exec.notExecuted) lines.push(JSON.stringify({ op: a.op, ref: a.ref, value: a.value }));
+        }
+        return lines.join('\n');
     }
 
-    function planFromResponse(resp) {
-        let plan = null;
+    // The model's answer: the arguments of its form_actions call (or, from an
+    // endpoint without tools, the JSON object it wrote).
+    function planFrom(resp) {
         const call = (resp.toolCalls || []).find(c => c.name === TOOL.name) || (resp.toolCalls || [])[0];
-        if (call && call.args && typeof call.args === 'object') plan = call.args;
-        if (!plan && resp.text) plan = ApiUtils.parseJsonLoose(resp.text);
+        const plan = (call && call.args && typeof call.args === 'object') ? call.args : (resp.text ? ApiUtils.parseJsonLoose(resp.text) : null);
         if (!plan || typeof plan !== 'object') return null;
-        plan.actions = Array.isArray(plan.actions) ? plan.actions.filter(a => a && a.ref) : [];
-        plan.skipped = Array.isArray(plan.skipped) ? plan.skipped.filter(s => s && s.ref) : [];
-        plan.done = plan.done === true || plan.done === 'true';
-        return { plan, call };
+        return {
+            call,
+            actions: (Array.isArray(plan.actions) ? plan.actions : []).filter(a => a && a.op && (a.ref !== undefined || a.value !== undefined)),
+            needsUser: (Array.isArray(plan.needs_user) ? plan.needs_user : []).filter(n => n && (n.what || n.ref !== undefined)),
+            done: plan.done === true || plan.done === 'true',
+            summary: plan.summary || '',
+        };
     }
 
-    function actionsKey(actions) {
-        return JSON.stringify((actions || []).map(a => [a.ref, a.op, a.value]));
+    // ------------------------------------------------------------ judging a batch
+
+    const fillable = view => view.fields.filter(f => !f.disabled && !f.secret && !f.readonly);
+
+    function isFilled(f) {
+        if (f.toggle) return !!f.checked;
+        if (f.reads && /^empty$/i.test(f.reads)) return false;
+        // A list field shows its choice in its box, not as typed text.
+        return !!f.value || (!!f.shows && f.open !== undefined);
     }
 
-    // ------------------------------------------------------------------ run
+    // Did the action leave the control showing what was meant, to the letter?
+    // Only used to decide whether the model has to look once more; anything
+    // short of an exact result gets that look.
+    function asMeant(r) {
+        if (!r.ok || r.op !== 'type') return !!r.ok;
+        const meant = String(r.value == null ? '' : r.value), now = String(r.now == null ? '' : r.now);
+        const bare = s => s.replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
+        return now === meant || (/\d/.test(meant) && bare(now) === bare(meant));
+    }
 
+    // ------------------------------------------------------------ screenshots
+
+    // Re-encode a data URL as a smaller JPEG.
+    function shrinkImage(dataUrl, maxWidth, quality) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => {
+                try {
+                    const scale = Math.min(1, maxWidth / img.width);
+                    const canvas = document.createElement('canvas');
+                    canvas.width = Math.round(img.width * scale);
+                    canvas.height = Math.round(img.height * scale);
+                    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                    resolve(canvas.toDataURL('image/jpeg', quality));
+                } catch (_) { resolve(dataUrl); }
+            };
+            img.onerror = () => resolve(dataUrl);
+            img.src = dataUrl;
+        });
+    }
+
+    // The visible part of the tab, as only the background page can capture it.
+    async function screenshot() {
+        try {
+            const res = await browser.runtime.sendMessage({ action: 'captureScreenshot' });
+            return (res && res.dataUrl) || null;
+        } catch (_) { return null; }
+    }
+
+    // ------------------------------------------------------------ run
+
+    // opts: profiles [{name, data}], customPrompt, sessionId, vision (attach a
+    // screenshot to the first look). For tests: llm (stands in for
+    // ApiUtils.chat), config, maxLooks, logging: false.
     async function run(opts) {
         const { profiles, customPrompt = '', sessionId = null, vision = false } = opts;
-        if (window.abortController) { try { window.abortController.abort(); } catch (_) {} }
-        window.currentFillSessionId = sessionId;
-        window.stopFilling = false;
-        const isCancelled = () => window.stopFilling || window.currentFillSessionId !== sessionId;
-        const abort = new AbortController();
-        window.abortController = abort;
-
-        const llm = opts.llm || ((messages, o) => ApiUtils.chat(messages, o));
-        const config = opts.config || await ApiUtils.getLlmConfig();
-        const maxTurns = Math.max(1, Math.min(10, Number(config.maxTurns) || 4));
-        const logging = opts.logging !== false;
-        const overlays = typeof OverlayUtils !== 'undefined';
-        const notify = (msg) => { try { Compat.notify({ ...msg, sessionId }); } catch (_) {} };
+        stop();   // a new fill replaces one still running in this frame
+        const me = current = { sessionId, abort: new AbortController(), stopped: false };
+        const isCancelled = () => me.stopped || current !== me;
+        const notify = msg => notifyPanel({ ...msg, sessionId });
         const t0 = Date.now();
 
-        if (!Array.isArray(profiles) || profiles.length === 0) {
-            notify({ action: 'fillFormError', error: 'No profile selected.' });
-            throw new Error('No profile selected.');
-        }
-
-        // Wait for the page to finish loading.
-        await new Promise(resolve => {
-            if (document.readyState === 'complete') resolve();
-            else window.addEventListener('load', resolve, { once: true });
-        });
-        if (isCancelled()) throw new Error('Form filling stopped by user.');
-
-        let snap = FormKit.snapshot();
-        let targets = snap.fields.filter(fillableKinds);
-        if (targets.length === 0) {
-            // Nothing to do in this frame: stay silent (other frames may have the form).
-            return { status: 'success', message: 'No form fields in this frame.', filled: 0, total: 0 };
-        }
-
-        notify({ action: 'fillFormStart' });
-        const total = targets.length;
-        const progress = (done, message) => {
-            try { updateFillProgress(Math.min(done, total - 1), Math.min(done, total - 1), total, message, sessionId); } catch (_) {}
+        // Every frame that got the fill says so at once, before any waiting:
+        // the panel's progress stays up until each one has started and
+        // finished, or said it has no fields.
+        notify({ action: 'fillFormJoin' });
+        const leave = result => {
+            if (current === me) current = null;
+            notify({ action: 'fillFormLeave' });
+            return result;
         };
-        progress(0, `Found ${total} field(s). Preparing...`);
+
+        if (!Array.isArray(profiles) || profiles.length === 0) {
+            if (current === me) current = null;
+            notify({ action: 'fillFormError', error: 'No profile selected.' });
+            return { status: 'error', message: 'No profile selected.' };
+        }
+        const llm = opts.llm || ((messages, o) => ApiUtils.chat(messages, o));
+        const config = opts.config || await ApiUtils.getLlmConfig();
+        const maxLooks = opts.maxLooks || Math.max(2, Math.min(20, Number(config.maxLooks) || 12));
+
+        // Wait for the page to finish loading, but not for a page that never
+        // does (a stalled ad or tracker keeps "complete" away forever).
+        await new Promise(resolve => {
+            if (document.readyState === 'complete') return resolve();
+            window.addEventListener('load', resolve, { once: true });
+            setTimeout(resolve, 8000);
+        });
+        if (isCancelled()) return leave({ status: 'error', message: STOPPED });
+
+        const input = (await TrustedInput.probe(true)).available ? TrustedInput.backend() : 'synthetic';
+
+        PageView.reset();
+        let view = PageView.capture();
+        if (fillable(view).length === 0) {
+            return leave({ status: 'success', message: 'No form fields in this frame.', filled: 0 });
+        }
+        notify({ action: 'fillFormStart' });
+
+        // Progress is counted in actions: done so far, of those known so far.
+        const filled = new Set();   // the numbers of the controls filled in
+        let stepsDone = 0, stepsKnown = 1;
+        const progress = message => {
+            notify({ action: 'fillFormProgress', processed: Math.min(stepsDone, stepsKnown - 1), filled: Math.min(stepsDone, stepsKnown - 1), total: stepsKnown, message });
+        };
+        progress(`Found ${fillable(view).length} field(s). Preparing...`);
 
         // ---- fill logs (development builds only; see build.ps1 -Channel)
-        let logOn = false;
+        let logging = false;
         let log = () => {};
         // ff:logs:start
-        if (logging && typeof FillLogger !== 'undefined') {
-            logOn = await FillLogger.start(sessionId, {
-                model: config.model, apiUrl: config.apiUrl, reasoningEffort: config.reasoningEffort, maxTurns,
-                vision: !!vision, customPrompt, profiles: profiles.map(p => ({ name: p.name, data: p.data })),
-                extensionVersion: (function () { try { return browser.runtime.getManifest().version; } catch (_) { return null; } })(),
-                userAgent: navigator.userAgent,
-            });
-        }
-        if (logOn) {
-            log = (type, payload) => { try { FillLogger.event(type, payload); } catch (_) {} };
-            log('snapshot', { turn: 0, snapshot: snap, pageHtml: FormKit.capturePageHtml() });
-            try { document.dispatchEvent(new CustomEvent('ff-record', { detail: 'on' })); } catch (_) {}
+        logging = opts.logging !== false && await FillLogger.start(sessionId, {
+            model: config.model, apiUrl: config.apiUrl, reasoningEffort: config.reasoningEffort, maxLooks,
+            vision: !!vision, customPrompt, profiles: profiles.map(p => ({ name: p.name, data: p.data })),
+            extensionVersion: browser.runtime.getManifest().version,
+            userAgent: navigator.userAgent,
+            input,
+        });
+        if (logging) {
+            log = (type, payload) => FillLogger.event(type, payload);
+            log('view', { look: 0, text: view.text, pageHtml: FillLogger.pageHtml() });
         }
         // ff:logs:end
 
         let screenshotForModel = null;
-        if (window === window.top && (logOn || vision)) {
-            const raw = await FormKit.captureScreenshot();
-            if (raw) {
-                if (logOn) log('screenshot', { turn: 0, image: await FormKit.shrinkImage(raw, 1024, 0.5) });
-                if (vision) screenshotForModel = await FormKit.shrinkImage(raw, 1280, 0.7);
-            }
+        if (window === window.top && (vision || logging)) {
+            const shot = await screenshot();
+            if (shot && logging) log('screenshot', { look: 0, image: await shrinkImage(shot, 1024, 0.5) });
+            if (shot && vision) screenshotForModel = await shrinkImage(shot, 1280, 0.7);
         }
 
-        if (overlays) {
-            OverlayUtils.clearAll();
-            for (const f of targets) {
-                const r = FormKit.resolveRef(f.ref);
-                if (r && r.el) OverlayUtils.add(r.el, 'detected', `${f.ref} ${f.label || f.placeholder || f.name || ''}`.trim());
-            }
-        }
+        OverlayUtils.clearAll();
+        for (const f of fillable(view)) OverlayUtils.add(f.el, 'seen', `[${f.ref}] ${f.name || f.placeholder || f.hint || ''}`.trim());
 
-        // ---- suggestions: memory + heuristics
-        const profileParsed = HeuristicFiller.parseProfiles(profiles);
-        const pHash = SiteMemory.profileHash(profiles);
-        let memory = null;
-        try { memory = await SiteMemory.lookup(location.href); } catch (_) {}
-        const attachSuggestions = (fields) => {
-            const memSug = memory ? SiteMemory.suggestions(memory, fields, profileParsed, pHash) : new Map();
-            const infos = fields.map(f => ({ info: { label: f.label, name: f.name, id: f.id, autocomplete: f.autocomplete, type: f.type || f.kind, placeholder: f.placeholder, ariaLabel: undefined, nearbyText: f.description } }));
-            let heur = { matches: {} };
-            try { heur = HeuristicFiller.applyHeuristics(infos, profiles); } catch (_) {}
-            fields.forEach((f, i) => {
-                delete f.suggested;
-                if (!fillableKinds(f)) return;
-                const m = memSug.get(f.ref);
-                if (m) { f.suggested = { value: m.value, from: 'memory', key: m.key }; return; }
-                if (heur.matches && i in heur.matches && (f.kind === 'text' || f.kind === 'email' || f.kind === 'tel' || f.kind === 'url' || f.kind === 'textarea' || f.kind === 'combobox' || f.kind === 'number' || f.kind === 'search')) {
-                    f.suggested = { value: heur.matches[i], from: 'heuristic' };
-                }
-            });
-            return memSug;
-        };
-        let memSug = attachSuggestions(snap.fields);
-
-        const details = { needsUserInput: [], skipped: [], summary: '', turns: 0, llmCalls: 0, memoryApplied: 0, stillInvalid: [], blockedProgress: [] };
-        const mappingsToRemember = new Map(); // ref -> { field, key, value }
-        const messages = [];
-        let filledOk = 0;
-        // Progression buttons we pressed ourselves: a Next that advanced the
-        // form and then greyed itself out is not the page blocking us.
-        const usedButtons = new Set();
-        let prevSnap = snap;
-        let lastResults = [];
-        let lastObserved = null;
-
-        const markOverlay = (ref, status) => {
-            if (!overlays) return;
-            const r = FormKit.resolveRef(ref);
-            if (r && r.el) OverlayUtils.setStatus(r.el, status);
-        };
-
-        // The page moved on since the snapshot the model is answering to (a
-        // step advanced, the person clicked Continue, the form re-mounted):
-        // the batch would type into fields that no longer exist. Take a fresh
-        // snapshot and tell the model instead of firing stale actions.
-        const pageChanged = (turnLabel) => {
-            const moved = FormKit.pageMoved(prevSnap);
-            if (!moved.moved) return null;
-            log('pageChanged', { turn: turnLabel, ...moved });
-            return moved;
-        };
-
-        const executeBatch = async (actions, turnLabel) => {
-            const moved = pageChanged(turnLabel);
-            if (moved) {
-                const after = FormKit.snapshot();
-                attachSuggestions(after.fields);
-                const results = actions.map(a => ({ ref: a.ref, op: a.op, value: a.value, ok: false, error: 'not executed: the page changed before this batch' }));
-                log('results', { turn: turnLabel, results });
-                const d = FormKit.diff(prevSnap, after);
-                const observed = {
-                    pageChanged: moved,
-                    newFields: after.fields.filter(fillableKinds).map(FormKit.describeField),
-                    removedFields: d.removed,
-                    changedFields: [],
-                    newButtons: after.buttons.map(FormKit.describeButton),
-                    changedButtons: [],
-                    invalidFields: [],
-                    blockedProgress: FormKit.blockedProgress(after, { exclude: usedButtons }),
-                };
-                log('observed', { turn: turnLabel, ...observed, url: location.href });
-                prevSnap = after;
-                snap = after;
-                targets = snap.fields.filter(fillableKinds);
-                lastResults = results;
-                lastObserved = observed;
-                gateHandled = false;
-                return { results, observed, after, moved };
-            }
-            log('actions', { turn: turnLabel, actions });
-            const results = await FormKit.execute(actions, {
-                isCancelled,
-                onBefore: (a, target) => { if (overlays && target.el) OverlayUtils.pulseFilling(target.el, 600); },
-                onAfter: (a, target, res) => {
-                    const okish = res.ok && (res.accepted !== false) && !(res.validation && res.validation.invalid);
-                    if (a.op === 'click' && res.ok) usedButtons.add(a.ref);
-                    if (a.op !== 'click') markOverlay(a.ref, okish ? (turnLabel === 'memory' ? 'heuristic' : 'llm') : 'nomatch');
-                    if (okish && a.op !== 'click' && a.op !== 'clear' && a.op !== 'commit' && a.op !== 'retype') {
-                        const f = FormKit.fieldByRef(a.ref);
-                        if (f) mappingsToRemember.set(a.ref, { field: f, key: a.source ? normKey(a.source) : (turnLabel === 'memory' ? (a.source || 'none') : 'none'), value: a.value });
-                    } else {
-                        mappingsToRemember.delete(a.ref);
-                    }
-                    progress(Math.min(total, countFilled()), `Filling ${f2label(a.ref)}...`);
-                },
-            });
-            log('results', { turn: turnLabel, results });
-            await waitForDomSettle(350, 2500);
-            const after = FormKit.snapshot();
-            attachSuggestions(after.fields);
-            const d = FormKit.diff(prevSnap, after);
-            const invalid = after.fields.filter(f => fillableKinds(f) && f.invalid).map(f => ({ ref: f.ref, label: f.label, value: f.value, error: f.error }));
-            const navigated = String(after.url).replace(/#.*$/, '') !== String(prevSnap.url).replace(/#.*$/, '');
-            const observed = {
-                ...(navigated ? { pageChanged: { moved: true, reason: 'navigated', from: prevSnap.url, to: after.url } } : {}),
-                newFields: d.added.filter(fillableKinds).map(FormKit.describeField),
-                removedFields: d.removed,
-                changedFields: d.changed,
-                newButtons: d.newButtons.map(FormKit.describeButton),
-                changedButtons: d.changedButtons,
-                invalidFields: invalid,
-                blockedProgress: FormKit.blockedProgress(after, { exclude: usedButtons }),
-            };
-            // Suggestion popups the autocomplete handler saw, for the log.
-            log('observed', { turn: turnLabel, ...observed, url: location.href });
-            for (const f of invalid) markOverlay(f.ref, 'nomatch');
-            prevSnap = after;
-            snap = after;
-            targets = snap.fields.filter(fillableKinds);
-            lastResults = results;
-            lastObserved = observed;
-            return { results, observed, after };
-        };
-
-        function f2label(ref) {
-            const f = FormKit.fieldByRef(ref);
-            return f ? (f.label || f.text || f.placeholder || f.name || ref) : ref;
-        }
-
-        function countFilled() {
-            let n = 0;
-            for (const f of snap.fields) if (fillableKinds(f) && !isEmptyValue(f.value) && !f.invalid) n++;
-            return n;
-        }
-
-        // ---- the page's own verdict -------------------------------------
-        //
-        // No event simulation can be proven complete: the browser reserves
-        // default actions for trusted events, and a page can always want
-        // something we did not know to give it. So the loop does not trust its
-        // own view of "filled"; it reads the page's verdict, and the clearest
-        // verdict a form gives is whether its Continue/submit button is
-        // pressable. Every required field filled, nothing flagged invalid, and
-        // the button still greyed out means something never reached the page.
-        function gateStuck() {
-            if (FormKit.pageMoved(snap).moved) return null;    // nothing to recover on a page that left
-            const gate = FormKit.progressGate(snap, { exclude: usedButtons });
-            if (!gate || !gate.disabled) return null;
-            // The page has a better reason to refuse; leave it to the model.
-            if (targets.some(f => f.required && isEmptyValue(f.value))) return null;
-            if (targets.some(f => f.invalid)) return null;
-            return gate;
-        }
-
-        // The two things a person does when a form ignores what was filled:
-        // click into the field and out again (so a blur-only validator runs),
-        // then delete the last character and type it back. Both leave the
-        // value exactly as it was.
-        async function recoverGate(gate, turnLabel) {
-            const refs = Array.from(mappingsToRemember.keys()).filter(ref => {
-                const f = FormKit.fieldByRef(ref);
-                return f && fillableKinds(f) && !isEmptyValue(f.value) &&
-                       f.kind !== 'checkbox' && f.kind !== 'switch' && f.kind !== 'radio-group';
-            });
-            const tried = [];
-            if (!refs.length) return { recovered: false, tried };
-
-            for (const op of ['commit', 'retype']) {
-                if (isCancelled()) throw new Error('Form filling stopped by user.');
-                progress(countFilled(), `"${gate.text}" is still disabled; re-entering ${refs.length} field(s)...`);
-                const results = await FormKit.execute(refs.map(ref => ({ ref, op })), { isCancelled });
-                tried.push(op);
-                await waitForDomSettle(350, 2500);
-                const after = FormKit.snapshot();
-                attachSuggestions(after.fields);
-                prevSnap = after;
-                snap = after;
-                targets = snap.fields.filter(fillableKinds);
-                const now = FormKit.progressGate(snap, { exclude: usedButtons });
-                log('recovery', { turn: turnLabel, op, refs, results, gate: now });
-                if (!now || !now.disabled) return { recovered: true, tried, gate: now };
-            }
-            return { recovered: false, tried };
-        }
-
-        // Set when recovery could not unblock the page, so the next model turn
-        // is told about it. Consumed once.
-        let gateNote = '';
-        let gateHandled = false;
-
-        async function checkGate(turnLabel) {
-            if (gateHandled) return true;
-            const gate = gateStuck();
-            if (!gate) return true;
-            gateHandled = true;
-            const rec = await recoverGate(gate, turnLabel);
-            if (rec.recovered) {
-                details.recoveredGate = { ref: gate.ref, text: gate.text, by: rec.tried[rec.tried.length - 1] };
-                return true;
-            }
-            details.blockedProgress = FormKit.blockedProgress(snap, { exclude: usedButtons });
-            gateNote = `\n\nIMPORTANT: the page still keeps its "${gate.text}" button (${gate.ref}, kind ${gate.kind}) disabled, although every required field has a value and nothing is flagged invalid. The extension already re-entered and re-committed the fields it filled (${rec.tried.join(' then ') || 'nothing to re-enter'}) with no effect. The page is waiting for something else: a field that is not filled or that you skipped, a checkbox that must be ticked, a choice that never registered, or a value it silently rejected. Look at the whole field list again and act on it. Only if nothing is left, set done=true and tell the user in the summary what to check.`;
-            return false;
-        }
+        const details = { summary: '', needsUserInput: [], stillInvalid: [], emptyRequired: [], looks: 0, llmCalls: 0 };
 
         try {
-            // ---- memory fast path: everything empty is covered by memory
-            // Unchecked boxes are a valid state, not a gap, so they do not
-            // count against memory coverage (memory may still set them).
-            const emptyTargets = targets.filter(f => isEmptyValue(f.value) && f.kind !== 'checkbox' && f.kind !== 'switch');
-            const coveredByMemory = emptyTargets.filter(f => memSug.has(f.ref));
-            // "Required and still empty" is the normal state of a fresh form,
-            // not a reason to distrust memory: it is exactly what memory is
-            // about to fill. Only a real rejection (a value the page refused)
-            // sends us to the model.
-            const realInvalid = f => f.invalid && !(f.required && isEmptyValue(f.value));
-            if (emptyTargets.length > 0 && coveredByMemory.length === emptyTargets.length && !targets.some(realInvalid)) {
-                progress(0, `Applying remembered mapping for this site (${coveredByMemory.length} field(s))...`);
-                const actions = coveredByMemory.map(f => {
-                    const s = memSug.get(f.ref);
-                    const op = FormKit.normalizeOp('fill', f);
-                    return { ref: f.ref, op, value: s.value, source: s.key };
-                });
-                const { results, observed } = await executeBatch(actions, 'memory');
-                details.memoryApplied = results.filter(r => r.ok && r.accepted !== false).length;
-                const allGood = results.every(r => r.ok && r.accepted !== false && !(r.validation && r.validation.invalid)) &&
-                                observed.invalidFields.length === 0 && observed.newFields.length === 0;
-                // Even a clean memory fill only counts if the page agrees; if
-                // it does not, fall through to the model with the reason.
-                if (allGood && await checkGate('memory')) {
-                    details.summary = `Filled ${details.memoryApplied} field(s) from memory of a previous visit; no model call needed.`;
-                    return await finish('success');
-                }
-                details.summary = '';
-            }
-
-            // ---- model loop
             let jsonMode = ApiUtils.providerOf(config) === 'ollama-generate';
-            messages.push({ role: 'system', content: systemPrompt(profiles, customPrompt, jsonMode), cache: true });
-            let firstUser = describeSnapshot(snap);
-            if (lastResults.length) {
-                firstUser += `\n\nThe extension already applied a remembered mapping. RESULTS:\n${JSON.stringify(lastResults.map(compactResult))}\nOBSERVED:\n${JSON.stringify(lastObserved)}\nFix what is wrong and fill what is missing.`;
-            }
-            if (gateNote) { firstUser += gateNote; gateNote = ''; }
-            firstUser += `\n\nFill this form now by calling ${TOOL.name}.`;
-            if (screenshotForModel) {
-                messages.push({ role: 'user', content: [{ type: 'text', text: firstUser + '\nA screenshot of the visible part of the page is attached; field boxes in the snapshot are viewport coordinates.' }, { type: 'image_url', image_url: { url: screenshotForModel } }] });
-            } else {
-                messages.push({ role: 'user', content: firstUser });
-            }
+            const messages = [{ role: 'system', content: systemPrompt(profiles, customPrompt, jsonMode), cache: true }];
+            const first = pageText(view) + `\n\nFill this form now by calling ${TOOL.name}.`;
+            messages.push(screenshotForModel
+                ? { role: 'user', content: [{ type: 'text', text: first + '\nA screenshot of the visible part of the page is attached.' }, { type: 'image_url', image_url: { url: screenshotForModel } }] }
+                : { role: 'user', content: first });
+            PageView.commit(view);
 
-            let lastActionsKey = null;
-            let repeats = 0;
-            for (let turn = 1; turn <= maxTurns; turn++) {
-                if (isCancelled()) throw new Error('Form filling stopped by user.');
-                details.turns = turn;
-                progress(countFilled(), `Turn ${turn}/${maxTurns}: asking ${config.model}...`);
+            let lastBatch = null, lastDigest = view.digest, unchanged = 0;
+            for (let look = 1; look <= maxLooks; look++) {
+                if (isCancelled()) throw new Error(STOPPED);
+                details.looks = look;
+                progress(`Look ${look}: asking ${config.model}...`);
                 // ff:logs:start
-                if (logOn) log('llmRequest', { turn, messages: FillLogger.slim(messages, 20000), tools: jsonMode ? null : [TOOL.name] });
+                if (logging) log('llmRequest', { look, messages: FillLogger.slim(messages, 20000), tools: jsonMode ? null : [TOOL.name] });
                 // ff:logs:end
 
+                const ask = json => llm(messages, { tools: json ? undefined : [TOOL], toolChoice: json ? undefined : TOOL.name, signal: me.abort.signal, config, jsonMode: json });
                 let resp;
+                details.llmCalls++;
                 try {
-                    details.llmCalls++;
-                    resp = await llm(messages, { tools: jsonMode ? undefined : [TOOL], toolChoice: jsonMode ? undefined : TOOL.name, signal: abort.signal, config, jsonMode });
+                    resp = await ask(jsonMode);
                 } catch (e) {
-                    if (e && e.message === 'Form filling stopped by user.') throw e;
-                    // Endpoint without tool support: retry once in JSON mode.
-                    if (!jsonMode && /tool|function/i.test(String(e && e.message)) && /400|not support|invalid/i.test(String(e && e.message))) {
-                        jsonMode = true;
-                        messages[0] = { role: 'system', content: systemPrompt(profiles, customPrompt, true), cache: true };
-                        log('llmError', { turn, error: String(e && e.message), retryJsonMode: true });
-                        details.llmCalls++;
-                        resp = await llm(messages, { signal: abort.signal, config, jsonMode: true });
-                    } else {
-                        throw e;
-                    }
+                    const text = String(e && e.message);
+                    // An endpoint without tool support: once more, asking for plain JSON.
+                    if (jsonMode || text === STOPPED || !(/tool|function/i.test(text) && /400|not support|invalid/i.test(text))) throw e;
+                    jsonMode = true;
+                    messages[0] = { role: 'system', content: systemPrompt(profiles, customPrompt, true), cache: true };
+                    log('llmError', { look, error: text, retryJsonMode: true });
+                    details.llmCalls++;
+                    resp = await ask(true);
                 }
-                if (isCancelled()) throw new Error('Form filling stopped by user.');
-                log('llmResponse', { turn, text: resp.text, toolCalls: resp.toolCalls, usage: resp.usage, latencyMs: resp.latencyMs, model: resp.model, provider: resp.provider });
+                if (isCancelled()) throw new Error(STOPPED);
+                log('llmResponse', { look, text: resp.text, toolCalls: resp.toolCalls, usage: resp.usage, latencyMs: resp.latencyMs, model: resp.model, provider: resp.provider });
 
-                const parsed = planFromResponse(resp);
-                if (!parsed) {
-                    log('llmError', { turn, error: 'unparseable response', text: (resp.text || '').slice(0, 1000) });
-                    if (turn === 1) throw new Error('The model did not return a usable form_actions call. Response: ' + (resp.text || '').slice(0, 200));
+                const plan = planFrom(resp);
+                if (!plan) {
+                    log('llmError', { look, error: 'unparseable response', text: (resp.text || '').slice(0, 1000) });
+                    if (look === 1) throw new Error('The model did not return a usable form_actions call. Response: ' + (resp.text || '').slice(0, 200));
                     break;
                 }
-                const { plan, call } = parsed;
-                for (const s of plan.skipped) {
-                    const label = f2label(s.ref);
-                    if (s.needs_user_input) {
-                        if (!details.needsUserInput.some(x => x.ref === s.ref)) details.needsUserInput.push({ ref: s.ref, label, reason: s.reason });
-                    } else if (!details.skipped.some(x => x.ref === s.ref)) {
-                        details.skipped.push({ ref: s.ref, label, reason: s.reason });
-                    }
-                    markOverlay(s.ref, 'nomatch');
+                for (const n of plan.needsUser) {
+                    const el = n.ref !== undefined && n.ref !== null ? PageView.resolve(n.ref) : null;
+                    const label = n.what || (el ? PageView.label(el) : String(n.ref));
+                    if (!details.needsUserInput.some(x => x.label === label)) details.needsUserInput.push({ ref: n.ref, label, reason: n.reason || '' });
+                    if (el) OverlayUtils.setStatus(el, 'failed');
                 }
                 if (plan.summary) details.summary = plan.summary;
+                if (plan.actions.length === 0) break;
 
-                // Guard: identical batch twice in a row means the model is stuck.
-                const key = actionsKey(plan.actions);
-                if (plan.actions.length && key === lastActionsKey) {
-                    repeats++;
-                    if (repeats >= 1) { log('loopGuard', { turn, reason: 'identical action batch repeated' }); break; }
-                }
-                lastActionsKey = key;
+                // The same batch twice in a row means the model is stuck.
+                const batch = JSON.stringify(plan.actions.map(a => [a.op, a.ref, a.value]));
+                if (batch === lastBatch) { log('loopGuard', { look, reason: 'identical action batch repeated' }); break; }
+                lastBatch = batch;
 
-                if (plan.actions.length === 0) {
-                    break; // done, or nothing more it can do
-                }
-
-                // Refuse submit-kind buttons regardless of what the model says.
-                const safeActions = [];
-                const refused = [];
-                for (const a of plan.actions) {
-                    const b = FormKit.fieldByRef(a.ref);
-                    if (b && b.kind === 'submit' && b.text !== undefined) { refused.push({ ref: a.ref, error: 'refused: submit-type button' }); continue; }
-                    safeActions.push(a);
-                }
-                const { results, observed, moved } = await executeBatch(safeActions, turn);
-                const stillInvalid = observed.invalidFields.filter(f => safeActions.some(a => a.ref === f.ref) || plan.actions.some(a => a.ref === f.ref));
-                const anyRejected = results.some(r => !r.ok || r.accepted === false || (r.validation && r.validation.invalid));
-                let finished = plan.done && !anyRejected && observed.newFields.length === 0 && stillInvalid.length === 0;
-                // The model thinks it is done; ask the page whether it agrees.
-                if (finished) finished = await checkGate(turn);
-                // A page that moved on with nothing left to fill is done too.
-                if (moved && targets.length === 0) finished = true;
-
-                // Feed results back.
-                const feedback = {
-                    results: results.map(compactResult).concat(refused),
-                    observed,
-                    state: {
-                        fieldsWithValue: countFilled(),
-                        fillable: targets.length,
-                        invalid: observed.invalidFields.length,
-                        emptyRequired: targets.filter(f => f.required && isEmptyValue(f.value)).map(f => ({ ref: f.ref, label: f.label })),
-                        progressGate: FormKit.progressGate(snap, { exclude: usedButtons }),
+                log('actions', { look, actions: plan.actions });
+                stepsKnown = stepsDone + plan.actions.length + 1;
+                const exec = await Hands.run(plan.actions, {
+                    isCancelled,
+                    onBefore: (a, el) => { if (el) OverlayUtils.pulse(el, 600); },
+                    onAfter: (a, el, r) => {
+                        stepsDone++;
+                        if (r.ok && el && (r.op === 'choose' || r.op === 'check' || (r.op === 'type' && r.value !== ''))) filled.add(PageView.parseRef(r.ref));
+                        if (el && r.op !== 'click') OverlayUtils.setStatus(el, r.ok ? 'filled' : 'failed');
+                        progress(`${r.op} ${r.what ? '"' + String(r.what).slice(0, 40) + '"' : ''}...`);
                     },
-                };
-                let feedbackText;
-                if (moved) {
-                    feedbackText = `PAGE CHANGED before your actions ran (${moved.reason}${moved.to ? ': now ' + moved.to : ''}); none of them were executed and their refs are gone.\n\n${describeSnapshot(snap)}\n\nSTATE: ${JSON.stringify(feedback.state)}`;
-                    lastActionsKey = null;
-                } else {
-                    feedbackText = `RESULTS:\n${JSON.stringify(feedback.results)}\nOBSERVED after the actions:\n${JSON.stringify(feedback.observed)}\nSTATE: ${JSON.stringify(feedback.state)}`;
-                }
-                if (gateNote) { feedbackText += gateNote; gateNote = ''; }
-                if (finished || turn === maxTurns) {
-                    // No further model call; record for the log only.
-                    log('feedback', { turn, feedback, final: true });
-                    break;
-                }
-                feedbackText += moved
-                    ? `\n\nFill this page now by calling ${TOOL.name} with refs from the snapshot above, or set done=true with no actions if nothing on it belongs to the profile.`
-                    : `\n\nFix rejected/invalid fields (use a different format or a listed option; do not repeat a rejected value), fill any new fields, or set done=true with no actions if the form is complete as far as the profile allows.`;
-                messages.push(resp.assistantMessage);
-                if (call && call.id && !jsonMode) {
-                    messages.push({ role: 'tool', tool_call_id: call.id, content: feedbackText });
-                } else {
-                    messages.push({ role: 'user', content: feedbackText });
-                }
-            }
-            return await finish('success');
-        } catch (error) {
-            console.error('[FillAgent] Error:', error);
-            if (overlays) OverlayUtils.clearAll();
-            log('error', { error: String(error && error.message), stack: error && error.stack });
-            if (error && error.message === 'Form filling stopped by user.') {
-                notify({ action: 'fillFormStopped', filled: countFilled(), processed: countFilled(), total, message: 'Form filling stopped by user.' });
-                window.stopFilling = false;
-            } else {
-                notify({ action: 'fillFormError', error: String(error && error.message ? error.message : error) });
-            }
-            // ff:logs:start
-            if (logOn) FillLogger.end({ status: 'error', error: String(error && error.message), durationMs: Date.now() - t0 });
-            // ff:logs:end
-            return { status: 'error', message: String(error && error.message) };
-        } finally {
-            if (window.abortController === abort) window.abortController = null;
-        }
-
-        async function finish(status) {
-            const finalSnap = FormKit.snapshot();
-            attachSuggestions(finalSnap.fields);
-            snap = finalSnap;
-            targets = snap.fields.filter(fillableKinds);
-            // Fields can appear mid-fill (wizard steps), so report against the
-            // final field count, not the count the fill started with.
-            const finalTotal = Math.max(total, targets.length);
-            filledOk = Math.min(countFilled(), finalTotal);
-            details.stillInvalid = targets.filter(f => f.invalid).map(f => ({ ref: f.ref, label: f.label, value: f.value, error: f.error }));
-            details.emptyRequired = targets.filter(f => f.required && isEmptyValue(f.value)).map(f => ({ ref: f.ref, label: f.label }));
-            details.durationMs = Date.now() - t0;
-            const finalGate = FormKit.progressGate(snap, { exclude: usedButtons });
-            details.progressGate = finalGate;
-            details.blockedProgress = FormKit.blockedProgress(snap, { exclude: usedButtons }).map(b => ({ ...b, label: b.text, reason: 'the page still keeps this button disabled' }));
-
-            try {
-                const mappings = Array.from(mappingsToRemember.values()).filter(m => {
-                    const f = FormKit.fieldByRef(m.field.ref);
-                    return f && !f.invalid && !isEmptyValue(f.value);
                 });
-                if (mappings.length) await SiteMemory.remember(location.href, mappings, pHash);
-            } catch (e) { console.warn('[FillAgent] memory update failed', e); }
+                log('results', { look, results: exec.results, stopped: exec.stopped, notExecuted: exec.notExecuted });
 
-            try { simulateMouseClick(document.body, true); } catch (_) {}
+                // Look again. A batch that ran to its end leaves the last field
+                // first, as a person moving on does, so what validates on
+                // leaving has had its say. A batch cut short is looked at as
+                // it stands (an open list must stay open).
+                await Hands.atRest(250, 2000);
+                if (!exec.stopped && Hands.letGo()) await Hands.atRest(200, 1200);
+                view = PageView.capture();
+                log('view', { look, text: view.text, hasNew: view.hasNew, url: location.href });
 
-            log('finalState', { snapshot: finalSnap, details, progressGate: finalGate, primaryButtonDisabled: !!(finalGate && finalGate.disabled) });
-            if (window === window.top && logOn) {
-                const raw = await FormKit.captureScreenshot();
-                if (raw) log('screenshot', { turn: 'final', image: await FormKit.shrinkImage(raw, 1024, 0.5) });
+                // The model may stop without another look only when every
+                // action did to the letter what was meant, nothing new showed
+                // up, and no field changed that it did not touch itself (a
+                // value the page filled in or wiped as a side effect).
+                const acted = new Set(exec.results.map(r => PageView.parseRef(r.ref)));
+                const sideEffects = view.fields.some(f => f.changed && !acted.has(f.ref));
+                const clean = !exec.stopped && exec.notExecuted.length === 0 && exec.results.every(asMeant);
+                if (plan.done && clean && !view.hasNew && !sideEffects) break;
+                if (look === maxLooks) break;
+                // Two batches in a row that left the page looking the same:
+                // nothing more is going to happen here.
+                unchanged = view.digest === lastDigest ? unchanged + 1 : 0;
+                lastDigest = view.digest;
+                if (unchanged >= 2) { log('loopGuard', { look, reason: 'the page did not change in two batches' }); break; }
+
+                const feedback = [resultsText(exec), '', 'THE PAGE NOW:', pageText(view), '',
+                    'Carry on: fix what went wrong, act on what is new, fill what is still empty. If nothing is left for you to do, answer with no actions and done=true.'].join('\n');
+                messages.push(resp.assistantMessage);
+                messages.push(plan.call && plan.call.id && !jsonMode
+                    ? { role: 'tool', tool_call_id: plan.call.id, content: feedback }
+                    : { role: 'user', content: feedback });
+                PageView.commit(view);
             }
+
+            // ---- done: what the page said at the last look goes to the panel
+            if (Hands.letGo()) await Hands.atRest(150, 800);
+            const label = f => f.name || f.placeholder || f.hint || `[${f.ref}]`;
+            details.stillInvalid = fillable(view).filter(f => f.invalid).map(f => ({ ref: f.ref, label: label(f) }));
+            details.emptyRequired = fillable(view).filter(f => f.required && !isFilled(f)).map(f => ({ ref: f.ref, label: label(f) }));
+            details.durationMs = Date.now() - t0;
+            details.input = input;
+            if (input !== 'synthetic') details.inputStats = { ...TrustedInput.stats };
+
             // ff:logs:start
-            if (logOn) FillLogger.end({ status, filled: filledOk, total, details, durationMs: details.durationMs });
+            if (logging) {
+                log('finalState', { values: FillLogger.values(), details });
+                const shot = window === window.top ? await screenshot() : null;
+                if (shot) log('screenshot', { look: 'final', image: await shrinkImage(shot, 1024, 0.5) });
+                FillLogger.end({ status: 'success', filled: filled.size, details, durationMs: details.durationMs });
+            }
             // ff:logs:end
 
-            const parts = [`Filled ${filledOk} of ${finalTotal} field(s) in ${(details.durationMs / 1000).toFixed(1)}s (${details.llmCalls} model call${details.llmCalls === 1 ? '' : 's'}).`];
+            const parts = [`Filled ${filled.size} field(s) in ${(details.durationMs / 1000).toFixed(1)}s (${details.llmCalls} model call${details.llmCalls === 1 ? '' : 's'}).`];
             if (details.summary) parts.push(details.summary);
-            if (details.needsUserInput.length) parts.push('Needs your input: ' + details.needsUserInput.map(x => x.label || x.ref).join(', ') + '.');
-            if (details.stillInvalid.length) parts.push('Still flagged by the page: ' + details.stillInvalid.map(x => `${x.label || x.ref}${x.error ? ' (' + x.error + ')' : ''}`).join('; ') + '.');
-            if (details.recoveredGate) parts.push(`"${details.recoveredGate.text}" only became clickable after re-entering the fields (${details.recoveredGate.by}).`);
-            if (details.blockedProgress.length) parts.push('The page still keeps ' + details.blockedProgress.map(b => `"${b.text}"`).join(', ') + ' disabled, so it is waiting for something more.');
+            if (details.needsUserInput.length) parts.push('Needs your input: ' + details.needsUserInput.map(x => x.label).join(', ') + '.');
+            if (details.stillInvalid.length) parts.push('Still flagged by the page: ' + details.stillInvalid.map(x => x.label).join('; ') + '.');
             const message = parts.join(' ');
-            try { updateFillProgress(finalTotal, filledOk, finalTotal, message, sessionId); } catch (_) {}
-            notify({ action: 'fillFormComplete', filled: filledOk, total: finalTotal, message, details });
-            if (overlays) setTimeout(() => OverlayUtils.clearAll(), 2500);
-            return { status, message, filled: filledOk, total: finalTotal, details };
+            notify({ action: 'fillFormComplete', filled: filled.size, total: stepsDone, message, details });
+            setTimeout(() => OverlayUtils.clearAll(), 2500);
+            return { status: 'success', message, filled: filled.size, details };
+        } catch (error) {
+            const text = String((error && error.message) || error);
+            OverlayUtils.clearAll();
+            if (text !== STOPPED) console.error('[FillAgent]', error);
+            log('error', { error: text, stack: error && error.stack });
+            if (text === STOPPED) notify({ action: 'fillFormStopped', filled: filled.size, processed: stepsDone, total: stepsKnown, message: STOPPED });
+            else notify({ action: 'fillFormError', error: text });
+            // ff:logs:start
+            if (logging) FillLogger.end({ status: 'error', error: text, durationMs: Date.now() - t0 });
+            // ff:logs:end
+            return { status: 'error', message: text };
+        } finally {
+            if (current === me) current = null;
         }
     }
 
-    return { run, TOOL, RULES, describeSnapshot, planFromResponse };
+    return { run, stop, sessionId: () => (current ? current.sessionId : null), TOOL, RULES };
 })();
 
 if (typeof window !== 'undefined') window.FillAgent = FillAgent;

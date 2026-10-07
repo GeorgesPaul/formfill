@@ -22,11 +22,12 @@
   like, what the model was asked, and what was actually submitted. That is a
   development tool for improving the filling, not something to ship.
 
-  store strips it from the package: fillLogger.js and pageHook.js are left out,
-  every block between "ff:logs:start" and "ff:logs:end" markers is removed from
-  the remaining files, and the manifest loses the page-world content script and
-  the unlimitedStorage permission. The published extension therefore cannot
-  record page content, submissions or request bodies at all.
+  store strips it from the package: fillLogger.js, pageHook.js and selftest.js
+  (the bench hook) are left out, every block between "ff:logs:start" and
+  "ff:logs:end" markers is removed from the remaining files, and the manifest
+  loses the page-world content script and the unlimitedStorage permission. The
+  published extension therefore cannot record page content, submissions or
+  request bodies at all.
 #>
 [CmdletBinding()]
 param(
@@ -45,12 +46,13 @@ $distDir = Join-Path $root 'dist'
 # Files that belong to one browser only.
 $targetOnlyFiles = @{
   chrome  = @('serviceWorker.js')   # MV3 entry point; Firefox uses background.scripts
-  firefox = @()
+  firefox = @('experiments')        # WebExtension Experiment: trusted input (Gecko only)
 }
 
-# The fill logs, dropped from store packages.
-$logFiles = @('fillLogger.js', 'pageHook.js')
-$logMarked = @('popup.html', 'popup.js', 'background.js', 'content.js', 'contextMenu.js', 'fillAgent.js', 'README.md')
+# Development-only files, dropped from store packages: the fill logs and the
+# bench hook.
+$logFiles = @('fillLogger.js', 'pageHook.js', 'selftest.js')
+$logMarked = @('popup.html', 'popup.js', 'background.js', 'fillAgent.js', 'README.md')
 
 # Remove every "ff:logs:start" .. "ff:logs:end" block, markers and all.
 function Remove-LogBlocks([string]$path) {
@@ -75,7 +77,11 @@ function Build-Target([string]$name) {
   $manifest = Join-Path $root "manifests\manifest.$name.json"
   if (-not (Test-Path -LiteralPath $manifest)) { throw "Manifest not found: $manifest" }
 
-  $out = Join-Path $distDir $name
+  # Assemble in a staging folder, then mirror it into dist\<target>. The final
+  # folder is never deleted, so a running `web-ext run` keeps watching it and
+  # sees only the files that actually changed.
+  $final = Join-Path $distDir $name
+  $out = Join-Path $distDir ".stage\$name"
   if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
   New-Item -ItemType Directory -Path $out -Force | Out-Null
 
@@ -89,11 +95,21 @@ function Build-Target([string]$name) {
     if ($other -eq $name) { continue }
     foreach ($f in $targetOnlyFiles[$other]) {
       $p = Join-Path $out $f
-      if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
+      if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
     }
   }
 
   if ($Channel -eq 'store') {
+    # Experiments are privileged code that AMO does not sign; the store build
+    # runs without trusted input and falls back to synthetic events.
+    $exp = Join-Path $out 'experiments'
+    if (Test-Path -LiteralPath $exp) { Remove-Item -LiteralPath $exp -Recurse -Force }
+    $mp = Join-Path $out 'manifest.json'
+    $m = Get-Content -Raw -LiteralPath $mp | ConvertFrom-Json
+    if ($m.PSObject.Properties['experiment_apis']) {
+      $m.PSObject.Properties.Remove('experiment_apis')
+      [System.IO.File]::WriteAllText($mp, ($m | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+    }
     foreach ($f in $logFiles) {
       $p = Join-Path $out $f
       if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
@@ -103,10 +119,19 @@ function Build-Target([string]$name) {
 
     # Nothing that records may survive in a store package.
     $leftovers = Get-ChildItem -LiteralPath $out -Recurse -File -Include *.js, *.html, *.json |
-      Select-String -Pattern 'FillLogger|ffLog|ff-record|ff-net-capture|pageHook' |
+      Select-String -Pattern 'FillLogger|ffLog|ff-record|ff-net-capture|pageHook|ff-selftest' |
       Select-Object -ExpandProperty Path -Unique
     if ($leftovers) { throw ("Log code left in the store package: " + ($leftovers -join ', ')) }
   }
+
+  # /MIR copies new or changed files and deletes stale ones; codes 0-7 are success.
+  & robocopy $out $final /MIR /R:2 /W:1 /NJH /NJS /NFL /NDL /NP | Out-Null
+  if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE) mirroring $out -> $final" }
+  $global:LASTEXITCODE = 0
+  Remove-Item -LiteralPath $out -Recurse -Force
+  $stageRoot = Split-Path -Parent $out
+  if (-not (Get-ChildItem -LiteralPath $stageRoot -Force)) { Remove-Item -LiteralPath $stageRoot -Force }
+  $out = $final
 
   $version = (Get-Content -Raw -LiteralPath (Join-Path $out 'manifest.json') | ConvertFrom-Json).version
   Write-Host ("Built {0} v{1} ({2}) -> {3}" -f $name, $version, $Channel, $out) -ForegroundColor Green

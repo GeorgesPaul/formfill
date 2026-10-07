@@ -15,8 +15,33 @@
 
     const ApiUtils = {};
 
+    // Retired model slugs and what replaces them. Saved configs are rewritten
+    // once; a config still named after the old model gets the new name too.
+    const MODEL_UPGRADES = {
+        'anthropic/claude-opus-5': { model: 'anthropic/claude-opus-5.5', oldName: 'Claude Opus 5', newName: 'Claude Opus 5.5' },
+    };
+
+    ApiUtils.migrateLlmConfigs = async function() {
+        const data = await browser.storage.local.get(['llmConfigurations', 'currentLlmConfig']);
+        const configs = data.llmConfigurations;
+        if (!configs) return;
+        let current = data.currentLlmConfig;
+        let changed = false;
+        const out = {};
+        for (const [name, cfg] of Object.entries(configs)) {
+            const up = MODEL_UPGRADES[cfg && cfg.model];
+            if (!up) { out[name] = cfg; continue; }
+            const newName = (name === up.oldName && !configs[up.newName]) ? up.newName : name;
+            out[newName] = { ...cfg, model: up.model };
+            if (current === name) current = newName;
+            changed = true;
+        }
+        if (changed) await browser.storage.local.set({ llmConfigurations: out, currentLlmConfig: current });
+    };
+
     ApiUtils.getLlmConfig = async function() {
         try {
+            await ApiUtils.migrateLlmConfigs();
             const data = await browser.storage.local.get(['llmConfigurations', 'currentLlmConfig']);
             if (data.currentLlmConfig && data.llmConfigurations && data.llmConfigurations[data.currentLlmConfig]) {
                 return { ...ApiUtils.getDefaultLlmConfig(), ...data.llmConfigurations[data.currentLlmConfig] };
@@ -30,10 +55,10 @@
     ApiUtils.getDefaultLlmConfig = function() {
         return {
             apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
-            model: 'anthropic/claude-opus-5',
+            model: 'anthropic/claude-opus-5.5',
             apiKey: '',
             reasoningEffort: 'low',   // none | low | medium | high (OpenRouter / OpenAI reasoning models)
-            maxTurns: 4,              // agent loop budget per fill
+            maxLooks: 12,             // model calls per fill, at most (fillAgent.js: one per look at the page)
             timeoutMs: 180000,
         };
     };
@@ -266,7 +291,8 @@
             response = await fetch(url, { method: 'POST', headers: headersFor(config), body: JSON.stringify(body), signal });
         } catch (error) {
             if (error && error.name === 'AbortError') {
-                if (window.stopFilling) throw new Error('Form filling stopped by user.');
+                // The caller's own signal fired: the user pressed Stop.
+                if (opts.signal && opts.signal.aborted) throw new Error('Form filling stopped by user.');
                 throw new Error((signal.reason && signal.reason.message) || 'LLM request aborted');
             }
             throw new Error('Network error talking to the LLM API: ' + (error && error.message));

@@ -32,8 +32,8 @@
 //
 // What still cannot be reproduced: default actions the browser reserves for
 // trusted events (form submission from Enter, native autofill UI, IME
-// composition, clipboard access). Those are the loop's problem, not this
-// module's: see fillAgent's progress-gate check.
+// composition, clipboard access). Real input (trustedInput.js) has none of
+// these limits; this module is what hands.js falls back to without it.
 const EventSim = (function () {
     'use strict';
 

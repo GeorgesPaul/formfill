@@ -41,6 +41,7 @@ function hidePersistentMessage() {
 }
 
 async function loadConfigurations() {
+  await ApiUtils.migrateLlmConfigs();
   const data = await browser.storage.local.get(['llmConfigurations', 'currentLlmConfig']);
   let configs = data.llmConfigurations || {};
   let currentConfig = data.currentLlmConfig;
@@ -57,12 +58,12 @@ async function loadConfigurations() {
 
 function createDefaultConfig() {
   return {
-    'Claude Opus 5': {
+    'Claude Opus 5.5': {
       apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
-      model: 'anthropic/claude-opus-5',
+      model: 'anthropic/claude-opus-5.5',
       apiKey: '',
       reasoningEffort: 'low',
-      maxTurns: 4
+      maxLooks: 12
     }
   };
 }
@@ -167,14 +168,14 @@ function showConfigForm(configName = '') {
     populateFormWithConfig(configName);
   } else {
     form.reset();
-    // Default new-config preset: Claude Opus 5 via OpenRouter (best reasoning
+    // Default new-config preset: Claude Opus 5.5 via OpenRouter (best reasoning
     // for the vision-fill task; swap with a preset button if you want another).
-    document.getElementById('configName').value = 'Claude Opus 5';
+    document.getElementById('configName').value = 'Claude Opus 5.5';
     document.getElementById('apiUrl').value = 'https://openrouter.ai/api/v1/chat/completions';
-    document.getElementById('model').value = 'anthropic/claude-opus-5';
+    document.getElementById('model').value = 'anthropic/claude-opus-5.5';
     document.getElementById('apiKey').value = '';
     document.getElementById('reasoningEffort').value = 'low';
-    document.getElementById('maxTurns').value = 4;
+    document.getElementById('maxLooks').value = 12;
   }
 }
 
@@ -186,7 +187,7 @@ async function populateFormWithConfig(configName) {
   document.getElementById('model').value = config.model;
   document.getElementById('apiKey').value = config.apiKey;
   document.getElementById('reasoningEffort').value = config.reasoningEffort || 'low';
-  document.getElementById('maxTurns').value = config.maxTurns || 4;
+  document.getElementById('maxLooks').value = config.maxLooks || 12;
 }
 
 async function saveConfiguration(event) {
@@ -201,7 +202,7 @@ async function saveConfiguration(event) {
     model: document.getElementById('model').value,
     apiKey: document.getElementById('apiKey').value,
     reasoningEffort: document.getElementById('reasoningEffort').value || 'low',
-    maxTurns: Math.max(1, Math.min(10, parseInt(document.getElementById('maxTurns').value, 10) || 4))
+    maxLooks: Math.max(2, Math.min(20, parseInt(document.getElementById('maxLooks').value, 10) || 12))
   };
   
   await saveConfigToStorage(configName, config);

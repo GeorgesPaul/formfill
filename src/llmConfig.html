@@ -15,14 +15,14 @@
       <p><b>OpenRouter</b> provides access to many models through a single API.
         Get a key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> and use
         <code>https://openrouter.ai/api/v1/chat/completions</code> as the API URL.</p>
-      <p>Filling runs as a short loop: the model receives the form's fields, answers with a batch of actions
-        (tool call), the extension executes them and reports back what the page did, and the model fixes or finishes.
-        <b>Turn budget</b> caps the number of model calls per fill (2 to 4 is typical). <b>Reasoning effort</b> applies to
+      <p>Filling runs as a loop: the model is shown the page as a person sees it, answers with a batch of actions
+        (tool call), the extension performs them and shows the page again, and the model fixes or finishes.
+        <b>Model calls per fill</b> caps that: one call fills a plain form, a form that changes while it is filled takes one more per change. <b>Reasoning effort</b> applies to
         OpenRouter (and OpenAI reasoning models); "low" is fine for most forms.</p>
-      <p>The optional screenshot checkbox on the main panel attaches one screenshot on the first turn; it needs a
+      <p>The optional screenshot checkbox on the main panel attaches one screenshot on the first look; it needs a
         vision-capable model. Recommended models (click a preset below to autofill):</p>
       <div id="visionPresets">
-        <button type="button" class="llm-config-button preset-btn" data-name="Claude Opus 5" data-model="anthropic/claude-opus-5">Claude Opus 5 (default, best reasoning)</button>
+        <button type="button" class="llm-config-button preset-btn" data-name="Claude Opus 5.5" data-model="anthropic/claude-opus-5.5">Claude Opus 5.5 (default, best reasoning)</button>
         <button type="button" class="llm-config-button preset-btn" data-name="Claude Sonnet 5" data-model="anthropic/claude-sonnet-5">Claude Sonnet 5 (fast, much cheaper)</button>
         <button type="button" class="llm-config-button preset-btn" data-name="GPT-5" data-model="openai/gpt-5">GPT-5</button>
         <button type="button" class="llm-config-button preset-btn" data-name="Qwen2.5-VL 72B" data-model="qwen/qwen-2.5-vl-72b-instruct">Qwen2.5-VL 72B (cheap, strong GUI grounding)</button>
@@ -60,8 +60,8 @@
             <option value="high">high</option>
           </select>
         </label>
-        <label for="maxTurns">Turn budget per fill (model calls):
-          <input type="number" id="maxTurns" min="1" max="10" value="4" style="width: 4em;">
+        <label for="maxLooks" title="The model is asked once per look at the page: once for a plain form, once more each time the page changes while it is filled (a list opens, fields appear).">Model calls per fill, at most:
+          <input type="number" id="maxLooks" min="2" max="20" value="12" style="width: 4em;">
         </label>
         <button type="submit" class="llm-config-button">Save</button>
         <button type="button" id="cancelEdit" class="llm-config-button">Cancel</button>

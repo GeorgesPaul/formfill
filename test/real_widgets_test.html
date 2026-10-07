@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>Real widgets bench</title>
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; max-width: 640px; margin: 32px auto; padding: 0 16px; }
+  .row { margin: 18px 0; }
+  .row > label, .lbl { display: block; font-weight: 600; margin-bottom: 6px; }
+  .plain { box-sizing: border-box; width: 100%; padding: 9px 10px; font: inherit; border: 1px solid #999; border-radius: 4px; }
+  #state { display: none; white-space: pre-wrap; font: 12px monospace; background: #f4f4f4; padding: 10px; margin-top: 24px; }
+  /* add ?state to the address to see what the page recorded */
+  .show-state #state { display: block; }
+  button.next { padding: 10px 18px; font: inherit; }
+</style>
+</head>
+<body>
+<script>if (/[?&]state(=|&|$)/.test(location.search)) document.documentElement.classList.add('show-state');</script>
+<!--
+  The widget libraries real sites use, unmodified, loaded from esm.sh:
+    - MUI X DatePicker (sectioned date field: three "spinbutton" spans, the
+      SNS24 login shape) and its calendar popup
+    - react-select (searchable, options rendered only while open)
+    - MUI Autocomplete (combobox with a filtered list)
+    - MUI Select (menu in a portal)
+  Nothing here is a clone: the point of this bench is to check that plain
+  human input (click, type, click the entry) operates them, with no
+  widget-specific code in the extension.
+
+  window.__state holds what each widget reported through its own onChange.
+  Drive with: node tools/floorp_rig.mjs --page test/real_widgets_test.html --scenario real
+-->
+<h2>Registo</h2>
+<p>Preencha os seus dados.</p>
+<div id="root">A carregar os componentes...</div>
+<div id="state"></div>
+
+<script type="module">
+  const D = '?deps=react@18.3.1,react-dom@18.3.1';
+  const [
+    { default: React }, { createRoot },
+    { LocalizationProvider }, { AdapterDayjs }, { DatePicker },
+    { default: ReactSelect },
+    { default: Autocomplete }, { default: TextField }, { default: MuiSelect }, { default: MenuItem },
+    { default: FormControl }, { default: InputLabel },
+  ] = await Promise.all([
+    import('https://esm.sh/react@18.3.1'),
+    import('https://esm.sh/react-dom@18.3.1/client'),
+    import('https://esm.sh/@mui/x-date-pickers@8/LocalizationProvider' + D),
+    import('https://esm.sh/@mui/x-date-pickers@8/AdapterDayjs' + D),
+    import('https://esm.sh/@mui/x-date-pickers@8/DatePicker' + D),
+    import('https://esm.sh/react-select@5' + D),
+    import('https://esm.sh/@mui/material@7/Autocomplete' + D),
+    import('https://esm.sh/@mui/material@7/TextField' + D),
+    import('https://esm.sh/@mui/material@7/Select' + D),
+    import('https://esm.sh/@mui/material@7/MenuItem' + D),
+    import('https://esm.sh/@mui/material@7/FormControl' + D),
+    import('https://esm.sh/@mui/material@7/InputLabel' + D),
+  ]);
+  const h = React.createElement;
+
+  const COUNTRIES = ['Alemanha', 'Bélgica', 'Brasil', 'Espanha', 'França', 'Itália', 'Países Baixos', 'Portugal', 'Reino Unido', 'Suíça'];
+  const NATIONALITIES = ['Alemã', 'Belga', 'Brasileira', 'Espanhola', 'Francesa', 'Italiana', 'Neerlandesa', 'Portuguesa', 'Britânica', 'Suíça'];
+  const DOCS = ['Cartão de Cidadão', 'Passaporte', 'Título de Residência'];
+
+  window.__state = { name: '', birth: null, country: null, nationality: null, doc: '', docNumber: '' };
+  window.__events = [];
+  for (const t of ['keydown', 'input', 'click']) {
+    document.addEventListener(t, e => window.__events.push({ type: t, trusted: e.isTrusted, key: e.key }), true);
+  }
+  const show = () => { document.getElementById('state').textContent = JSON.stringify(window.__state, null, 1); };
+
+  function App() {
+    const [s, setS] = React.useState(window.__state);
+    const set = (k, v) => setS(prev => { const n = { ...prev, [k]: v }; window.__state = n; setTimeout(show); return n; });
+    return h(LocalizationProvider, { dateAdapter: AdapterDayjs },
+      h('div', { className: 'row' },
+        h('label', { htmlFor: 'fullname' }, 'Nome completo*'),
+        h('input', { id: 'fullname', className: 'plain', value: s.name, onChange: e => set('name', e.target.value) })),
+      h('div', { className: 'row' },
+        h('span', { className: 'lbl' }, 'Data de nascimento*'),
+        h(DatePicker, {
+          format: 'DD-MM-YYYY',
+          value: s.birthValue || null,
+          onChange: v => { set('birthValue', v); set('birth', v && v.isValid() ? v.format('YYYY-MM-DD') : null); },
+          slotProps: { textField: { fullWidth: true, size: 'small' } },
+        })),
+      h('div', { className: 'row' },
+        h('span', { className: 'lbl', id: 'country-lbl' }, 'País de residência*'),
+        h(ReactSelect, {
+          'aria-labelledby': 'country-lbl', placeholder: 'Selecione...',
+          options: COUNTRIES.map(c => ({ value: c, label: c })),
+          value: s.country ? { value: s.country, label: s.country } : null,
+          onChange: o => set('country', o ? o.value : null),
+        })),
+      h('div', { className: 'row' },
+        h(Autocomplete, {
+          options: NATIONALITIES, value: s.nationality,
+          onChange: (_e, v) => set('nationality', v),
+          renderInput: params => h(TextField, { ...params, label: 'Nacionalidade', size: 'small' }),
+        })),
+      h('div', { className: 'row' },
+        h(FormControl, { fullWidth: true, size: 'small' },
+          h(InputLabel, { id: 'doc-lbl' }, 'Tipo de documento'),
+          h(MuiSelect, { labelId: 'doc-lbl', label: 'Tipo de documento', value: s.doc, onChange: e => set('doc', e.target.value) },
+            DOCS.map(d => h(MenuItem, { key: d, value: d }, d))))),
+      // A dependent field: only exists once a document type is chosen.
+      s.doc ? h('div', { className: 'row' },
+        h('label', { htmlFor: 'docnum' }, 'Número do documento (' + s.doc + ')*'),
+        h('input', { id: 'docnum', className: 'plain', value: s.docNumber, onChange: e => set('docNumber', e.target.value) })) : null,
+      h('div', { className: 'row' },
+        h('button', { className: 'next', type: 'button', disabled: !(s.name && s.birth && s.country) }, 'Continuar')));
+  }
+
+  const root = document.getElementById('root');
+  root.textContent = '';
+  createRoot(root).render(h(App));
+  show();
+  window.__ready = true;
+</script>
+</body>
+</html>

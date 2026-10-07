@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkout - Delivery details</title>
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; margin: 0; color: #222; }
+  header { background: #123; color: #fff; padding: 12px 24px; display: flex; gap: 24px; align-items: center; }
+  header a { color: #cde; }
+  main { max-width: 680px; margin: 24px auto 160px; padding: 0 16px; }
+  h2 { margin: 28px 0 10px; font-size: 18px; }
+  .row { display: flex; gap: 14px; margin: 12px 0; }
+  .col { flex: 1; min-width: 0; }
+  .col > label, .lbl { display: block; font-weight: 600; margin-bottom: 4px; }
+  input[type=text], input[type=tel], input[type=email], select { box-sizing: border-box; width: 100%; padding: 9px 10px; font: inherit; border: 1px solid #999; border-radius: 4px; }
+  .err { color: #b00020; font-size: 13px; min-height: 0; }
+  .hint { color: #666; font-size: 13px; }
+  /* floating-label style: the label comes after the input in the markup */
+  .fl { position: relative; margin: 14px 0; }
+  .fl input { padding-top: 18px; }
+  .fl label { position: absolute; left: 11px; top: 3px; font-size: 11px; color: #555; pointer-events: none; }
+  .dob { display: flex; gap: 8px; align-items: center; }
+  .dob input { width: 64px; text-align: center; }
+  .dob input.y { width: 90px; }
+  .sugg { position: absolute; left: 0; right: 0; top: 100%; z-index: 20; background: #fff; border: 1px solid #999; border-top: 0; box-shadow: 0 6px 16px rgba(0,0,0,.2); display: none; }
+  .sugg.open { display: block; }
+  .sugg div { padding: 8px 10px; }
+  .sugg div:hover { background: #eef; }
+  .ship { display: flex; gap: 12px; }
+  .card { flex: 1; border: 2px solid #bbb; border-radius: 8px; padding: 12px; }
+  .card.on { border-color: #06c; background: #f0f7ff; }
+  .card b { display: block; }
+  .actions { display: flex; gap: 12px; margin-top: 22px; }
+  button { padding: 10px 18px; font: inherit; border-radius: 4px; border: 1px solid #888; background: #eee; }
+  button.primary { background: #06c; color: #fff; border-color: #06c; }
+  button:disabled { opacity: .45; }
+  #cookie { position: fixed; left: 0; right: 0; bottom: 0; top: 30%; background: rgba(20,20,20,.96); color: #fff; padding: 28px 40px; z-index: 1000; }
+  #cookie button { margin-right: 10px; }
+  #state { display: none; white-space: pre-wrap; font: 12px monospace; background: #f4f4f4; padding: 10px; margin-top: 30px; }
+  /* add ?state to the address to see what the page recorded */
+  .show-state #state { display: block; }
+  footer { background: #eee; padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<script>if (/[?&]state(=|&|$)/.test(location.search)) document.documentElement.classList.add('show-state');</script>
+<!--
+  A form that keeps changing, built from ordinary patterns (no library):
+    - a cookie banner lying on top of the form until it is dismissed
+    - a date of birth in three boxes that pass the cursor on
+    - labels that come after their input in the markup (floating labels)
+    - a country choice that swaps the region list, the phone prefix and
+      whether a tax number field exists
+    - an address box whose suggestions must be picked (the pick fills
+      postcode and city)
+    - a phone field that only complains when it is left
+    - delivery options that are plain clickable cards
+    - a checkbox that reveals billing fields
+    - a required and an optional consent box
+    - "Save address" (sends data: the user's to press) and a "Continue"
+      that stays disabled until then
+
+  window.__state() reports what the page ended up with, and what was pressed.
+  Drive with: node tools/floorp_rig.mjs --page test/dynamic_form_test.html --brain <dir>
+-->
+<header><b>Shoply</b> <a href="/help">Help</a> <a href="/cart">Cart (1)</a> <input type="text" placeholder="Search products" aria-label="Search products" style="width:200px"></header>
+
+<main>
+  <h1>Delivery details</h1>
+  <p>Step 2 of 4. Fields marked * are required.</p>
+
+  <form id="f" novalidate>
+    <h2>Recipient</h2>
+    <div class="row">
+      <div class="col"><label for="fn">First name *</label><input type="text" id="fn"></div>
+      <div class="col"><label for="ln">Last name *</label><input type="text" id="ln"></div>
+    </div>
+    <div class="lbl">Date of birth *</div>
+    <div class="dob">
+      <input type="text" inputmode="numeric" maxlength="2" placeholder="DD" aria-label="Day" id="d">
+      <span>/</span>
+      <input type="text" inputmode="numeric" maxlength="2" placeholder="MM" aria-label="Month" id="m">
+      <span>/</span>
+      <input type="text" inputmode="numeric" maxlength="4" placeholder="YYYY" aria-label="Year" class="y" id="y">
+    </div>
+
+    <h2>Contact</h2>
+    <div class="fl"><input type="text" id="em"><label for="#em">Email address *</label></div>
+    <div class="row">
+      <div class="col" style="flex:0 0 110px"><label for="pre">Prefix</label><input type="text" id="pre" value="+351" readonly></div>
+      <div class="col"><label for="ph">Mobile number *</label><input type="tel" id="ph"><div class="err" id="phErr"></div></div>
+    </div>
+
+    <h2>Address</h2>
+    <div class="row">
+      <div class="col"><label for="co">Country *</label>
+        <select id="co"><option value="">Please choose</option><option value="PT">Portugal</option><option value="NL">Netherlands</option><option value="ES">Spain</option></select></div>
+      <div class="col"><label for="re">Region / province *</label><select id="re" disabled><option value="">Choose a country first</option></select></div>
+    </div>
+    <div class="row" id="taxRow" style="display:none">
+      <div class="col"><label for="tax">Tax number (NIF) *</label><input type="text" id="tax" maxlength="9"><div class="hint">9 digits, needed for invoices in Portugal.</div></div>
+    </div>
+    <div class="row">
+      <div class="col" style="position:relative"><label for="ad">Street and house number *</label>
+        <input type="text" id="ad" autocomplete="off" placeholder="Start typing your address">
+        <div class="sugg" id="sugg"></div>
+        <div class="err" id="adErr"></div></div>
+    </div>
+    <div class="row">
+      <div class="col"><label for="pc">Postcode *</label><input type="text" id="pc"></div>
+      <div class="col"><label for="ci">City *</label><input type="text" id="ci"></div>
+    </div>
+
+    <h2>Delivery</h2>
+    <div class="ship" id="ship">
+      <div class="card" data-v="standard"><b>Standard</b>3 to 5 working days, free</div>
+      <div class="card" data-v="express"><b>Express</b>Next working day, 6,90 EUR</div>
+    </div>
+
+    <h2>Billing</h2>
+    <label><input type="checkbox" id="same" checked> Billing address is the same as the delivery address</label>
+    <div id="bill" style="display:none">
+      <div class="row">
+        <div class="col"><label for="bn">Name on the invoice *</label><input type="text" id="bn"></div>
+        <div class="col"><label for="bc">Billing city *</label><input type="text" id="bc"></div>
+      </div>
+    </div>
+
+    <h2>Consent</h2>
+    <p><label><input type="checkbox" id="terms"> I accept the terms and conditions *</label></p>
+    <p><label><input type="checkbox" id="news"> Send me offers and news by email (optional)</label></p>
+
+    <div class="actions">
+      <button type="button" id="save">Save address</button>
+      <button type="button" class="primary" id="go" disabled>Continue to payment</button>
+    </div>
+  </form>
+  <div id="state"></div>
+</main>
+<footer>Shoply 2026. <a href="/privacy">Privacy</a></footer>
+
+<div id="cookie">
+  <h2>We value your privacy</h2>
+  <p>We use cookies to run this shop and, with your consent, for statistics and personalised advertising.</p>
+  <button id="ckAll">Accept all</button><button id="ckNo">Reject all</button><button id="ckSet">Settings</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const pressed = [];
+const REGIONS = {
+  PT: ['Aveiro', 'Braga', 'Faro', 'Lisboa', 'Porto', 'Setúbal'],
+  NL: ['Gelderland', 'Noord-Holland', 'Utrecht', 'Zeeland', 'Zuid-Holland'],
+  ES: ['Andalucía', 'Cataluña', 'Galicia', 'Madrid', 'Valencia'],
+};
+const PREFIX = { PT: '+351', NL: '+31', ES: '+34' };
+const STREETS = {
+  PT: [['Rua das Flores 12', '1200-195', 'Lisboa'], ['Rua das Flores 12', '4050-262', 'Porto'], ['Rua das Flores 120', '2800-010', 'Almada']],
+  NL: [['Bloemstraat 12', '1016 KV', 'Amsterdam'], ['Bloemstraat 12', '3581 WD', 'Utrecht']],
+  ES: [['Calle de las Flores 12', '28001', 'Madrid']],
+};
+let picked = false, saved = false;
+
+// cookie banner
+for (const id of ['ckAll', 'ckNo', 'ckSet']) $(id).addEventListener('click', () => { pressed.push(id); if (id !== 'ckSet') $('cookie').remove(); show(); });
+
+// date of birth: each box hands the cursor to the next when it is full
+[['d', 'm', 2], ['m', 'y', 2]].forEach(([a, b, n]) => $(a).addEventListener('input', () => { $(a).value = $(a).value.replace(/\D/g, ''); if ($(a).value.length >= n) $(b).focus(); show(); }));
+$('y').addEventListener('input', () => { $('y').value = $('y').value.replace(/\D/g, ''); show(); });
+
+// country drives the region list, the phone prefix and the tax field
+$('co').addEventListener('change', () => {
+  const c = $('co').value, re = $('re');
+  re.replaceChildren(new Option(c ? 'Please choose' : 'Choose a country first', ''));
+  for (const r of REGIONS[c] || []) re.add(new Option(r, r));
+  re.disabled = !c;
+  $('pre').value = PREFIX[c] || '+351';
+  $('taxRow').style.display = c === 'PT' ? '' : 'none';
+  $('ad').value = ''; $('pc').value = ''; $('ci').value = ''; picked = false;
+  show();
+});
+
+// address suggestions: only a picked suggestion counts
+$('ad').addEventListener('input', () => {
+  picked = false;
+  const q = $('ad').value.trim().toLowerCase(), box = $('sugg');
+  box.replaceChildren();
+  const list = (STREETS[$('co').value] || []).filter(s => q.length >= 3 && s[0].toLowerCase().startsWith(q.slice(0, Math.min(q.length, s[0].length))));
+  for (const s of list) {
+    const div = document.createElement('div');
+    div.textContent = s[0] + ', ' + s[1] + ' ' + s[2];
+    div.addEventListener('mousedown', e => { e.preventDefault(); $('ad').value = s[0]; $('pc').value = s[1]; $('ci').value = s[2]; picked = true; box.classList.remove('open'); $('adErr').textContent = ''; show(); });
+    box.appendChild(div);
+  }
+  box.classList.toggle('open', list.length > 0);
+  show();
+});
+$('ad').addEventListener('blur', () => setTimeout(() => {
+  $('sugg').classList.remove('open');
+  $('adErr').textContent = ($('ad').value && !picked) ? 'Please pick your address from the list.' : '';
+  show();
+}, 120));
+
+// the phone number is only checked when the field is left
+$('ph').addEventListener('blur', () => {
+  const digits = $('ph').value.replace(/\D/g, '');
+  $('phErr').textContent = !$('ph').value ? '' : (/^\+|^00/.test($('ph').value.trim()) ? 'Enter the number without the country prefix.' : (digits.length < 9 ? 'This number is too short.' : ''));
+  show();
+});
+
+// delivery cards
+for (const c of document.querySelectorAll('#ship .card')) c.addEventListener('click', () => { document.querySelectorAll('#ship .card').forEach(x => x.classList.toggle('on', x === c)); show(); });
+
+$('same').addEventListener('change', () => { $('bill').style.display = $('same').checked ? 'none' : ''; show(); });
+for (const id of ['fn', 'ln', 'em', 'tax', 'pc', 'ci', 'bn', 'bc', 'terms', 'news']) $(id).addEventListener('input', show);
+$('save').addEventListener('click', () => { pressed.push('save'); saved = true; show(); });
+$('go').addEventListener('click', () => { pressed.push('continue'); show(); });
+$('f').addEventListener('submit', e => { e.preventDefault(); pressed.push('submit'); show(); });
+
+window.__events = [];
+for (const t of ['keydown', 'click']) document.addEventListener(t, e => window.__events.push({ type: t, trusted: e.isTrusted }), true);
+window.__state = () => ({
+  cookie: document.getElementById('cookie') ? 'still there' : 'dismissed', pressed,
+  first: $('fn').value, last: $('ln').value, dob: [$('d').value, $('m').value, $('y').value].join('/'),
+  email: $('em').value, prefix: $('pre').value, phone: $('ph').value, phoneError: $('phErr').textContent,
+  country: $('co').value, region: $('re').value, tax: $('taxRow').style.display === 'none' ? '(no field)' : $('tax').value,
+  address: $('ad').value, addressPicked: picked, addressError: $('adErr').textContent, postcode: $('pc').value, city: $('ci').value,
+  delivery: (document.querySelector('#ship .card.on') || { dataset: {} }).dataset.v || '',
+  billingSame: $('same').checked, terms: $('terms').checked, newsletter: $('news').checked, saved,
+});
+function show() { $('go').disabled = !saved; $('state').textContent = JSON.stringify(window.__state(), null, 1); }
+show();
+window.__ready = true;
+</script>
+</body>
+</html>

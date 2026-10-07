@@ -56,6 +56,8 @@ const DateField = (function () {
     const DATE_WORDS = /(^| )(date|birthdate|birthday|dob|born|nascimento|nasc|geboorte|geboortedatum|geburt|geburtsdatum|naissance|fecha|datum|data|anniversaire|cumpleanos|compleanno|verjaardag|bday)( |$)/;
     const NOT_DATE_WORDS = /(^| )(exp|expiry|expiration|expires|validade|vervaldatum|ablauf|cc)( |$)/;
     const MASK_RE = /(dd|jj|tt|mm|yyyy|yy|aaaa|aa|jjjj)/i;
+    // "MM/YY", "mm / aaaa", "05 / 37": month and year only.
+    const MONTH_YEAR_RE = /^\s*(mm|\d{1,2})\s*[\/\-. ]\s*(yyyy|yy|aaaa|aa|jjjj|jj|\d{2}|\d{4})\s*$/i;
 
     function words(s) {
         return ' ' + fold(s).replace(/[^\p{L}]+/gu, ' ').trim() + ' ';
@@ -186,7 +188,14 @@ const DateField = (function () {
         out.mask = maskFrom(ph) || maskFrom(el.getAttribute('data-mask') || el.getAttribute('data-format') || el.getAttribute('data-date-format') || el.getAttribute('format') || '');
         const attrs = words([el.getAttribute('autocomplete'), el.name, el.id, el.className, el.getAttribute('aria-label'), ph, info.label, info.placeholder, el.getAttribute('data-type')].filter(Boolean).join(' '));
         // Card expiry ("MM/YY") is a date-shaped field that is not a date.
-        if (NOT_DATE_WORDS.test(attrs) && !DATE_WORDS.test(words(info.label || ''))) return out;
+        // Its shape says so first: a month and a year with no day, whatever
+        // the label calls it ("Data de validade" is Portuguese for expiry date).
+        if (!out.mask && (MONTH_YEAR_RE.test(ph) || /(^|\s)cc-exp/.test((el.getAttribute('autocomplete') || '').toLowerCase()))) return out;
+        // Then the words, unless the field shows a full day-month-year mask.
+        // Expiry words in the label win over date words in the label; expiry
+        // words elsewhere ("P71_DATA_NASCIMENTO_CC") only when the label is not a date.
+        const labelWords = words(info.label || el.getAttribute('aria-label') || '');
+        if (!out.mask && (NOT_DATE_WORDS.test(labelWords) || (NOT_DATE_WORDS.test(attrs) && !DATE_WORDS.test(labelWords)))) return out;
         out.hint = DATE_WORDS.test(attrs) || /^bday/.test(el.getAttribute('autocomplete') || '');
         const hp = (el.getAttribute('aria-haspopup') || '').toLowerCase();
         const cls = ((el.className && typeof el.className === 'string' ? el.className : '') + ' ' + (el.id || '') + ' ' + ((el.parentElement && el.parentElement.className) || '')).toLowerCase();
@@ -256,7 +265,7 @@ const DateField = (function () {
     }
 
     function closePopup(el) {
-        try { TypingEngine.pressKey(el, 'Escape'); } catch (_) {}
+        try { TypingEngine.pressKey(el, 'Escape').catch(() => {}); } catch (_) {}
     }
 
     function valueMatches(el, p) {
@@ -275,7 +284,7 @@ const DateField = (function () {
     }
 
     async function typeAttempt(el, str, digitsOnly) {
-        if (typeof EventSim !== 'undefined') EventSim.focus(el); else { try { el.focus(); } catch (_) {} }
+        await simulateRealisticFocus(el);
         await wait(50);
         await TypingEngine.typeText(el, digitsOnly ? digits(str) : str, { clearFirst: true, isCancelled: () => window.stopFilling });
         await wait(120);
@@ -389,7 +398,7 @@ const DateField = (function () {
             if (delta === 0) break;
             const btn = navButton(live, delta < 0 ? -1 : 1);
             if (!btn) break;
-            AutocompleteFiller.mouseSequence(btn);
+            await AutocompleteFiller.mouseSequence(btn);
             await wait(Math.abs(delta) > 24 ? 25 : 120);
             live = calendarOpen(el) || live;
             if (!live.isConnected) break;
@@ -397,7 +406,7 @@ const DateField = (function () {
         live = calendarOpen(el) || live;
         const cell = dayCell(live, p.d);
         if (!cell) return false;
-        AutocompleteFiller.mouseSequence(cell);
+        await AutocompleteFiller.mouseSequence(cell);
         await wait(250);
         if (!valueMatches(el, p)) { try { cell.click(); } catch (_) {} await wait(200); }
         return valueMatches(el, p) || (typeof ChoiceWidget !== 'undefined' && (() => { const s = ChoiceWidget.readSelection(el); return !!(s && valueMatchesText(s.text, p)); })());
@@ -421,7 +430,7 @@ const DateField = (function () {
         if (det.native) {
             const type = (el.getAttribute('type') || '').toLowerCase();
             const iso = type === 'month' ? `${p.y}-${pad(p.m)}` : `${p.y}-${pad(p.m)}-${pad(p.d)}` + (type === 'datetime-local' ? 'T00:00' : '');
-            if (typeof EventSim !== 'undefined') EventSim.focus(el);
+            await simulateRealisticFocus(el);
             TypingEngine.setValueNatively(el, iso);
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -464,16 +473,16 @@ const DateField = (function () {
         }
 
         // The calendar. Open it through the field or its button.
-        if (typeof EventSim !== 'undefined') EventSim.focus(el);
+        await simulateRealisticFocus(el);
         await wait(150);
         let popup = calendarOpen(el);
         if (!popup) {
             const btn = pickerButtonFor(el);
-            if (btn) { AutocompleteFiller.mouseSequence(btn); await wait(300); popup = calendarOpen(el); }
+            if (btn) { await AutocompleteFiller.mouseSequence(btn); await wait(300); popup = calendarOpen(el); }
         }
         if (!popup && typable) {
             // Some pickers open on typing; others on ArrowDown.
-            TypingEngine.pressKey(el, 'ArrowDown');
+            await TypingEngine.pressKey(el, 'ArrowDown');
             await wait(250);
             popup = calendarOpen(el);
         }

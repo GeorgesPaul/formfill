@@ -259,7 +259,7 @@ const AutocompleteFiller = (function () {
     async function selectByKeyboard(element, popup, options, targetIndex) {
         const presses = options.length + 2;
         for (let i = 0; i < presses; i++) {
-            TypingEngine.pressKey(element, 'ArrowDown');
+            await TypingEngine.pressKey(element, 'ArrowDown');
             await wait(70);
             const live = optionsIn(popup);
             const hi = highlightedIndex(live);
@@ -267,7 +267,7 @@ const AutocompleteFiller = (function () {
             const onTargetById = activeDesc && live[targetIndex] && live[targetIndex].el.id === activeDesc;
             if (hi === -1 && !activeDesc && i === 0) return false;  // widget ignores arrows
             if (onTargetById || hi === targetIndex) {
-                TypingEngine.pressKey(element, 'Enter');
+                await TypingEngine.pressKey(element, 'Enter');
                 await wait(250);
                 return true;
             }
@@ -279,7 +279,18 @@ const AutocompleteFiller = (function () {
     // carries detail 1, pressure 0.5 and a 1x1 contact; a pointerdown without
     // them is what accessibility libraries classify as a "virtual" (screen
     // reader) click and route differently, or ignore.
-    function mouseSequence(el) {
+    async function mouseSequence(el) {
+        if (typeof TrustedInput !== 'undefined' && TrustedInput.active()) {
+            // The browser's own click: pointer, focus and click events all
+            // trusted, default actions included. Falls through only when the
+            // element is covered or the transport failed.
+            try { const r = await TrustedInput.click(el); if (r && r.ok) return true; } catch (_) {}
+        }
+        syntheticMouseSequence(el);
+        return false;
+    }
+
+    function syntheticMouseSequence(el) {
         const r = el.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
         const view = (el.ownerDocument && el.ownerDocument.defaultView) || window;
@@ -365,7 +376,7 @@ const AutocompleteFiller = (function () {
         if (!chosen) {
             // Leave the typed text and close the popup so it does not swallow
             // the next field's clicks.
-            TypingEngine.pressKey(element, 'Escape');
+            await TypingEngine.pressKey(element, 'Escape');
             return { handled: false, reason: 'no-match', optionsSeen };
         }
 
@@ -377,7 +388,7 @@ const AutocompleteFiller = (function () {
                 ? live[chosen.index].el
                 : (live.find(o => o.text === chosen.text) || {}).el || chosen.el;
             if (target && target.isConnected) {
-                mouseSequence(target);
+                await mouseSequence(target);
                 await wait(300);
             }
         }

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>Hosted field</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  input { box-sizing: border-box; width: 100%; height: 25px; border: 0; font: 15px sans-serif; outline: none; }
+</style>
+</head>
+<body>
+<!--
+  One card field per frame, the way payment providers host them (HiPay,
+  Stripe, Adyen): a single masked input in its own cross-origin iframe.
+  ?type=cardNumber | expiryDate | cvc | cardHolder
+  The masks reformat on every input event, like react-text-mask does.
+-->
+<input id="f" spellcheck="false" autocomplete="off">
+<script>
+  const type = new URLSearchParams(location.search).get('type') || 'cardNumber';
+  const el = document.getElementById('f');
+  const setup = {
+    cardNumber: { type: 'tel', name: 'cardnumber', ac: 'cc-number', label: 'Número do cartão', ph: '1111 1111 1111 1111',
+      mask: v => v.replace(/\D/g, '').slice(0, 19).replace(/(\d{4})(?=\d)/g, '$1 ') },
+    expiryDate: { type: 'tel', name: 'cc-exp', ac: 'off', label: 'Data de validade', ph: '05 / 37',
+      mask: v => { const d = v.replace(/\D/g, '').slice(0, 4); return d.length > 2 ? d.slice(0, 2) + ' / ' + d.slice(2) : d; } },
+    cvc: { type: 'tel', name: 'cvc', ac: 'off', label: 'CVC', ph: '123',
+      mask: v => v.replace(/\D/g, '').slice(0, 4) },
+    cardHolder: { type: 'card', name: 'ccname', ac: 'cc-name', label: 'Nome Apelido', ph: 'Nome Apelido',
+      mask: v => v.toUpperCase().replace(/[^A-ZÀ-Þ' -]/g, '') },
+  }[type];
+  el.setAttribute('type', setup.type);
+  el.name = setup.name;
+  el.setAttribute('autocomplete', setup.ac);
+  el.setAttribute('aria-label', setup.label);
+  el.placeholder = setup.ph;
+  el.addEventListener('input', () => {
+    const pos = el.value.length === el.selectionStart;
+    el.value = setup.mask(el.value);
+    if (pos) el.setSelectionRange(el.value.length, el.value.length);
+  });
+  window.__events = [];
+  for (const t of ['keydown', 'input', 'focus', 'blur']) el.addEventListener(t, e => window.__events.push({ type: t, trusted: e.isTrusted, key: e.key }));
+  window.__state = () => ({ type, value: el.value });
+</script>
+</body>
+</html>

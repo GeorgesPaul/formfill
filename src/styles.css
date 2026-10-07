@@ -713,5 +713,5 @@ button.llm-config-button:active { /* Added a class for llmConfig buttons */
 #logsSection { margin-top: 6px; }
 #logsSection label { display: block; margin: 2px 0; }
 #logsSummary { font-size: 11px; margin-bottom: 4px; word-break: break-word; }
-#logButtons, #memoryButtons { display: flex; flex-wrap: wrap; gap: 2px; }
-#logButtons button, #memoryButtons button { width: auto; flex: 1 1 45%; }
+#logButtons { display: flex; flex-wrap: wrap; gap: 2px; }
+#logButtons button { width: auto; flex: 1 1 45%; }

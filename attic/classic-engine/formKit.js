@@ -46,7 +46,9 @@
     // field, so the ref must follow it instead of dying with the node.
     const signatures = new Map();
 
-    const clean = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+    // Zero-width characters are placeholders some widgets render into an empty
+    // box; they are not a value.
+    const clean = s => String(s == null ? '' : s).replace(/[\u200b-\u200d\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
     const wait = ms => new Promise(r => setTimeout(r, ms));
 
     function winOf(el) { return (el.ownerDocument && el.ownerDocument.defaultView) || window; }
@@ -96,6 +98,53 @@
         const wrapping = el.closest && el.closest('label');
         if (wrapping && !out.includes(wrapping)) out.push(wrapping);
         return out;
+    }
+
+    // A control a person cannot reach: aria-hidden, or transparent with its
+    // pointer events off or out of the tab order. Composite widgets keep such
+    // a "native input" beside their visible trigger to carry the form value
+    // (MUI Select, some react-selects, select2). It is not a field: typing
+    // into it selects nothing, and on Sedo's registration form the write reset
+    // the combobox that had just been picked. Its name and autocomplete belong
+    // to the widget (see linkMirrors).
+    function isWidgetMirror(el) {
+        const tag = el.tagName;
+        if (tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA') return false;
+        const type = (el.getAttribute('type') || 'text').toLowerCase();
+        if (type === 'checkbox' || type === 'radio' || type === 'file') return false;
+        if (el.getAttribute('aria-hidden') === 'true') return true;
+        let s;
+        try { s = winOf(el).getComputedStyle(el); } catch (_) { return false; }
+        if (s.opacity !== '0') return false;
+        if (s.pointerEvents === 'none') return true;
+        if (el.tabIndex < 0) return true;
+        return false;
+    }
+
+    // Give each mirror's name/autocomplete/required/value to the list widget
+    // it belongs to, so the model sees one field with everything on it.
+    function linkMirrors(mirrors, index) {
+        for (const m of mirrors) {
+            let node = m.parentElement, owner = null;
+            for (let i = 0; i < 3 && node && !owner; i++, node = node.parentElement) {
+                if (node.tagName === 'FORM' || node.tagName === 'BODY') break;
+                let cands = [];
+                try { cands = node.querySelectorAll('[data-ff-ref^="f"]'); } catch (_) {}
+                for (const c of cands) {
+                    if (c === m) continue;
+                    const e = index.get(c.getAttribute('data-ff-ref'));
+                    if (e && e.field && (e.field.kind === 'combobox' || e.field.kind === 'listbox' || e.field.kind === 'select')) { owner = e; break; }
+                }
+            }
+            if (!owner) continue;
+            const f = owner.field;
+            if (!f.name && m.getAttribute('name')) f.name = m.getAttribute('name');
+            if (!f.autocomplete && m.getAttribute('autocomplete')) f.autocomplete = m.getAttribute('autocomplete');
+            if (!f.required && (m.required || m.getAttribute('aria-required') === 'true')) f.required = true;
+            const mv = clean(m.value);
+            if (mv) f.code = mv.slice(0, 100);
+            owner.mirror = m;
+        }
     }
 
     // Visibility with the custom-checkbox exception: an input hidden behind a
@@ -433,10 +482,12 @@
         const fields = [];
         const groups = new Map();   // groupKey -> group field
         const index = new Map();
+        const mirrors = [];
 
         for (const el of controls) {
             if (el.closest && el.closest(OURS)) continue;
             if (el.tagName === 'INPUT' && SKIP_INPUT_TYPES.has((el.getAttribute('type') || 'text').toLowerCase())) continue;
+            if (isWidgetMirror(el)) { mirrors.push(el); continue; }
             // Nested controls of a composite widget (a combobox wrapper with
             // an inner input): keep the inner input, drop the wrapper only when
             // the wrapper is not itself the interactive element.
@@ -481,6 +532,7 @@
             index.set(f.ref, { el, field: f });
             signatures.set(f.ref, signatureOf(el, f.label));
         }
+        linkMirrors(mirrors, index);
         dedupeLabels(fields, index, headings);
         for (const f of fields) {
             const e = index.get(f.ref);
@@ -695,6 +747,7 @@
         if (f.typeahead) o.typeahead = true;
         if (f.date) o.date = f.date === true ? 'yes' : f.date;
         if (f.value !== '' && f.value !== undefined && f.value !== null && f.value !== false) o.value = f.value;
+        if (f.code && f.code !== f.value) o.code = f.code;
         if (f.options) {
             const opts = f.options.map(op => op.text + (op.checked ? ' (selected)' : ''));
             if (opts.length > 60) { o.options = opts.slice(0, 60); o.optionsTotal = opts.length; }
@@ -762,7 +815,7 @@
         const entries = opts.map(o => ({ text: clean(o.textContent), value: o.getAttribute('data-value') || o.getAttribute('value') || clean(o.textContent), el: o }));
         const m = (typeof ChoiceWidget !== 'undefined') ? ChoiceWidget.matchOption(entries, value) : findMatchingOption(entries, value);
         if (!m) return false;
-        AutocompleteFiller.mouseSequence(m.el);
+        await AutocompleteFiller.mouseSequence(m.el);
         await wait(80);
         if (m.el.getAttribute('aria-selected') !== 'true') { try { m.el.click(); } catch (_) {} await wait(60); }
         return m.el.getAttribute('aria-selected') === 'true' || !el.querySelector('[role="option"][aria-selected="true"]');
@@ -788,13 +841,53 @@
             if (empty) { el.value = empty.value; el.dispatchEvent(new Event('change', { bubbles: true })); return true; }
             el.selectedIndex = -1; el.dispatchEvent(new Event('change', { bubbles: true })); return true;
         }
-        simulateRealisticFocus(el);
+        await simulateRealisticFocus(el);
         await wait(30);
         const ok = await TypingEngine.clearField(el);
         TypingEngine.commitField(el);
         el.removeAttribute('data-ff-accepted-for');
         return ok;
     }
+
+    // The tab's input lock (see background.js): keyboard focus is shared by
+    // every frame of the tab, and each frame with fields runs its own fill.
+    // An action holds the lock from the click into its field until it leaves
+    // it, so the frames take turns instead of typing into each other.
+    const InputLock = (function () {
+        let depth = 0, token = null, renew = null;
+        const send = msg => {
+            try { return Promise.resolve(browser.runtime.sendMessage({ action: 'ffInputLock', ...msg })); }
+            catch (e) { return Promise.reject(e); }
+        };
+        async function acquire(isCancelled) {
+            if (window.__ffNoInputLock) return; // bench switch (floorp_rig --no-lock)
+            if (depth++ > 0) return;
+            token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+            // No answer from the background (reloaded, asleep): go ahead alone.
+            try { await send({ op: 'acquire', token }); } catch (_) {}
+            renew = setInterval(() => { send({ op: 'renew', token }).catch(() => {}); }, 5000);
+            if (isCancelled && isCancelled()) {
+                release();
+                throw new Error('Form filling stopped by user.');
+            }
+        }
+        function release() {
+            if (window.__ffNoInputLock) return;
+            if (depth === 0 || --depth > 0) return;
+            if (renew) { clearInterval(renew); renew = null; }
+            const t = token;
+            token = null;
+            send({ op: 'release', token: t }).catch(() => {});
+        }
+        // Stop or page exit: leave the queue and hand back a held turn.
+        function drop() {
+            depth = 0;
+            token = null;
+            if (renew) { clearInterval(renew); renew = null; }
+            send({ op: 'drop' }).catch(() => {});
+        }
+        return { acquire, release, drop };
+    })();
 
     // Execute a batch of {ref, op, value} actions. Returns one result per
     // action with the field's state afterwards.
@@ -832,120 +925,140 @@
             }
             if (target.relocated) { res.note = 'the page re-rendered this control; ref moved to the new node'; delete target.relocated; }
             touched.add(el);
-            if (opts.onBefore) { try { opts.onBefore(a, target); } catch (_) {} }
-            const t0 = Date.now();
-            // Controls whose branch does not commit for itself (fillField does)
-            // are committed after the action, so blur-only validators run.
-            let commitEl = null;
+            // Wait for this frame's turn at the keyboard (see InputLock).
+            await InputLock.acquire(isCancelled);
             try {
-                if (target.button) {
-                    if (op !== 'click') { res.error = 'buttons only accept op "click"'; results.push(res); continue; }
-                    simulateRealisticFocus(el);
-                    res.ok = true;
-                    res.strategy = 'click';
-                    await waitForDomSettle(300, 2500);
-                } else if (op === 'click') {
-                    simulateRealisticFocus(el);
-                    res.ok = true;
-                    res.strategy = 'click';
-                    await waitForDomSettle(250, 2000);
-                } else if (op === 'clear') {
-                    res.ok = await clearControl(el, field.kind);
-                    res.strategy = 'clear';
-                } else if (op === 'commit') {
-                    // Re-announce a field that already holds the right value:
-                    // enter it and leave it again, so a page that only
-                    // validates on blur validates now. Value is untouched.
-                    simulateRealisticFocus(el);
-                    await wait(60);
-                    TypingEngine.commitField(el, { change: true });
-                    res.ok = true;
-                    res.strategy = 'commit';
-                    await waitForDomSettle(200, 1500);
-                } else if (op === 'retype') {
-                    // What a person does when a form ignores what was filled:
-                    // delete the last character, type it again, then leave.
-                    // The value ends up unchanged.
-                    simulateRealisticFocus(el);
-                    await wait(60);
-                    let retyped = false;
-                    try { retyped = await TypingEngine.retypeLastChar(el); } catch (_) {}
-                    TypingEngine.commitField(el, { change: true });
-                    res.ok = !!retyped;
-                    res.strategy = 'retype';
-                    if (!retyped) res.error = 'nothing to retype (empty or not typable)';
-                    await waitForDomSettle(200, 1500);
-                } else if (field.kind === 'radio-group') {
-                    const m = matchGroupOption(target.members, a.value);
-                    if (!m) {
-                        res.error = `No option matches "${a.value}". Options: ${target.members.map(x => x.text).join(' / ')}`;
+                if (opts.onBefore) { try { opts.onBefore(a, target); } catch (_) {} }
+                const t0 = Date.now();
+                // Controls whose branch does not commit for itself (fillField does)
+                // are committed after the action, so blur-only validators run.
+                let commitEl = null;
+                try {
+                    if (target.button) {
+                        if (op !== 'click') { res.error = 'buttons only accept op "click"'; results.push(res); continue; }
+                        await simulateRealisticFocus(el);
+                        res.ok = true;
+                        res.strategy = 'click';
+                        await waitForDomSettle(300, 2500);
+                    } else if (op === 'click') {
+                        await simulateRealisticFocus(el);
+                        res.ok = true;
+                        res.strategy = 'click';
+                        await waitForDomSettle(250, 2000);
+                    } else if (op === 'clear') {
+                        res.ok = await clearControl(el, field.kind);
+                        res.strategy = 'clear';
+                    } else if (op === 'commit') {
+                        // Re-announce a field that already holds the right value:
+                        // enter it and leave it again, so a page that only
+                        // validates on blur validates now. Value is untouched.
+                        await simulateRealisticFocus(el);
+                        await wait(60);
+                        TypingEngine.commitField(el, { change: true });
+                        res.ok = true;
+                        res.strategy = 'commit';
+                        await waitForDomSettle(200, 1500);
+                    } else if (op === 'retype') {
+                        // What a person does when a form ignores what was filled:
+                        // delete the last character, type it again, then leave.
+                        // The value ends up unchanged.
+                        await simulateRealisticFocus(el);
+                        await wait(60);
+                        let retyped = false;
+                        try { retyped = await TypingEngine.retypeLastChar(el); } catch (_) {}
+                        TypingEngine.commitField(el, { change: true });
+                        res.ok = !!retyped;
+                        res.strategy = 'retype';
+                        if (!retyped) res.error = 'nothing to retype (empty or not typable)';
+                        await waitForDomSettle(200, 1500);
+                    } else if (field.kind === 'radio-group') {
+                        const m = matchGroupOption(target.members, a.value);
+                        if (!m) {
+                            res.error = `No option matches "${a.value}". Options: ${target.members.map(x => x.text).join(' / ')}`;
+                        } else {
+                            res.ok = await selectRadio(m.el);
+                            res.strategy = 'radio';
+                            res.selected = m.text;
+                            commitEl = m.el;
+                            for (const mm of target.members) mm.el.setAttribute('data-filled-by-extension', 'true');
+                        }
+                    } else if (field.kind === 'multiselect') {
+                        res.ok = await chooseMulti(el, a.value);
+                        res.strategy = 'multiselect';
+                        commitEl = el;
+                    } else if (field.kind === 'listbox') {
+                        res.ok = await chooseListboxOption(el, a.value);
+                        res.strategy = 'listbox';
+                        commitEl = el;
+                    } else if (field.kind === 'file') {
+                        res.error = 'file inputs cannot be filled';
+                    } else if (field.kind === 'password') {
+                        res.error = 'password fields are never filled by this tool';
+                    } else if (op === 'set') {
+                        const b = parseBoolean(a.value);
+                        if (b === null) res.error = `Not a boolean: ${a.value}`;
+                        else { res.ok = await setCheckbox(el, b); res.strategy = 'checkbox'; commitEl = el; }
                     } else {
-                        res.ok = await selectRadio(m.el);
-                        res.strategy = 'radio';
-                        res.selected = m.text;
-                        commitEl = m.el;
-                        for (const mm of target.members) mm.el.setAttribute('data-filled-by-extension', 'true');
+                        // fill / choose on text, select, combobox, date, etc.
+                        const info = { label: field.label, placeholder: field.placeholder, op, kind: field.kind, errorText: field.error, date: field.date, budgetMs: opts.actionBudgetMs || 8000 };
+                        const r = await fillField(el, a.value, info, opts.attempt || 1);
+                        res.ok = !!r.ok;
+                        res.strategy = r.strategy;
+                        if (r.handled) { res.autocomplete = { handled: true, selected: r.selected, reason: r.reason, optionsSeen: r.optionsSeen, shown: r.shown }; }
+                        else if (r.reason && r.reason !== 'no-dom-change') { res.autocomplete = { handled: false, reason: r.reason, optionsSeen: r.optionsSeen, shown: r.shown }; }
+                        if (r.tried) res.tried = r.tried;
+                        if (r.format) res.format = r.format;
+                        if (r.error) res.error = r.error;
                     }
-                } else if (field.kind === 'multiselect') {
-                    res.ok = await chooseMulti(el, a.value);
-                    res.strategy = 'multiselect';
-                    commitEl = el;
-                } else if (field.kind === 'listbox') {
-                    res.ok = await chooseListboxOption(el, a.value);
-                    res.strategy = 'listbox';
-                    commitEl = el;
-                } else if (field.kind === 'file') {
-                    res.error = 'file inputs cannot be filled';
-                } else if (field.kind === 'password') {
-                    res.error = 'password fields are never filled by this tool';
-                } else if (op === 'set') {
-                    const b = parseBoolean(a.value);
-                    if (b === null) res.error = `Not a boolean: ${a.value}`;
-                    else { res.ok = await setCheckbox(el, b); res.strategy = 'checkbox'; commitEl = el; }
-                } else {
-                    // fill / choose on text, select, combobox, date, etc.
-                    const info = { label: field.label, placeholder: field.placeholder, op, kind: field.kind, errorText: field.error, date: field.date };
-                    const r = await fillField(el, a.value, info, opts.attempt || 1);
-                    res.ok = !!r.ok;
-                    res.strategy = r.strategy;
-                    if (r.handled) { res.autocomplete = { handled: true, selected: r.selected, reason: r.reason, optionsSeen: r.optionsSeen, shown: r.shown }; }
-                    else if (r.reason && r.reason !== 'no-dom-change') { res.autocomplete = { handled: false, reason: r.reason, optionsSeen: r.optionsSeen, shown: r.shown }; }
-                    if (r.tried) res.tried = r.tried;
-                    if (r.format) res.format = r.format;
-                    if (r.error) res.error = r.error;
+                } catch (e) {
+                    if (e && e.message === 'Form filling stopped by user.') throw e;
+                    res.error = (e && e.message) || String(e);
                 }
-            } catch (e) {
-                if (e && e.message === 'Form filling stopped by user.') throw e;
-                res.error = (e && e.message) || String(e);
-            }
-            if (commitEl && res.ok) {
-                // The change event was already dispatched by the branch above.
-                try { TypingEngine.commitField(commitEl, { change: false }); } catch (_) {}
-            }
-            res.ms = Date.now() - t0;
-            // Read back.
-            try {
-                await wait(80);
-                const k = field.kind;
-                if (k === 'radio-group') {
-                    const checked = target.members.find(m => m.el.checked);
-                    res.finalValue = checked ? checked.text : '';
-                } else {
-                    res.finalValue = readValue(el, k);
+                if (commitEl && res.ok) {
+                    // The change event was already dispatched by the branch above.
+                    try { TypingEngine.commitField(commitEl, { change: false }); } catch (_) {}
                 }
-                if (!target.button && op !== 'click' && op !== 'clear' && op !== 'commit' && op !== 'retype') {
-                    if (k === 'checkbox' || k === 'switch') {
-                        res.accepted = (parseBoolean(a.value) === res.finalValue);
-                    } else if (k === 'radio-group') {
-                        res.accepted = !!res.ok && res.finalValue === res.selected;
+                res.ms = Date.now() - t0;
+                // Read back, from the node the page has now: a re-render during
+                // the action leaves `el` detached while its successor holds the
+                // value. The ref follows it.
+                let liveEl = el;
+                try {
+                    if (!el.isConnected && typeof TypingEngine !== 'undefined' && TypingEngine.live) {
+                        const n = TypingEngine.live(el);
+                        if (n && n !== el && n.isConnected) {
+                            liveEl = n;
+                            try { n.setAttribute('data-ff-ref', a.ref); if (el.hasAttribute('data-filled-by-extension')) n.setAttribute('data-filled-by-extension', 'true'); } catch (_) {}
+                            target.el = n;
+                            res.note = (res.note ? res.note + '; ' : '') + 'the page re-rendered this control while it was filled';
+                        }
+                    }
+                } catch (_) {}
+                try {
+                    await wait(80);
+                    const k = field.kind;
+                    if (k === 'radio-group') {
+                        const checked = target.members.find(m => m.el.checked);
+                        res.finalValue = checked ? checked.text : '';
                     } else {
-                        res.accepted = elementHasCorrectValue(el, a.value);
+                        res.finalValue = readValue(liveEl, k);
                     }
-                    if (!res.accepted && res.ok && res.autocomplete && res.autocomplete.handled) res.accepted = true;
-                }
-                const v = (typeof readValidation === 'function') ? readValidation(el) : null;
-                if (v && (v.invalid || v.suspect)) res.validation = { invalid: !!v.invalid, message: v.message || undefined, suspect: v.suspect || undefined };
-            } catch (_) {}
+                    if (!target.button && op !== 'click' && op !== 'clear' && op !== 'commit' && op !== 'retype') {
+                        if (k === 'checkbox' || k === 'switch') {
+                            res.accepted = (parseBoolean(a.value) === res.finalValue);
+                        } else if (k === 'radio-group') {
+                            res.accepted = !!res.ok && res.finalValue === res.selected;
+                        } else {
+                            res.accepted = elementHasCorrectValue(liveEl, a.value);
+                        }
+                        if (!res.accepted && res.ok && res.autocomplete && res.autocomplete.handled) res.accepted = true;
+                    }
+                    const v = (typeof readValidation === 'function') ? readValidation(liveEl) : null;
+                    if (v && (v.invalid || v.suspect)) res.validation = { invalid: !!v.invalid, message: v.message || undefined, suspect: v.suspect || undefined };
+                } catch (_) {}
+            } finally {
+                InputLock.release();
+            }
             if (opts.onAfter) { try { opts.onAfter(a, target, res); } catch (_) {} }
             results.push(res);
         }
@@ -1141,6 +1254,8 @@
         capturePageHtml, valuesSnapshot, formDataOf, captureScreenshot, shrinkImage,
         get lastSnapshot() { return lastSnapshot; },
         normalizeOp, matchGroupOption,
+        inputLock: InputLock,
+        buttonInfo: buttonInfoFor,
     };
 
     if (typeof window !== 'undefined') window.FormKit = FormKit;

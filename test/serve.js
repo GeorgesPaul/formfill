@@ -1,7 +1,7 @@
 // Minimal static file server for the test bench:
 //   node test/serve.js [port]
-// Serves the repo root so a test page can pull in the real extension sources
-// from /src/*.js and be driven without packaging the extension.
+// Serves the repo root so the bench pages under /test/ can be opened in any
+// browser, and by tools/floorp_rig.mjs.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');

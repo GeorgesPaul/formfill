@@ -26,17 +26,6 @@
     // match 'page', and 'frame' because payment fields usually live in one.
     const CONTEXTS = ['page', 'frame', 'editable', 'selection'];
 
-    // Keep in step with the content_scripts list in both manifests.
-    const CONTENT_SCRIPTS = [
-        'browserCompat.js', 'apiUtils.js', 'utils.js', 'accessibleName.js', 'eventSim.js', 'domUtils.js',
-        'typingEngine.js', 'autocompleteFiller.js', 'llmClient.js', 'heuristicFiller.js',
-        'overlayUtils.js', 'formKit.js', 'siteMemory.js',
-        // ff:logs:start
-        'fillLogger.js',
-        // ff:logs:end
-        'fillAgent.js', 'content.js'
-    ];
-
     function uuid() {
         return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
             const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
@@ -165,7 +154,7 @@
         } catch (_) {
             // Content script absent (PDF viewer, restricted page, a frame that
             // loaded before the extension). Inject and retry, as the panel does.
-            await Compat.executeScriptFiles(tabId, CONTENT_SCRIPTS);
+            await Compat.injectContentScripts(tabId);
             await browser.tabs.sendMessage(tabId, payload);
         }
     }

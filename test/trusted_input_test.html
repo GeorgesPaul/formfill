@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trusted input bench (MUI)</title>
+<!--
+  A real MUI form, the widget family behind the Sedo registration page:
+  Select (a div with role=combobox, a menu rendered into a portal, and an
+  aria-hidden "native input" mirror that carries the form value), TextField,
+  Checkbox, RadioGroup. Every event is recorded with its isTrusted flag in
+  window.__events; the React state is mirrored in window.__state.
+
+  Served by `node test/serve.js`; driven by `node tools/floorp_rig.mjs`.
+-->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@mui/material@5.16.7/umd/material-ui.production.min.js"></script>
+<style>body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; } #log { font: 12px monospace; white-space: pre-wrap; color: #555; }</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="log"></div>
+<script>
+window.__events = [];
+const RECORD = ['mousedown', 'mouseup', 'click', 'keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'change', 'focus', 'blur'];
+for (const t of RECORD) {
+  document.addEventListener(t, e => {
+    const el = e.target;
+    window.__events.push({
+      type: t, trusted: e.isTrusted,
+      target: ((el && el.tagName) || '') + (el && el.id ? '#' + el.id : '') + (el && el.name ? '.' + el.name : '') + (el && el.getAttribute && el.getAttribute('role') ? '[' + el.getAttribute('role') + ']' : ''),
+      key: e.key, data: e.data,
+    });
+  }, true);
+}
+
+const CODES = 'AF AX AL DZ AS AD AO AI AQ AG AR AM AW AU AT AZ BS BH BD BB BY BE BZ BJ BM BT BO BA BW BR IO BN BG BF BI KH CM CA CV KY CF TD CL CN CX CC CO KM CG CD CK CR CI HR CU CW CY CZ DK DJ DM DO EC EG SV GQ ER EE ET FK FO FJ FI FR GF PF TF GA GM GE DE GH GI GR GL GD GP GU GT GG GN GW GY HT HN HK HU IS IN ID IR IQ IE IM IL IT JM JP JE JO KZ KE KI KP KR KW KG LA LV LB LS LR LY LI LT LU MO MK MG MW MY MV ML MT MH MQ MR MU YT MX FM MD MC MN ME MS MA MZ MM NA NR NP NL NC NZ NI NE NG NU NF MP NO OM PK PW PS PA PG PY PE PH PN PL PT PR QA RE RO RU RW BL SH KN LC MF PM VC WS SM ST SA SN RS SC SL SG SX SK SI SB SO ZA GS SS ES LK SD SR SJ SZ SE CH SY TW TJ TZ TH TL TG TK TO TT TN TR TM TC TV UG UA AE GB US UM UY UZ VU VE VN VG VI WF EH YE ZM ZW'.split(' ');
+const names = new Intl.DisplayNames(['en'], { type: 'region' });
+const COUNTRIES = CODES.map(c => ({ code: c, name: names.of(c) })).sort((a, b) => a.name.localeCompare(b.name));
+const LANGS = [['DE', 'Deutsch'], ['EN', 'English'], ['FR', 'Français'], ['ES', 'Español'], ['PT', 'Português'], ['ZH', '中文（简体)']];
+
+const { FormControl, InputLabel, Select, MenuItem, TextField, Checkbox, FormControlLabel, RadioGroup, Radio, Button, Box, FormLabel } = MaterialUI;
+const h = React.createElement;
+
+function App() {
+  const [state, setState] = React.useState({ first: '', last: '', country: '', lang: '', phone: '', terms: false, gender: '' });
+  window.__state = state;
+  const set = key => e => setState(s => ({ ...s, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+  return h(Box, { component: 'form', noValidate: true, onSubmit: e => e.preventDefault(), sx: { width: 420, display: 'flex', flexDirection: 'column', gap: 2 } },
+    h('h1', null, 'My Account Details'),
+    h(TextField, { id: 'firstName', name: 'fName', label: 'First name', required: true, value: state.first, onChange: set('first'), inputProps: { autoComplete: 'given-name' } }),
+    h(TextField, { id: 'lastName', name: 'lName', label: 'Last name', required: true, value: state.last, onChange: set('last'), inputProps: { autoComplete: 'family-name' } }),
+    h(FormControl, { fullWidth: true, required: true },
+      h(InputLabel, { id: 'countryIso-label' }, 'Country'),
+      h(Select, { labelId: 'countryIso-label', id: 'countryIso', name: 'country', value: state.country, label: 'Country', onChange: set('country'), inputProps: { autoComplete: 'country' } },
+        h(MenuItem, { value: '' }, 'Please choose'),
+        ...COUNTRIES.map(c => h(MenuItem, { key: c.code, value: c.code }, c.name)))),
+    h(TextField, { id: 'phone', name: 'phoneNumber', label: 'Telephone number', type: 'tel', value: state.phone, onChange: set('phone') }),
+    h(FormControl, { fullWidth: true, required: true },
+      h(InputLabel, { id: 'preferredLanguage-label' }, 'Language'),
+      h(Select, { labelId: 'preferredLanguage-label', id: 'preferredLanguage', name: 'preferredLanguage', value: state.lang, label: 'Language', onChange: set('lang') },
+        h(MenuItem, { value: '' }, 'Please choose'),
+        ...LANGS.map(([code, name]) => h(MenuItem, { key: code, value: code }, name)))),
+    h(FormControl, null,
+      h(FormLabel, { id: 'gender-label' }, 'Gender'),
+      h(RadioGroup, { row: true, 'aria-labelledby': 'gender-label', name: 'gender', value: state.gender, onChange: set('gender') },
+        h(FormControlLabel, { value: 'male', control: h(Radio), label: 'Male' }),
+        h(FormControlLabel, { value: 'female', control: h(Radio), label: 'Female' }))),
+    h(FormControlLabel, { control: h(Checkbox, { id: 'acceptTerms', name: 'acceptTerms', checked: state.terms, onChange: set('terms') }), label: 'I have read and accept the terms' }),
+    h(Button, { type: 'submit', variant: 'contained' }, 'Create account'),
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script>
+</body>
+</html>

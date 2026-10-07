@@ -34,6 +34,15 @@
         }
     };
 
+    // Load the page-side scripts into a tab that has none: a page that was
+    // open before the extension was (re)loaded, or one where the manifest's
+    // content scripts do not run (the PDF viewer). The list is the manifest's
+    // own, so it cannot drift from what pages normally get.
+    Compat.injectContentScripts = function (tabId) {
+        const entry = (api.runtime.getManifest().content_scripts || []).find(cs => cs.world !== 'MAIN');
+        return Compat.executeScriptFiles(tabId, entry ? entry.js : []);
+    };
+
     // Chrome rejects an explicit null windowId; both browsers accept the
     // single-argument form, which means "current window".
     Compat.captureVisibleTab = function (windowId, options) {

@@ -1,34 +1,289 @@
-let formFillProgress = {};
-let formFillStart = null;
-let totalFields = 0;
-let isFilling = false;
-let currentSessionId = null;
-let activeFrames = new Set(); // Track frames that are actively filling
-let completionTimer = null;  // Grace-period timer before signalling fillFormComplete to popup
-let frameDetails = {};       // frameId -> details object from FillAgent (needs-input, skipped, ...)
+// background.js -- what only the background page can do for a fill.
+//
+// The filling itself happens in the page (fillAgent.js, one run per frame).
+// This file gives those runs four services:
+//
+//   1. screenshots of the tab
+//   2. real input: forwarding a frame's clicks and keys to the browser
+//      (experiments/input, where the browser allows it)
+//   3. turn-taking: one frame of a tab acts at a time
+//   4. the panel's view of a fill: every frame reports here, and the panel
+//      is told when the whole thing has started, how far it is, and when
+//      the last frame is done
+// ff:logs:start
+//   5. the fill logs (development builds only): one stored record per fill
+// ff:logs:end
 
-function generateLoadingBar(percentage) {
-  const barLength = 20;
-  const filledLength = Math.round(percentage * barLength);
-  const emptyLength = barLength - filledLength;
-  return '[' + '█'.repeat(filledLength) + '░'.repeat(emptyLength) + ']';
+// ---------------------------------------------------------------------------
+// 1. Screenshots
+// ---------------------------------------------------------------------------
+
+function captureScreenshot(sender, sendResponse) {
+  const windowId = sender.tab ? sender.tab.windowId : null;
+  Compat.captureVisibleTab(windowId, { format: 'jpeg', quality: 80 })
+    .then(dataUrl => sendResponse({ dataUrl }), () => sendResponse({ dataUrl: null }));
+  return true;
 }
 
-function mergeDetails(all) {
-  const out = { needsUserInput: [], skipped: [], stillInvalid: [], emptyRequired: [], summaries: [], llmCalls: 0, memoryApplied: 0 };
-  for (const d of Object.values(all)) {
-    if (!d) continue;
-    for (const k of ['needsUserInput', 'skipped', 'stillInvalid', 'emptyRequired']) if (Array.isArray(d[k])) out[k].push(...d[k]);
-    if (d.summary) out.summaries.push(d.summary);
-    out.llmCalls += d.llmCalls || 0;
-    out.memoryApplied += d.memoryApplied || 0;
+// ---------------------------------------------------------------------------
+// 2. Real input (see trustedInput.js and experiments/input/)
+//
+// The frame asks; the background knows which tab and frame asked; the
+// experiment performs the input there. Absent on Chrome, in store builds and
+// in a Firefox that refuses experiments: the frame then reproduces the input
+// as events instead.
+// ---------------------------------------------------------------------------
+
+function forwardInput(message, sender, sendResponse) {
+  const api = browser.ffInput;
+  if (!api) { sendResponse({ available: false, reason: 'no experiment API' }); return false; }
+  if (message.op === 'probe') {
+    api.probe().then(sendResponse, e => sendResponse({ available: false, reason: String(e) }));
+    return true;
   }
-  return out;
+  if (message.op === 'run' && sender.tab) {
+    api.run(sender.tab.id, sender.frameId || 0, message.ops || [])
+      .then(sendResponse, e => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+    return true;
+  }
+  sendResponse({ ok: false, error: sender.tab ? 'unknown op' : 'no tab' });
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// 3. Turn-taking
+//
+// Keyboard focus belongs to the tab, not to a frame, and every frame with
+// fields runs its own fill. Two frames typing at once interleave their
+// keystrokes (hosted card fields: the CVC digits landed in the expiry box).
+// So a frame takes the tab's turn for each action (hands.js) and gives it
+// back when the action is done. The holder renews its lease while it works;
+// a frame that died loses the turn when the lease runs out.
+// ---------------------------------------------------------------------------
+
+const TURN_LEASE_MS = 20000;
+const turns = new Map();   // tabId -> { holder: { frameId, token, until } | null, queue: [{ frameId, token, grant }], timer }
+
+function passTurn(tabId) {
+  const t = turns.get(tabId);
+  if (!t) return;
+  clearTimeout(t.timer);
+  if (t.holder && t.holder.until <= Date.now()) t.holder = null;   // lease ran out
+  if (!t.holder && t.queue.length) {
+    const next = t.queue.shift();
+    t.holder = { frameId: next.frameId, token: next.token, until: Date.now() + TURN_LEASE_MS };
+    next.grant({ granted: true });
+  }
+  if (!t.holder && !t.queue.length) turns.delete(tabId);
+  else if (t.queue.length) t.timer = setTimeout(() => passTurn(tabId), Math.max(50, t.holder.until - Date.now()));
+}
+
+function turnMessage(message, sender, sendResponse) {
+  // Nothing to coordinate without a tab: let the caller go ahead.
+  if (!sender.tab) { sendResponse({ granted: true }); return false; }
+  const tabId = sender.tab.id, frameId = sender.frameId || 0;
+  if (!turns.has(tabId)) turns.set(tabId, { holder: null, queue: [], timer: null });
+  const t = turns.get(tabId);
+  const holds = t.holder && t.holder.token === message.token;
+  switch (message.op) {
+    case 'acquire':
+      t.queue.push({ frameId, token: message.token, grant: sendResponse });
+      passTurn(tabId);
+      return true;   // answered when the turn comes
+    case 'renew':
+      if (holds) t.holder.until = Date.now() + TURN_LEASE_MS;
+      break;
+    case 'release':
+      if (holds) t.holder = null;
+      break;
+    case 'drop':
+      // The frame stopped or is leaving: its turn and its place in the queue go.
+      if (t.holder && t.holder.frameId === frameId) t.holder = null;
+      t.queue = t.queue.filter(q => {
+        if (q.frameId === frameId) q.grant({ granted: false });
+        return q.frameId !== frameId;
+      });
+      break;
+  }
+  passTurn(tabId);
+  sendResponse({ ok: true });
+  return false;
+}
+
+browser.tabs.onRemoved.addListener(tabId => {
+  const t = turns.get(tabId);
+  if (t) clearTimeout(t.timer);
+  turns.delete(tabId);
+});
+
+// ---------------------------------------------------------------------------
+// 4. The panel's view of a fill
+//
+// Every frame of the tab gets the fill request and reports here on its own:
+//   fillFormJoin      it has the request and is getting ready
+//   fillFormLeave     it has no fields
+//   fillFormStart     it is filling
+//   fillFormProgress  { processed, total, message }
+//   fillFormComplete  { filled, message, details } / fillFormStopped / fillFormError
+// The panel is shown one fill: started when the first frame starts, over when
+// no frame is filling and none is still getting ready.
+// ---------------------------------------------------------------------------
+
+const JOIN_MAX_MS = 20000;   // a frame that joined and never reported again stops counting
+const SETTLE_MS = 400;       // another frame's first report may still be on its way
+
+// The fill in progress: { id, startedAt, frames: Map(frameId -> frame), lastMessage, timer }
+// frame: { state: 'joined' | 'filling' | 'done', since, done, total, filled, details, message }
+let fill = null;
+const ended = new Map();     // fill id -> 'done' | 'stopped', the last few
+
+function progressBar(fraction) {
+  const filled = Math.round(fraction * 20);
+  return '[' + '█'.repeat(filled) + '░'.repeat(20 - filled) + '] ' + Math.round(fraction * 100) + '%';
+}
+
+function tellPanel(msg) {
+  if (msg.message) fill.lastMessage = msg.message;
+  Compat.notify({ sessionId: fill.id, startedAt: fill.startedAt, ...msg });
+}
+
+function beginFill(id) {
+  if (fill) clearTimeout(fill.timer);
+  fill = { id, startedAt: Date.now(), frames: new Map(), lastMessage: '', timer: null };
+}
+
+function endFill(how) {
+  clearTimeout(fill.timer);
+  ended.delete(fill.id);
+  ended.set(fill.id, how);
+  if (ended.size > 20) ended.delete(ended.keys().next().value);
+  fill = null;
+}
+
+const framesIn = state => Array.from(fill.frames.values()).filter(f => f.state === state);
+
+// Is every frame through? Frames still getting ready count for a while.
+function busy() {
+  const now = Date.now();
+  return framesIn('filling').length > 0 || framesIn('joined').some(f => now - f.since <= JOIN_MAX_MS);
+}
+
+// Check whether the fill is over, now and once more a moment later.
+function settle() {
+  if (!fill || busy()) return;
+  const id = fill.id;
+  clearTimeout(fill.timer);
+  fill.timer = setTimeout(() => {
+    if (!fill || fill.id !== id || busy()) return;
+    const done = framesIn('done');
+    const filled = done.reduce((n, f) => n + (f.filled || 0), 0);
+    const calls = done.reduce((n, f) => n + ((f.details && f.details.llmCalls) || 0), 0);
+    const seconds = ((Date.now() - fill.startedAt) / 1000).toFixed(1);
+    const lines = done.length
+      ? [`Form processing complete.\n${progressBar(1)}\nFilled ${filled} field(s) in ${seconds} seconds${calls ? ` (${calls} model call${calls === 1 ? '' : 's'})` : ''}.`]
+      : ['No form fields found on this page.'];
+    // What each frame has to say: the model's summary, or the frame's own words.
+    const said = done.map(f => (f.details ? f.details.summary : f.message)).filter(Boolean);
+    if (said.length) lines.push(said.join(' '));
+    const details = { needsUserInput: [], stillInvalid: [], emptyRequired: [] };
+    for (const f of done) {
+      for (const key of Object.keys(details)) if (f.details && Array.isArray(f.details[key])) details[key].push(...f.details[key]);
+    }
+    tellPanel({ action: 'fillFormComplete', filled, message: lines.join('\n'), details });
+    endFill('done');
+  }, SETTLE_MS);
+}
+
+// One report from one frame.
+function frameReport(message, sender) {
+  const id = message.sessionId, action = message.action;
+  if (!id) return;
+  const opens = action === 'fillFormJoin' || action === 'fillFormStart';
+
+  if (!fill || fill.id !== id) {
+    const was = ended.get(id);
+    if (was === 'stopped') return;                 // stragglers of a fill the user stopped
+    if (was === 'done') {
+      // A frame is still working on a fill the panel was told is over (it
+      // started late, or outlived the others): bring progress and Stop back.
+      if (fill || !(opens || action === 'fillFormProgress')) return;
+      beginFill(id);
+      tellPanel({ action: 'fillFormStart', message: 'Still filling another part of the page...' });
+    } else if (opens) {
+      beginFill(id);                               // a new fill (replacing one that never finished)
+    } else if (!fill) {
+      // Chrome can evict this service worker between messages, taking the
+      // fill with it. Pick it up again from the frame's report.
+      beginFill(id);
+    } else {
+      return;                                      // a report from some older fill
+    }
+  }
+
+  const frameId = sender.frameId || 0;
+  if (!fill.frames.has(frameId)) fill.frames.set(frameId, { state: 'joined', since: Date.now(), done: 0, total: 0, filled: 0 });
+  const frame = fill.frames.get(frameId);
+  clearTimeout(fill.timer);
+
+  switch (action) {
+    case 'fillFormJoin':
+      // Should this frame never be heard from again, look once its time is up.
+      setTimeout(settle, JOIN_MAX_MS + 100);
+      return;
+
+    case 'fillFormLeave':
+      fill.frames.delete(frameId);
+      break;
+
+    case 'fillFormStart':
+      frame.state = 'filling';
+      tellPanel({ action, message: 'Starting to fill form...\n' + progressBar(0) });
+      return;
+
+    case 'fillFormProgress': {
+      frame.state = 'filling';
+      frame.total = message.total || 0;
+      frame.done = Math.min(Math.max(0, message.processed || 0), frame.total);
+      const frames = Array.from(fill.frames.values());
+      const total = frames.reduce((n, f) => n + f.total, 0), done = frames.reduce((n, f) => n + f.done, 0);
+      const parts = framesIn('filling').length;
+      tellPanel({
+        action, filled: done, total,
+        message: `${message.message || 'Processing form...'}\n${progressBar(total ? Math.min(0.99, done / total) : 0)}` +
+          (parts > 1 ? `\n(${parts} parts of the page are being filled)` : ''),
+      });
+      return;
+    }
+
+    case 'fillFormComplete':
+      Object.assign(frame, { state: 'done', done: frame.total, filled: message.filled || 0, details: message.details, message: message.message });
+      break;
+
+    case 'fillFormStopped':
+      frame.state = 'done';
+      if (framesIn('filling').length === 0) {
+        tellPanel({ action, message: 'Form filling stopped by user.' });
+        endFill('stopped');
+      }
+      return;
+
+    case 'fillFormError':
+      Object.assign(frame, { state: 'done', message: `One part of the page failed: ${message.error || 'unknown error'}.` });
+      // With nothing else running this is how the fill ends; otherwise the
+      // other frames carry on and the failure is part of the final report.
+      if (!busy() && framesIn('done').length === 1) {
+        tellPanel({ action, message: `Error filling form: ${message.error || 'unknown error'}` });
+        endFill('done');
+        return;
+      }
+      break;
+  }
+  settle();
 }
 
 // ff:logs:start
 // ---------------------------------------------------------------------------
-// Fill logs: one storage key per session, serialized writes.
+// 5. Fill logs: one storage key per fill, writes one after another.
 // ---------------------------------------------------------------------------
 const LOG_INDEX_KEY = 'ffLogIndex';
 const LOG_PREFIX = 'ffLog:';
@@ -41,254 +296,127 @@ function queued(fn) {
   return p;
 }
 
-async function logStart(sessionId, meta) {
+const logList = async () => (await browser.storage.local.get(LOG_INDEX_KEY))[LOG_INDEX_KEY] || [];
+
+// Change one row of the index (what the panel lists).
+async function updateLogIndex(sessionId, change) {
+  const index = await logList();
+  const row = index.find(r => r.id === sessionId);
+  if (!row) return;
+  change(row);
+  await browser.storage.local.set({ [LOG_INDEX_KEY]: index });
+}
+
+function logStart(sessionId, meta) {
   return queued(async () => {
     const key = LOG_PREFIX + sessionId;
     const existing = (await browser.storage.local.get(key))[key];
     if (existing) {
-      // Another frame already opened this session: record its frame meta.
-      existing.frames = existing.frames || [];
+      // Another frame already opened this session: add this frame to it.
       existing.frames.push(meta);
       await browser.storage.local.set({ [key]: existing });
       return;
     }
     const session = { id: sessionId, meta, frames: [meta], entries: [], startedAt: Date.now(), bytes: 0 };
-    const idxData = await browser.storage.local.get([LOG_INDEX_KEY, 'ffLogMaxSessions']);
-    const index = idxData[LOG_INDEX_KEY] || [];
+    const index = await logList();
     index.push({ id: sessionId, url: meta.url, title: meta.title, startedAt: session.startedAt });
-    const max = Number(idxData.ffLogMaxSessions) || DEFAULT_MAX_SESSIONS;
-    const toRemove = [];
-    while (index.length > max) toRemove.push(index.shift());
+    const max = Number((await browser.storage.local.get('ffLogMaxSessions')).ffLogMaxSessions) || DEFAULT_MAX_SESSIONS;
+    const dropped = index.splice(0, Math.max(0, index.length - max));
     await browser.storage.local.set({ [key]: session, [LOG_INDEX_KEY]: index });
-    if (toRemove.length) await browser.storage.local.remove(toRemove.map(r => LOG_PREFIX + r.id));
+    if (dropped.length) await browser.storage.local.remove(dropped.map(r => LOG_PREFIX + r.id));
   });
 }
 
-async function logAppend(sessionId, entry) {
+function logAppend(sessionId, entry) {
   return queued(async () => {
     const key = LOG_PREFIX + sessionId;
     const session = (await browser.storage.local.get(key))[key];
     if (!session) return;
     session.entries.push(entry);
-    let size = 0;
-    try { size = JSON.stringify(entry).length; } catch (_) {}
-    session.bytes = (session.bytes || 0) + size;
+    session.bytes += JSON.stringify(entry).length;
     session.updatedAt = Date.now();
     await browser.storage.local.set({ [key]: session });
-    const idxData = await browser.storage.local.get(LOG_INDEX_KEY);
-    const index = idxData[LOG_INDEX_KEY] || [];
-    const row = index.find(r => r.id === sessionId);
-    if (row) { row.bytes = session.bytes; row.entries = session.entries.length; row.updatedAt = session.updatedAt; await browser.storage.local.set({ [LOG_INDEX_KEY]: index }); }
+    await updateLogIndex(sessionId, row => { row.bytes = session.bytes; row.entries = session.entries.length; row.updatedAt = session.updatedAt; });
   });
 }
 
-async function logEnd(sessionId, summary) {
+function logEnd(sessionId, summary, frameUrl) {
   return queued(async () => {
     const key = LOG_PREFIX + sessionId;
     const session = (await browser.storage.local.get(key))[key];
     if (!session) return;
     session.endedAt = Date.now();
-    session.summary = summary;
+    // Every frame with fields ends its own part; keep them all and add up.
+    session.frameSummaries = (session.frameSummaries || []).concat([{ frameUrl, ...summary }]);
+    const parts = session.frameSummaries;
+    session.summary = parts.length === 1 ? summary : {
+      status: parts.some(p => p.status === 'error') ? 'error' : summary.status,
+      filled: parts.reduce((n, p) => n + (p.filled || 0), 0),
+      frames: parts.length,
+      durationMs: session.endedAt - session.startedAt,
+    };
     await browser.storage.local.set({ [key]: session });
-    const idxData = await browser.storage.local.get(LOG_INDEX_KEY);
-    const index = idxData[LOG_INDEX_KEY] || [];
-    const row = index.find(r => r.id === sessionId);
-    if (row) { row.status = summary && summary.status; row.filled = summary && summary.filled; row.total = summary && summary.total; await browser.storage.local.set({ [LOG_INDEX_KEY]: index }); }
+    await updateLogIndex(sessionId, row => { row.status = session.summary.status; row.filled = session.summary.filled; });
   });
 }
 
-async function logList() {
-  const idxData = await browser.storage.local.get(LOG_INDEX_KEY);
-  return idxData[LOG_INDEX_KEY] || [];
-}
-
 async function logGet(ids) {
-  const index = await logList();
-  const wanted = ids && ids.length ? ids : index.map(r => r.id);
-  const keys = wanted.map(id => LOG_PREFIX + id);
-  const data = await browser.storage.local.get(keys);
+  const wanted = ids && ids.length ? ids : (await logList()).map(r => r.id);
+  const data = await browser.storage.local.get(wanted.map(id => LOG_PREFIX + id));
   return wanted.map(id => data[LOG_PREFIX + id]).filter(Boolean);
 }
 
-async function logClear() {
+function logClear() {
   return queued(async () => {
     const index = await logList();
     await browser.storage.local.remove(index.map(r => LOG_PREFIX + r.id).concat([LOG_INDEX_KEY]));
   });
 }
 
+function logMessage(message, sender, sendResponse) {
+  const answer = promise => promise.then(result => sendResponse({ ok: true, ...result }), e => sendResponse({ ok: false, error: String(e) }));
+  switch (message.action) {
+    case 'ffLog':
+      if (message.op === 'start') answer(logStart(message.sessionId, message.meta));
+      else if (message.op === 'append') answer(logAppend(message.sessionId, message.entry));
+      else answer(logEnd(message.sessionId, message.summary || {}, sender.url));
+      break;
+    case 'ffLogList': answer(logList().then(list => ({ list }))); break;
+    case 'ffLogGet': answer(logGet(message.ids).then(sessions => ({ sessions }))); break;
+    case 'ffLogClear': answer(logClear()); break;
+  }
+  return true;
+}
 // ff:logs:end
 
-browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Screenshot on behalf of a content script (only background can capture).
-  if (message.action === "captureScreenshot") {
-    const winId = sender && sender.tab ? sender.tab.windowId : null;
-    Compat.captureVisibleTab(winId, { format: 'jpeg', quality: 80 })
-      .then(dataUrl => sendResponse({ dataUrl }))
-      .catch(err => {
-        console.error("captureScreenshot failed:", err);
-        sendResponse({ dataUrl: null });
-      });
-    return true;
-  }
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const action = typeof message.action === 'string' ? message.action : '';
+  if (action === 'captureScreenshot') return captureScreenshot(sender, sendResponse);
+  if (action === 'ffInput') return forwardInput(message, sender, sendResponse);
+  if (action === 'ffInputLock') return turnMessage(message, sender, sendResponse);
   // ff:logs:start
-  if (message.action === "ffLog") {
-    let p;
-    if (message.op === 'start') p = logStart(message.sessionId, message.meta);
-    else if (message.op === 'append') p = logAppend(message.sessionId, message.entry);
-    else if (message.op === 'end') p = logEnd(message.sessionId, message.summary);
-    else p = Promise.resolve();
-    p.then(() => sendResponse({ ok: true })).catch(e => sendResponse({ ok: false, error: String(e) }));
-    return true;
-  }
-  if (message.action === "ffLogList") {
-    logList().then(list => sendResponse({ list })).catch(e => sendResponse({ list: [], error: String(e) }));
-    return true;
-  }
-  if (message.action === "ffLogGet") {
-    logGet(message.ids).then(sessions => sendResponse({ sessions })).catch(e => sendResponse({ sessions: [], error: String(e) }));
-    return true;
-  }
-  if (message.action === "ffLogClear") {
-    logClear().then(() => sendResponse({ ok: true })).catch(e => sendResponse({ ok: false, error: String(e) }));
-    return true;
-  }
+  if (action.startsWith('ffLog')) return logMessage(message, sender, sendResponse);
   // ff:logs:end
 
-  // Chrome MV3 can evict this service worker between messages, taking the
-  // session state with it. Adopt the session the content script reports on.
-  const isFillMessage = typeof message.action === 'string' && message.action.startsWith('fillForm');
-  if (isFillMessage && currentSessionId === null && message.sessionId) {
-    currentSessionId = message.sessionId;
-    if (message.action !== "fillFormStart") {
-      console.log("[Background] Adopting in-flight session after restart:", message.sessionId);
-      isFilling = true;
-      if (!formFillStart) formFillStart = Date.now();
-      if (sender && sender.frameId !== undefined) activeFrames.add(sender.frameId);
-    }
+  // The panel's Stop. The frames report as they notice, but the fill ends
+  // now, so their stragglers cannot bring it back.
+  if (action === 'fillStop') {
+    if (fill && (!message.sessionId || message.sessionId === fill.id)) endFill('stopped');
+    sendResponse({ ok: true });
+    return false;
   }
-
-  let computedMessage = '';
-  let totalFilled = 0;
-  let totalProcessed = 0;
-  let percentage = 0;
-
-  if (message.action !== "fillFormStart" && message.sessionId && message.sessionId !== currentSessionId) {
-    return;
+  // The panel asks, when it opens, whether a fill is running: a reopened
+  // popup, or a fill started from the context menu, still shows progress and Stop.
+  if (action === 'fillStatus') {
+    sendResponse(fill ? { filling: true, sessionId: fill.id, startedAt: fill.startedAt, message: fill.lastMessage } : { filling: false });
+    return false;
   }
-
-  switch (message.action) {
-    case "fillFormStart":
-      if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
-      if (message.sessionId !== currentSessionId) {
-        currentSessionId = message.sessionId;
-        formFillProgress = {};
-        formFillStart = Date.now();
-        totalFields = 0;
-        activeFrames = new Set();
-        frameDetails = {};
-      }
-      isFilling = true;
-      activeFrames.add(sender.frameId);
-      computedMessage = "Starting to fill form...\n" + generateLoadingBar(0) + " 0%";
-      break;
-
-    case "fillFormStopped": {
-      if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
-      activeFrames.delete(sender.frameId);
-      formFillProgress[sender.frameId] = {
-        processed: message.processed || (formFillProgress[sender.frameId] || {}).processed || 0,
-        filled: message.filled || (formFillProgress[sender.frameId] || {}).filled || 0,
-        total: message.total || (formFillProgress[sender.frameId] || {}).total || 0
-      };
-      if (activeFrames.size > 0) return;
-      isFilling = false;
-      currentSessionId = null;
-      const fill_duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-      totalFilled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
-      totalProcessed = Object.values(formFillProgress).reduce((sum, p) => sum + (p.processed || 0), 0);
-      percentage = totalFields > 0 ? totalProcessed / totalFields : 0;
-      computedMessage = `Form filling stopped by user.\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%\nFilled ${totalFilled} out of ${totalFields} fields in ${fill_duration} seconds.`;
-      break;
-    }
-
-    case "fillFormProgress":
-      if (!isFilling) return;
-      if (!formFillProgress[sender.frameId]) {
-        totalFields += message.total;
-      } else if (formFillProgress[sender.frameId].total !== message.total) {
-        totalFields -= formFillProgress[sender.frameId].total;
-        totalFields += message.total;
-      }
-      {
-        const t = message.total || 0;
-        formFillProgress[sender.frameId] = {
-          processed: Math.min(Math.max(0, message.processed || 0), t),
-          filled: Math.min(Math.max(0, message.filled || 0), t),
-          total: t
-        };
-      }
-      totalProcessed = Object.values(formFillProgress).reduce((sum, progress) => sum + progress.processed, 0);
-      totalFilled = Object.values(formFillProgress).reduce((sum, progress) => sum + progress.filled, 0);
-      totalProcessed = Math.min(totalProcessed, totalFields);
-      totalFilled = Math.min(totalFilled, totalFields);
-      percentage = totalFields > 0 ? Math.min(0.99, totalProcessed / totalFields) : 0;
-      computedMessage = `${message.message || 'Processing form...'}\n${generateLoadingBar(percentage)} ${Math.round(percentage * 100)}%`;
-      break;
-
-    case "fillFormComplete": {
-      activeFrames.delete(sender.frameId);
-      if (message.details) frameDetails[sender.frameId] = message.details;
-      const prev = formFillProgress[sender.frameId] || {};
-      const t = message.total || prev.total || 0;
-      if (!formFillProgress[sender.frameId]) totalFields += t;
-      else if (prev.total !== t) totalFields += t - prev.total;
-      formFillProgress[sender.frameId] = { processed: t, filled: message.filled || prev.filled || 0, total: t };
-      if (activeFrames.size > 0) return;
-
-      // Grace period: a concurrent frame's fillFormStart may still be in flight.
-      const _sid = currentSessionId;
-      if (completionTimer) clearTimeout(completionTimer);
-      completionTimer = setTimeout(() => {
-        completionTimer = null;
-        if (activeFrames.size > 0 || currentSessionId !== _sid) return;
-        isFilling = false;
-        const _filled = Object.values(formFillProgress).reduce((sum, p) => sum + (p.filled || 0), 0);
-        const _duration = ((Date.now() - formFillStart) / 1000).toFixed(2);
-        const merged = mergeDetails(frameDetails);
-        const lines = [`Form processing complete.\n${generateLoadingBar(1)} 100%\nFilled ${_filled} out of ${totalFields} fields in ${_duration} seconds (${merged.llmCalls} model call${merged.llmCalls === 1 ? '' : 's'}).`];
-        if (merged.summaries.length) lines.push(merged.summaries.join(' '));
-        Compat.notify({
-          action: "fillFormComplete",
-          filled: _filled,
-          total: totalFields,
-          message: lines.join('\n'),
-          details: merged,
-          sessionId: _sid
-        });
-        currentSessionId = null;
-      }, 400);
-      return;
-    }
-
-    case "fillFormError":
-      if (completionTimer) { clearTimeout(completionTimer); completionTimer = null; }
-      activeFrames.delete(sender.frameId);
-      if (activeFrames.size > 0) return;
-      isFilling = false;
-      currentSessionId = null;
-      computedMessage = `Error filling form: ${message.error || "undefined"}`;
-      break;
-  }
-
-  if (computedMessage) {
-    Compat.notify({
-      action: message.action,
-      filled: totalFilled,
-      total: totalFields,
-      message: computedMessage || message.message,
-      sessionId: currentSessionId || message.sessionId
-    });
-  }
+  if (action.startsWith('fillForm')) frameReport(message, sender);
 });
+
+// Settings of features that no longer exist.
+browser.storage.local.remove(['ffSiteMemory', 'ffEngine']);

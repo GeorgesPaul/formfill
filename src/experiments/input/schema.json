@@ -1,0 +1,30 @@
+[
+  {
+    "namespace": "ffInput",
+    "description": "Trusted input for the fill: real mouse and key events synthesized inside the page's own process, the way WebDriver does it.",
+    "functions": [
+      {
+        "name": "probe",
+        "type": "function",
+        "async": true,
+        "description": "Whether trusted input is available in this browser.",
+        "parameters": []
+      },
+      {
+        "name": "run",
+        "type": "function",
+        "async": true,
+        "description": "Perform a list of input steps in one frame of one tab.",
+        "parameters": [
+          { "name": "tabId", "type": "integer" },
+          { "name": "frameId", "type": "integer" },
+          {
+            "name": "ops",
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": { "type": "any" } }
+          }
+        ]
+      }
+    ]
+  }
+]

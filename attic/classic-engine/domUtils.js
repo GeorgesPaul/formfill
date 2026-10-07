@@ -42,6 +42,20 @@ function isUsernameField(fieldInfo) {
 
 // Does the element hold `expectedValue`, allowing for what forms legitimately
 // do to a value (masks, autocomplete widgets writing back a canonical form)?
+// Masks re-insert their own separators into codes (phone, card, IBAN, dates),
+// so for those only the letters and digits have to match. Words are different:
+// a name that lost its spaces ("GEORGESMEINDERS") is not the same name.
+function separatorsMatter(expected) {
+    const s = String(expected == null ? '' : expected).trim();
+    return !/\d/.test(s) && /\p{L}\s+\p{L}/u.test(s);
+}
+
+// Same words in the same order; the page may change case or spacing width.
+function sameWords(actual, expected) {
+    const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+    return norm(actual) === norm(expected) && norm(expected) !== '';
+}
+
 function elementHasCorrectValue(element, expectedValue) {
     let currentValue = element.value || '';
     if (element.isContentEditable) currentValue = element.textContent;
@@ -73,6 +87,7 @@ function elementHasCorrectValue(element, expectedValue) {
 
     if (normalizedCurrent === normalizedExpected) return true;
     if (normalizedCurrent.toLowerCase() === normalizedExpected.toLowerCase()) return true;
+    if (separatorsMatter(normalizedExpected)) return sameWords(normalizedCurrent, normalizedExpected);
 
     // A list widget keeps its choice outside the input (react-select clears
     // the search box and shows the pick beside it). Ask the widget.
@@ -192,7 +207,25 @@ function simulateMouseClick(element, outsideClick = false) {
 // scripts watch for pointerdown/mousedown before input; a bare focus() does
 // not satisfy them. Use this before mutating a text field's value, and to
 // press buttons/options (most widgets react to mousedown, not click).
-function simulateRealisticFocus(element) {
+// Focus a control the way a person does: a real click when the browser lets
+// us (trustedInput.js), the reproduced event trail otherwise. Async because
+// the trusted path is a round trip through the browser; every caller awaits.
+async function simulateRealisticFocus(element) {
+    if (typeof TrustedInput !== 'undefined' && TrustedInput.active()) {
+        try {
+            const r = await TrustedInput.focus(element);
+            if (r && r.ok) {
+                if (typeof EventSim !== 'undefined') EventSim.remember(element);
+                return true;
+            }
+        } catch (_) {}
+        // Covered, off-screen, or focus did not move: fall through to the
+        // synthetic trail, which at least tells the page what we meant.
+    }
+    return simulateSyntheticFocus(element);
+}
+
+function simulateSyntheticFocus(element) {
     if (typeof EventSim !== 'undefined') return EventSim.focus(element);
 
     // Fallback if eventSim.js did not load: the old flat sequence. It does not
@@ -241,7 +274,12 @@ function getNativeSetter(element) {
     return Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
 }
 
+function liveNode(element) {
+    return (typeof TypingEngine !== 'undefined' && TypingEngine.live) ? TypingEngine.live(element) : element;
+}
+
 function verifyFieldValue(element, expected) {
+    element = liveNode(element);
     const actual = element.isContentEditable ? element.textContent.trim() : (element.value || '');
     return actual === String(expected);
 }
@@ -296,7 +334,9 @@ async function fillWithCharByChar(element, value) {
 // Relaxed verify for masked/formatted inputs: every alphanumeric of the
 // expected value appears, in order, in the actual value.
 function verifyFieldValueRelaxed(element, expected) {
+    element = liveNode(element);
     const actual = element.isContentEditable ? element.textContent : (element.value || '');
+    if (separatorsMatter(expected)) return sameWords(actual, expected);
     const strip = s => String(s).replace(/[^0-9a-zA-Z]/g, '').toLowerCase();
     const a = strip(actual), e = strip(expected);
     return e.length > 0 && a.includes(e);
@@ -332,9 +372,10 @@ async function fillTextInput(element, value) {
         }
 
         // Masks that insert their own separators and reject ours (dates,
-        // phone numbers, card numbers): type the alphanumerics only.
+        // phone numbers, card numbers): type the alphanumerics only. Only for
+        // codes: stripping a name drops its spaces and accented letters.
         const alnum = String(value).replace(/[^0-9a-zA-Z]/g, '');
-        if (alnum && alnum !== String(value)) {
+        if (alnum && alnum !== String(value) && /\d/.test(String(value))) {
             await fillWithCharByChar(element, alnum);
             await sleep(60);
             if (verifyFieldValue(element, value) || verifyFieldValueRelaxed(element, value)) {
@@ -412,8 +453,14 @@ function isCheckedControl(element) {
 async function setCheckbox(element, shouldCheck) {
     if (isCheckedControl(element) === shouldCheck) return true;
     // Native checkbox: clicking its label toggles it too and is what people
-    // do with visually-hidden custom checkboxes.
-    simulateRealisticFocus(element);
+    // do with visually-hidden custom checkboxes. A trusted click toggles it
+    // as the browser's own default action; the synthetic trail does not.
+    if (typeof TrustedInput !== 'undefined' && TrustedInput.active()) {
+        try { await TrustedInput.click(element); } catch (_) {}
+        await sleep(60);
+        if (isCheckedControl(element) === shouldCheck) return true;
+    }
+    simulateSyntheticFocus(element);
     await sleep(40);
     if (isCheckedControl(element) !== shouldCheck) {
         // The realistic sequence may have toggled twice or not at all; use a
@@ -433,7 +480,12 @@ async function setCheckbox(element, shouldCheck) {
 async function selectRadio(radio) {
     if (!radio) return false;
     if (radio.checked) return true;
-    simulateRealisticFocus(radio);
+    if (typeof TrustedInput !== 'undefined' && TrustedInput.active()) {
+        try { await TrustedInput.click(radio); } catch (_) {}
+        await sleep(60);
+        if (radio.checked) return true;
+    }
+    simulateSyntheticFocus(radio);
     await sleep(40);
     if (!radio.checked) {
         simulateMouseClick(radio);
@@ -472,7 +524,7 @@ async function fillField(element, value, info, attempt = 1) {
     );
 
     if (isTextLike) {
-        simulateRealisticFocus(element);
+        await simulateRealisticFocus(element);
     } else if (typeof EventSim !== 'undefined') {
         // No pointer press here: for these controls the click itself is the
         // action (toggle, open the list) and each branch below performs it.
@@ -484,7 +536,9 @@ async function fillField(element, value, info, attempt = 1) {
 
     let result = { ok: false };
     const dateDet = (isTextLike && typeof DateField !== 'undefined') ? DateField.detect(element, info || {}) : null;
-    if (dateDet && dateDet.isDate) {
+    // A text field that looks like a date but is handed something that is not
+    // a day-month-year ("07 / 29", a year alone) is typed like any text.
+    if (dateDet && dateDet.isDate && (dateDet.native || DateField.parse(value))) {
         // Dates have their own mechanics (masks, native inputs, calendars);
         // typing the string and hoping is what produced "01-01-1900".
         const r = await DateField.fill(element, value, info || {});

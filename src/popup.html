@@ -14,7 +14,7 @@
   <textarea id="userPrompt"
     placeholder="Instructions for the AI, for example: Bob is the sender of the parcel and Sandra is the recipient."></textarea>
   <div id="visualProcessingSection">
-    <label title="Optional extra: also send one screenshot of the visible page to the model on the first turn. Slower and more expensive; the form is filled from the page structure either way. Requires a vision-capable model."><input type="checkbox" id="useVisualProcessing"> Also attach a screenshot (optional, slower)</label>
+    <label title="Optional extra: also send one screenshot of the visible page to the model on the first look. Slower and more expensive; the form is filled from the page structure either way. Requires a vision-capable model."><input type="checkbox" id="useVisualProcessing"> Also attach a screenshot (optional, slower)</label>
   </div>
   <hr>
   <label id="progressLabel" for="progressBar" style="color: gray;">Filling Progress <span id="elapsedTime"
@@ -73,13 +73,6 @@
     </div>
   </fieldset>
   <!-- ff:logs:end -->
-  <fieldset id="memorySection" class="win95-groupbox">
-    <legend>Site memory</legend>
-    <div id="memoryButtons">
-      <button id="forgetSite" title="Forget the remembered field mapping for the current page">Forget this site's mapping</button>
-      <button id="clearSiteMemory" title="Forget all remembered field mappings">Clear all site memory</button>
-    </div>
-  </fieldset>
   <div id="logLabel">System messages:</div>
   <div id="logMsg"></div>
   <footer>

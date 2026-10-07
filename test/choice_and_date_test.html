@@ -244,7 +244,7 @@ function mountEmail(value) {
   const old = row.querySelector('input');
   const fresh = document.createElement('input');
   fresh.id = 'email'; fresh.name = 'email'; fresh.type = 'email'; fresh.required = true; fresh.value = value;
-  fresh.addEventListener('input', () => { state.email = fresh.value; setTimeout(() => { mountEmail(fresh.value); const n = document.getElementById('email'); if (document.activeElement === old || document.activeElement === fresh) { n.focus(); try { n.setSelectionRange(n.value.length, n.value.length); } catch (_) {} } }, 0); update(); });
+  fresh.addEventListener('input', () => { state.email = fresh.value; setTimeout(() => { const hadFocus = document.activeElement === fresh; mountEmail(fresh.value); const n = document.getElementById('email'); if (hadFocus) { n.focus(); try { n.setSelectionRange(n.value.length, n.value.length); } catch (_) {} } }, 0); update(); });
   old.replaceWith(fresh);
 }
 mountEmail('');

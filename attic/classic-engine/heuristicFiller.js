@@ -105,6 +105,7 @@
         'cc-number': 'cc_number',
         'cc-exp-month': 'cc_exp_month',
         'cc-exp-year': 'cc_exp_year',
+        'cc-exp': 'cc_exp',
         'cc-csc': 'cc_csc',
         'organization': 'organization',
         'organization-title': 'job_title',
@@ -141,12 +142,25 @@
         return null;
     }
 
+    // The alias a field's own identifiers point at (autocomplete token, then
+    // name/id/label/placeholder), whether or not the profile has a value for it.
+    function aliasHint(info) {
+        const ac = (info.autocomplete || '').toLowerCase().trim().split(/\s+/);
+        for (let i = ac.length - 1; i >= 0; i--) if (AUTOCOMPLETE_MAP[ac[i]]) return AUTOCOMPLETE_MAP[ac[i]];
+        const text = [info.name, info.id, info.label, info.placeholder, info.ariaLabel].filter(Boolean).join(' ');
+        for (const [re, alias] of PATTERNS) if (text && re.test(text)) return alias;
+        return null;
+    }
+
     function matchByType(info, profile) {
         const t = (info.type || '').toLowerCase();
-        if (t === 'email') return resolve(profile, 'email');
-        if (t === 'tel')   return resolve(profile, 'tel');
-        if (t === 'url')   return resolve(profile, 'url');
-        return null;
+        const alias = t === 'email' ? 'email' : t === 'tel' ? 'tel' : t === 'url' ? 'url' : null;
+        if (!alias) return null;
+        // type="tel" is what pages use for any digits-only input (card number,
+        // expiry, CVC, one-time code): the type alone does not make it a phone.
+        const hint = aliasHint(info);
+        if (hint && hint !== alias) return null;
+        return resolve(profile, alias);
     }
 
     // Name/id/label/placeholder regex → profile alias.
@@ -176,6 +190,7 @@
         [/(card.?number|cc.?number|credit.?card.?number)/i, 'cc_number'],
         [/(cc.?exp.?month|card.?exp.?month|expiration.?month)/i, 'cc_exp_month'],
         [/(cc.?exp.?year|card.?exp.?year|expiration.?year)/i, 'cc_exp_year'],
+        [/(cc.?exp|card.?exp|expir|exp.?date)/i, 'cc_exp'],
         [/(cvv|cvc|cc.?csc|security.?code|card.?verification)/i, 'cc_csc'],
         [/(website|homepage|personal.?url)/i, 'url'],
     ];
