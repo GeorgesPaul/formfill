@@ -62,6 +62,12 @@ function Get-CwsAccessToken {
 function Read-CwsErrorBody {
   param([Parameter(Mandatory)]$ErrorRecord)
   $resp = $ErrorRecord.Exception.Response
+  # PowerShell 7 keeps the body here; the stream below is the Windows PowerShell way.
+  if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+    $code = 0
+    try { $code = [int]$resp.StatusCode } catch {}
+    return ($(if ($code) { "HTTP $code`n" } else { '' }) + $ErrorRecord.ErrorDetails.Message)
+  }
   if (-not $resp) { return $ErrorRecord.Exception.Message }
   try {
     $reader = New-Object IO.StreamReader($resp.GetResponseStream())
